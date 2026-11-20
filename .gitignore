@@ -14,6 +14,7 @@ frontend/.vite/
 
 # Local runtime data (SQLite DB & PDF invoice attachments)
 data/
+dbbackup/
 
 # Secrets / local env
 .env

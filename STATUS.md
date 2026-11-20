@@ -1,6 +1,6 @@
 # STATUS.md — Live Session Baton
 
-**Current Stage:** Slices 1–3 + Pre-Slice 4 Audit Hardening (`P1`–`P18`) Complete → Ready for **Slice 4**  
+**Current Stage:** Slices 1–4 Complete → Ready for **Slice 5 (AI Activity & Health UI, YAML Eval Runner & Optional Phoenix)**  
 **Last Updated:** 2026-11-20
 
 ## Completed
@@ -50,25 +50,42 @@
     - `backend/orchestrator/workflows.py` & `routes/pos.py`: Unified backup supplier switching into `WorkflowEngine.switch_to_backup_supplier()` (`P16`).
     - `backend/orchestrator/routes/parts.py`, `routes/clock.py`, `workflows.py`: Added `PATCH /api/parts/{part_id}/demand-override`, `POST /api/clock`, `cancel_po` CTA (`WorkflowEngine.cancel_po_workflow`), and `cta_payload_json` fallback defaults on `update_po` CTA (`P17`).
     - `backend/agents/lex/schemas.py`, `DESIGN.md §6.2`, `backend/po/service.py`: Added `po_reference`, `grand_total`, `part_code` aliases/properties on `InvoiceExtractionResult` / `InvoiceLineItem` without introducing `anyOf` into `model_json_schema()`, and guarded `update_po_terms()` against mutating `CLOSED` or `CANCELLED` POs (`P18`).
-  - **Tests & Verification:**
+  - **Tests & Verification (Pre-Slice 4):**
     - Offline suite: `uv run pytest -v` → **`58 passed, 1 skipped`** (including 17 new unit, integration, and AST architecture boundary tests across `tests/test_architecture.py`, `tests/seed/`, `tests/po/`, `tests/inventory/`, `tests/mailroom/`, `tests/planning/`, `tests/agents/`, and `tests/orchestrator/`).
     - Lint: `uv run ruff check backend tests` → **`All checks passed!`**.
+- **Slice 4 — React Operations Dashboard & 5-Persona Mailroom UI:**
+  - **Shared API Client & Layout (`frontend/src/`):**
+    - `frontend/src/api/types.ts` & `frontend/src/api/client.ts`: Strict TypeScript contracts and typed `fetch` wrapper covering Clock/Admin, Alerts, Parts/Inventory, POs/GRN, 5-Persona Mailroom (including `FormData` PDF upload), Suppliers/Memory, and Planning endpoints.
+    - `frontend/src/utils/format.ts`: UTC simulated timestamp formatting, INR currency formatting, status/severity/criticality badge styles, and persona display names.
+    - `frontend/src/components/ClockBar.tsx` & `ToastContainer.tsx`: Persistent simulated clock header (`+6h`, `+1d`, `+3d`, `+7d` via `POST /api/clock/advance`, `Reset Seed` via `POST /api/admin/reset-seed`, open alerts badge) and non-blocking toast notifications.
+    - `frontend/src/App.tsx`: Responsive sidebar navigation across all 5 Slice 4 views plus a clean Slice 5 placeholder tab (`AIHealthPlaceholderPage.tsx`), cross-tab PO/Part drill-down navigation, and synchronized global refresh nonce.
+  - **5 Operational Views (`frontend/src/pages/`):**
+    - `AlertsPage.tsx`: Priority/urgency-sorted alert cards (`OPEN` / `RESOLVED` / `DISMISSED` filter), stockout & price-variance impact pills from `cta_payload`, inline editable Lex email draft preview, inline CTA execution (`POST /api/alerts/{id}/execute-cta`), and `Dismiss`.
+    - `InventoryPage.tsx`: 15-SKU live inventory table (`on_hand`, `quarantined`, `on_order`, `inventory_position`, `ROP`/`S`, primary & backup suppliers) with search/criticality filters and modals for **Withdraw Stock** (`POST /api/parts/{id}/consume`), **Edit ROP/S** (`PATCH /api/parts/{id}/rop`), and **Manual Demand Override** (`PATCH /api/parts/{id}/demand-override`).
+    - `POTrackerPage.tsx`: Filterable PO table + slide-over detail drawer showing PO timeline, GRN logging (`POST /api/pos/{id}/grn`, gated to `ACKNOWLEDGED`, `DELAYED_CRITICAL`, `OVERDUE` per `po/state_machine.py`), 3-way invoice match breakdown, manager notes (`PATCH /api/pos/{id}`), switch-to-backup supplier (`POST /api/pos/{id}/switch-supplier`), and linked email thread.
+    - `MailroomPage.tsx`: Gmail-style Inbox/Sent/Drafts with 1-click 5-persona switcher (`inventory_manager`, `sup1`, `sup2`, `sup3`, read-only `lex` with `403` compose lock), Compose/Reply with `To`/`CC` and `.pdf` upload (`POST /api/mailroom/send`), inline Lex draft approve/edit/reject (`POST /api/mailroom/drafts/{comm_id}/approve` & `/reject`), and Lex triage classification/confidence badges. Zero hardcoded demo preset scripts.
+    - `SuppliersPlanningPage.tsx`: Side-by-side `Sup1`/`Sup2`/`Sup3` reliability scorecards (40/25/20/15 breakdown, quoted vs. effective lead time bars, OTD %, invoice accuracy %, response %), editable **Supplier Memory** notes (`POST/PATCH/DELETE /api/suppliers/{id}/memory`), **Recalculate Planning** (`POST /api/planning/recalculate`), and Dynamic ROP/$S$ recommendation cards with 12-month consumption buckets and 1-click Apply (`POST /api/planning/parts/{part_id}/apply-recommendation`).
+    - `AIHealthPlaceholderPage.tsx`: Clean Slice 5 placeholder route/tab.
+  - **Repo Hygiene:** Added `dbbackup/` to `.gitignore` and backed up `data/inv_plan.db` to `dbbackup/inv_plan.db`.
+  - **Tests & E2E Verification:**
+    - `cd frontend && npm run build` → `✓ built in 1.57s` (zero TS/Vite errors).
+    - `uv run pytest` → `58 passed, 1 skipped in 6.67s`.
+    - `uv run ruff check backend tests` → `All checks passed!`.
+    - Live FastAPI (`:8000`) + Vite (`:5173`) E2E verification (with live Gemini extraction & drafting) passed all 9 checks: Vite index/proxy, clock advance & reset-seed, stock withdrawal auto-triggering PO `PO-1039`, inline ROP/S & demand override, approving Lex draft (`SENT_AWAITING_ACK`), logging GRN (`HELD_QUARANTINE`), Mailroom PDF invoice upload + Lex extraction on `PO-1037`, supplier memory CRUD + planning recalculate & apply, and headless Chromium DOM mount check.
 
-## Next Active Slice: **Slice 4 — React Operations Dashboard & 5-Persona Mailroom UI**
-- **Read ONLY:** `AGENTS.md`, `STATUS.md`, `DESIGN.md` sections **`§9`** and **`§10`** (plus `PRD.md` only if UX flow details are ambiguous).
-- **Modules to Build (`frontend/`):**
-  - Shared API client (`frontend/src/api/`), types, and top-level layout with global **Simulated Clock** bar (`+6h`, `+24h`, `+3d`, `+7d`, Reset & Seed Demo), persona/view navigation, and toast/status feedback.
-  - **Action Center** (prioritized `ActionItem` feed with severity badges, inline Lex draft preview/edit/approve/reject, and 1-click CTAs for PO dispatch, price-change/delay/backup-supplier, quarantine, and ROP approval).
-  - **Inventory & Planning View** (15-SKU table with on-hand / on-order / quarantined / ROP / S, quick Stock Withdrawal modal, `Recalculate Planning` trigger, and per-part recommended vs current ROP/S apply action + supplier reliability panel).
-  - **Purchase Orders & GRN View** (PO lifecycle list/detail with status badges, promised vs revised ETA, invoice history, and Log GRN form).
-  - **5-Persona Mailroom UI** (`inventory_manager`, `sup1`, `sup2`, `sup3`, `lex` persona switcher, Inbox/Sent tabs, manual compose with `.pdf` invoice upload, read-only enforcement for `lex`, inline draft approval controls).
-  - Remember guardrail: **No hardcoded demo preset scripts** in the UI; keep Mailroom cleanly usable with manual compose/PDF upload.
+## Next Active Slice: **Slice 5 — AI Activity & Health UI, YAML Eval Runner & Optional Phoenix**
+- **Read ONLY:** `AGENTS.md`, `STATUS.md`, `DESIGN.md` sections **`§8`**, **`§9`** (View 6), and **`§10`**, plus `backend/orchestrator/routes/observability.py` and `backend/observability/`.
+- **Modules to Build:**
+  - `backend/evals/lex.yaml` + `backend/observability/eval_runner.py` (offline + live-capable structured YAML eval suite covering Lex email triage, PDF invoice extraction, confidence escalation `< 0.85`, and draft quality).
+  - Observability API route(s) for listing `agent_traces`, `autonomy_policies`, and triggering/inspecting eval runs (without breaking `observability/` agent-agnostic design).
+  - `frontend/src/pages/AIHealthPage.tsx` (replacing `AIHealthPlaceholderPage.tsx` in `frontend/src/App.tsx`): Agent trace feed, Lex Draft Trust Metrics (`APPROVED_AS_IS` vs `APPROVED_EDITED` vs `REJECTED`), and 1-click YAML Eval Runner scorecard UI.
+  - Optional Phoenix tracing integration check (`ENABLE_PHOENIX=true`) if `--extra phoenix` is enabled.
 - **Done Criteria:**
-  - `cd frontend && npm run build` passes TypeScript + Vite production build cleanly.
-  - Backend + frontend verified end-to-end against live local FastAPI server (or API contract checks), plus `uv run pytest` and `uv run ruff check backend tests` remain green.
+  - `uv run pytest`, `uv run ruff check backend tests`, and `cd frontend && npm run build` all pass cleanly.
+  - Eval runner executes and persists/returns scored results, visible in the AI Activity & Health UI.
 
 ## Upcoming Slices
-- **Slice 5:** AI Activity & Health UI, YAML Eval Runner (`evals/lex.yaml`) & Optional Phoenix (`DESIGN.md §8, §9`)
+- **Post-Slice 5:** Optional demo presets / polish (deferred until after Slice 5).
 
 ## Caveats / Design Decisions Made
 - `backend/planning/` follows `DESIGN.md §7` strictly: EWMA (`alpha=0.25`) + intermittent rolling-peak floor (`>50%` zero months), 40/25/20/15 Supplier Reliability Score, `<3` deliveries quoted fallback / `>=3` `max(actual, 0.25*quoted + 0.75*actual)` Effective Lead Time, and Z-factor dynamic ROP/S.
