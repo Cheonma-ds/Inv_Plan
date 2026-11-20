@@ -1,0 +1,561 @@
+suite_name: lex_supply_chain_v1
+agent_name: lex
+description: >
+  Golden evaluation suite for Lex covering email triage classification, confidence < 0.85
+  guardrail escalation, multimodal PDF invoice extraction accuracy, and outbound draft compliance.
+
+cases:
+  # ---------------------------------------------------------------------------
+  # 1. Email Triage Cases
+  # ---------------------------------------------------------------------------
+  - id: triage_po_confirmation
+    name: "Supplier cleanly confirms PO quantity, price, and schedule"
+    task: email_triage
+    tags: [triage, confirmation]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 — Order Confirmation"
+      body: "Confirmed. We accept PO-1037 for 15 units at Rs 780/unit and will deliver by 2026-12-03."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: ACKNOWLEDGED
+      confidence: 0.96
+      proposed_eta_date: "2026-12-03"
+      summary_for_manager: "Deccan Electro-Spares confirmed PO-1037 for 15 units at Rs 780/unit, ETA 2026-12-03."
+      suggested_action: "Update PO-1037 status to Acknowledged with ETA 2026-12-03."
+      reasoning: "Explicit confirmation of quantity, unit price, and delivery date for PO-1037."
+    expect:
+      intent: ACKNOWLEDGED
+      matched_po_number: PO-1037
+      min_confidence: 0.85
+
+  - id: triage_price_hike
+    name: "Supplier proposes price hike on open PO before acknowledgement"
+    task: email_triage
+    tags: [triage, price_change]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 Pricing Update"
+      body: "Hi team, raw copper costs jumped this week. For PO-1037, our revised rate is Rs 890/pc instead of Rs 780/pc."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: PRICE_CHANGE
+      confidence: 0.94
+      proposed_unit_price: 890.0
+      summary_for_manager: "Deccan Electro-Spares requested a price increase on PO-1037 from Rs 780 to Rs 890/unit."
+      suggested_action: "Review price variance or switch to backup supplier."
+      reasoning: "Supplier explicitly proposed Rs 890/pc for PO-1037."
+    expect:
+      intent: PRICE_CHANGE
+      matched_po_number: PO-1037
+      proposed_unit_price: 890.0
+      min_confidence: 0.85
+
+  - id: triage_lead_time_change
+    name: "Supplier requests longer lead time before acknowledging PO"
+    task: email_triage
+    tags: [triage, lead_time_change]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 Delivery Schedule"
+      body: "For PO-1037, our line is fully booked. We need 21 days instead of 14 days and can deliver on 2026-12-11."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: LEAD_TIME_CHANGE
+      confidence: 0.92
+      proposed_eta_date: "2026-12-11"
+      delay_reason: "Production line fully booked"
+      summary_for_manager: "Deccan Electro-Spares requested 21-day lead time for PO-1037, pushing ETA to 2026-12-11."
+      suggested_action: "Approve revised ETA 2026-12-11 or switch to backup supplier."
+      reasoning: "PO-1037 is SENT_AWAITING_ACK and supplier proposes a later ETA of 2026-12-11."
+    expect:
+      intent: LEAD_TIME_CHANGE
+      matched_po_number: PO-1037
+      proposed_eta_date: "2026-12-11"
+      min_confidence: 0.85
+
+  - id: triage_partial_availability
+    name: "Supplier can only fulfill partial PO quantity"
+    task: email_triage
+    tags: [triage, partial]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 Stock Availability"
+      body: "Regarding PO-1037, we only have 8 units available in stock right now instead of 15 units."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: PARTIAL_AVAILABILITY
+      confidence: 0.93
+      proposed_qty: 8
+      summary_for_manager: "Deccan Electro-Spares can only supply 8 of 15 ordered units for PO-1037."
+      suggested_action: "Adjust PO-1037 quantity to 8 or source remaining 7 units from backup supplier."
+      reasoning: "Supplier states only 8 units are available against 15 ordered on PO-1037."
+    expect:
+      intent: PARTIAL_AVAILABILITY
+      matched_po_number: PO-1037
+      proposed_qty: 8
+      min_confidence: 0.85
+
+  - id: triage_out_of_stock
+    name: "Supplier reports SKU is out of stock / cannot fulfill"
+    task: email_triage
+    tags: [triage, out_of_stock]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 — Unable to Fulfill"
+      body: "Sorry, SKU-010 on PO-1037 is completely out of stock with no restock until next quarter. Please cancel."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: OUT_OF_STOCK
+      confidence: 0.95
+      summary_for_manager: "Deccan Electro-Spares cannot fulfill PO-1037 (SKU-010 out of stock until next quarter)."
+      suggested_action: "Switch PO-1037 to backup supplier immediately."
+      reasoning: "Supplier explicitly states SKU-010 is out of stock and requests cancellation."
+    expect:
+      intent: OUT_OF_STOCK
+      matched_po_number: PO-1037
+      min_confidence: 0.85
+
+  - id: triage_post_ack_delay
+    name: "Supplier reports delay on an already acknowledged PO"
+    task: email_triage
+    tags: [triage, delay_notice]
+    input:
+      sender_persona: sup1
+      sender_name: Apex Precision Works
+      subject: "Delay Notice on PO-1036"
+      body: "Apologies, customs clearance stalled our shipment for PO-1036. New expected delivery date is 2026-12-02."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1036
+          part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          qty: 40
+          unit_price: 1250.0
+          status: ACKNOWLEDGED
+          quoted_lead_time_days: 10
+          promised_eta: "2026-11-24"
+    mock_response:
+      matched_po_number: PO-1036
+      intent: POST_ACK_DELAY
+      confidence: 0.94
+      proposed_eta_date: "2026-12-02"
+      delay_reason: "Customs clearance delay"
+      summary_for_manager: "Apex Precision Works reported a customs delay on PO-1036, shifting ETA to 2026-12-02."
+      suggested_action: "Evaluate stockout risk and send expedite request if needed."
+      reasoning: "PO-1036 is already ACKNOWLEDGED and supplier reports shipment delay to 2026-12-02."
+    expect:
+      intent: POST_ACK_DELAY
+      matched_po_number: PO-1036
+      proposed_eta_date: "2026-12-02"
+      min_confidence: 0.85
+
+  - id: triage_invoice_submission
+    name: "Supplier submits PDF invoice attachment for open PO"
+    task: email_triage
+    tags: [triage, invoice]
+    input:
+      sender_persona: sup2
+      sender_name: Bharat Fasteners & Seals
+      subject: "Invoice INV-2026-091 for PO-1038"
+      body: "Please find attached our tax invoice INV-2026-091 against PO-1038."
+      has_pdf_attachment: true
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1038
+          part_sku: SKU-004
+          part_name: High-Tensile Hex Bolt M12
+          qty: 10
+          unit_price: 2400.0
+          status: ACKNOWLEDGED
+          quoted_lead_time_days: 12
+    mock_response:
+      matched_po_number: PO-1038
+      intent: INVOICE_SUBMISSION
+      confidence: 0.97
+      summary_for_manager: "Bharat Fasteners submitted invoice INV-2026-091 for PO-1038."
+      suggested_action: "Extract PDF invoice and run 3-way match."
+      reasoning: "Email has PDF attachment and explicitly submits invoice INV-2026-091 for PO-1038."
+    expect:
+      intent: INVOICE_SUBMISSION
+      matched_po_number: PO-1038
+      min_confidence: 0.85
+
+  - id: triage_low_confidence_guardrail
+    name: "Vague low-confidence (< 0.85) reply escalates to AMBIGUOUS"
+    task: email_triage
+    tags: [triage, guardrail, ambiguous]
+    input:
+      sender_persona: sup2
+      sender_name: Bharat Fasteners & Seals
+      subject: "Quick note"
+      body: "Hey, things are busy this week, maybe next month or different rate depending on market, let us know."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1038
+          part_sku: SKU-004
+          part_name: High-Tensile Hex Bolt M12
+          qty: 10
+          unit_price: 2400.0
+          status: ACKNOWLEDGED
+          quoted_lead_time_days: 12
+    mock_response:
+      matched_po_number: null
+      intent: PRICE_CHANGE
+      confidence: 0.62
+      summary_for_manager: "Vague supplier message mentioning potential schedule or rate uncertainty."
+      suggested_action: "Escalate for manual Inventory Manager review."
+      reasoning: "Message lacks PO reference, concrete price, or concrete delivery date."
+    expect:
+      intent: AMBIGUOUS
+      max_confidence: 0.84
+
+  - id: triage_unmatched_po_guardrail
+    name: "Unknown PO reference triggers guardrail AMBIGUOUS escalation"
+    task: email_triage
+    tags: [triage, guardrail, ambiguous]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Confirmed PO-9999"
+      body: "Confirmed PO-9999 for delivery next Tuesday."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-9999
+      intent: ACKNOWLEDGED
+      confidence: 0.94
+      summary_for_manager: "Supplier confirmed PO-9999 which is not in open POs."
+      suggested_action: "Verify PO number with supplier."
+      reasoning: "Email cites PO-9999."
+    expect:
+      intent: AMBIGUOUS
+      reasoning:
+        contains: "Guardrail Escalation"
+
+  # ---------------------------------------------------------------------------
+  # 2. PDF Invoice Extraction Cases
+  # ---------------------------------------------------------------------------
+  - id: invoice_clean_match_pdf
+    name: "Extract clean single-line PDF invoice accurately"
+    task: invoice_extraction
+    tags: [invoice, pdf]
+    input:
+      filename: "INV-EVAL-101.pdf"
+      supplier_name: "Bharat Fasteners & Seals"
+      pdf_spec:
+        supplier_name: "Bharat Fasteners & Seals"
+        invoice_number: "INV-EVAL-101"
+        po_number: "PO-1038"
+        invoice_date: "2026-11-20"
+        gst_rate: 0.18
+        lines:
+          - sku: "SKU-004"
+            description: "High-Tensile Hex Bolt M12"
+            qty: 10
+            unit_price: 2400.0
+    mock_response:
+      invoice_number: "INV-EVAL-101"
+      po_number: "PO-1038"
+      supplier_name: "Bharat Fasteners & Seals"
+      invoice_date: "2026-11-20"
+      currency: "INR"
+      line_items:
+        - description: "High-Tensile Hex Bolt M12"
+          part_sku: "SKU-004"
+          qty: 10
+          unit_price: 2400.0
+          line_total: 24000.0
+      subtotal: 24000.0
+      tax_amount: 4320.0
+      total_amount: 28320.0
+      confidence: 0.97
+    expect:
+      invoice_number: "INV-EVAL-101"
+      po_number: "PO-1038"
+      line_items.0.qty: 10
+      line_items.0.unit_price: 2400.0
+      subtotal: 24000.0
+      total_amount: 28320.0
+      min_confidence: 0.85
+
+  - id: invoice_price_overcharge_pdf
+    name: "Extract overcharged unit price verbatim without auto-correcting"
+    task: invoice_extraction
+    tags: [invoice, pdf, mismatch_price]
+    input:
+      filename: "INV-EVAL-102.pdf"
+      supplier_name: "Bharat Fasteners & Seals"
+      pdf_spec:
+        supplier_name: "Bharat Fasteners & Seals"
+        invoice_number: "INV-EVAL-102"
+        po_number: "PO-1038"
+        invoice_date: "2026-11-20"
+        gst_rate: 0.18
+        lines:
+          - sku: "SKU-004"
+            description: "High-Tensile Hex Bolt M12"
+            qty: 10
+            unit_price: 2750.0
+    mock_response:
+      invoice_number: "INV-EVAL-102"
+      po_number: "PO-1038"
+      supplier_name: "Bharat Fasteners & Seals"
+      invoice_date: "2026-11-20"
+      currency: "INR"
+      line_items:
+        - description: "High-Tensile Hex Bolt M12"
+          part_sku: "SKU-004"
+          qty: 10
+          unit_price: 2750.0
+          line_total: 27500.0
+      subtotal: 27500.0
+      tax_amount: 4950.0
+      total_amount: 32450.0
+      confidence: 0.96
+    expect:
+      invoice_number: "INV-EVAL-102"
+      po_number: "PO-1038"
+      line_items.0.unit_price: 2750.0
+      subtotal: 27500.0
+      min_confidence: 0.85
+
+  - id: invoice_qty_shortage_pdf
+    name: "Extract partial billed quantity (8 units) verbatim"
+    task: invoice_extraction
+    tags: [invoice, pdf, mismatch_qty]
+    input:
+      filename: "INV-EVAL-103.pdf"
+      supplier_name: "Bharat Fasteners & Seals"
+      pdf_spec:
+        supplier_name: "Bharat Fasteners & Seals"
+        invoice_number: "INV-EVAL-103"
+        po_number: "PO-1038"
+        invoice_date: "2026-11-20"
+        gst_rate: 0.18
+        lines:
+          - sku: "SKU-004"
+            description: "High-Tensile Hex Bolt M12"
+            qty: 8
+            unit_price: 2400.0
+    mock_response:
+      invoice_number: "INV-EVAL-103"
+      po_number: "PO-1038"
+      supplier_name: "Bharat Fasteners & Seals"
+      invoice_date: "2026-11-20"
+      currency: "INR"
+      line_items:
+        - description: "High-Tensile Hex Bolt M12"
+          part_sku: "SKU-004"
+          qty: 8
+          unit_price: 2400.0
+          line_total: 19200.0
+      subtotal: 19200.0
+      tax_amount: 3456.0
+      total_amount: 22656.0
+      confidence: 0.95
+    expect:
+      invoice_number: "INV-EVAL-103"
+      line_items.0.qty: 8
+      subtotal: 19200.0
+      min_confidence: 0.85
+
+  - id: invoice_missing_fields_low_confidence_pdf
+    name: "Non-invoice / missing line items PDF is blocked below 0.85 confidence"
+    task: invoice_extraction
+    tags: [invoice, pdf, guardrail]
+    input:
+      filename: "UNCLEAR-NOTE.pdf"
+      supplier_name: "Bharat Fasteners & Seals"
+      raw_text_pdf: "General delivery note. Details to follow next week. No invoice number or prices."
+    mock_response:
+      invoice_number: ""
+      po_number: null
+      supplier_name: "Bharat Fasteners & Seals"
+      currency: "INR"
+      line_items: []
+      subtotal: 0.0
+      tax_amount: 0.0
+      total_amount: 0.0
+      confidence: 0.91
+      notes: "No line items or invoice number present."
+    expect:
+      max_confidence: 0.84
+      notes:
+        contains: "Guardrail"
+
+  # ---------------------------------------------------------------------------
+  # 3. Email Draft Compliance Cases
+  # ---------------------------------------------------------------------------
+  - id: draft_po_dispatch_compliance
+    name: "PO dispatch draft enforces PO# in subject and Inventory Manager CC"
+    task: email_draft
+    tags: [draft, compliance]
+    input:
+      category: PO_DISPATCH
+      po_number: "PO-1039"
+      part_sku: "SKU-001"
+      part_name: "Precision Ball Bearing 6205"
+      qty: 50
+      unit_price: 1250.0
+      recipient_persona: sup1
+      recipient_name: "Apex Precision Works"
+      current_date: "2026-11-20"
+      supplier_memory_notes:
+        - "Always include flange tolerance inspection certificate with dispatch."
+      context_facts:
+        quoted_lead_time_days: 10
+        expected_eta: "2026-11-30"
+    mock_response:
+      to_personas: [sup1]
+      cc_personas: []
+      subject: "New Purchase Order for Precision Ball Bearing 6205"
+      body: "Dear Apex Precision Works, please accept our purchase order for 50 units of Precision Ball Bearing 6205 (SKU-001) at Rs 1,250/unit. Kindly include the flange tolerance inspection certificate and confirm delivery by 2026-11-30."
+    expect:
+      to_personas:
+        contains: sup1
+      cc_personas:
+        contains: inventory_manager
+      subject:
+        contains: PO-1039
+      body:
+        not_null: true
+        min_len: 30
+
+  - id: draft_invoice_discrepancy_compliance
+    name: "Invoice discrepancy draft holds payment and avoids unapproved concessions"
+    task: email_draft
+    tags: [draft, compliance, quarantine]
+    input:
+      category: INVOICE_DISCREPANCY
+      po_number: "PO-1038"
+      part_sku: "SKU-004"
+      part_name: "High-Tensile Hex Bolt M12"
+      qty: 10
+      unit_price: 2400.0
+      recipient_persona: sup2
+      recipient_name: "Bharat Fasteners & Seals"
+      current_date: "2026-11-20"
+      context_facts:
+        invoice_number: "INV-2026-099"
+        billed_unit_price: 2750.0
+        po_unit_price: 2400.0
+        discrepancy_summary: "Unit price mismatch: billed Rs 2,750 vs PO Rs 2,400 (+Rs 3,500 impact)."
+    mock_response:
+      to_personas: [sup2]
+      cc_personas: [inventory_manager]
+      subject: "[PO-1038] Invoice INV-2026-099 Discrepancy — Credit Note / Revised Invoice Requested"
+      body: "Dear Bharat Fasteners & Seals, our 3-way match for PO-1038 flagged a unit price discrepancy on invoice INV-2026-099 (billed Rs 2,750/unit vs agreed PO price Rs 2,400/unit). Stock remains in quarantine until a revised PDF invoice matching Rs 2,400/unit is received."
+    expect:
+      to_personas:
+        contains: sup2
+      cc_personas:
+        contains: inventory_manager
+      subject:
+        contains: PO-1038
+      body:
+        not_contains_any_ci:
+          - "payment has been released"
+          - "we accept the overcharge"
+          - "approved for payment"
+
+  - id: draft_expedite_request_compliance
+    name: "Expedite request draft avoids waiving penalties or agreeing to unapproved fees"
+    task: email_draft
+    tags: [draft, compliance, expedite]
+    input:
+      category: EXPEDITE_REQUEST
+      po_number: "PO-1038"
+      part_sku: "SKU-004"
+      part_name: "High-Tensile Hex Bolt M12"
+      qty: 10
+      unit_price: 2400.0
+      recipient_persona: sup2
+      recipient_name: "Bharat Fasteners & Seals"
+      current_date: "2026-11-20"
+      context_facts:
+        revised_eta: "2026-12-05"
+        projected_stockout_date: "2026-11-29"
+        days_of_supply: 9
+    mock_response:
+      to_personas: [sup2]
+      cc_personas: [inventory_manager]
+      subject: "[PO-1038] Urgent Expedite Request — Stockout Projected Before 2026-12-05"
+      body: "Dear Bharat Fasteners & Seals, our inventory for SKU-004 is projected to stock out by 2026-11-29, ahead of the revised 2026-12-05 ETA on PO-1038. Please confirm whether partial dispatch or an earlier shipment date is possible."
+    expect:
+      to_personas:
+        contains: sup2
+      cc_personas:
+        contains: inventory_manager
+      subject:
+        contains: PO-1038
+      body:
+        not_contains_any_ci:
+          - "we agree to extra expedite fee"
+          - "waive all penalties"
+          - "approved extra surcharge"

@@ -1,6 +1,6 @@
 # STATUS.md — Live Session Baton
 
-**Current Stage:** Slices 1–4 Complete → Ready for **Slice 5 (AI Activity & Health UI, YAML Eval Runner & Optional Phoenix)**  
+**Current Stage:** Slices 1–5 Complete (MVP Feature-Complete)  
 **Last Updated:** 2026-11-20
 
 ## Completed
@@ -72,20 +72,31 @@
     - `uv run pytest` → `58 passed, 1 skipped in 6.67s`.
     - `uv run ruff check backend tests` → `All checks passed!`.
     - Live FastAPI (`:8000`) + Vite (`:5173`) E2E verification (with live Gemini extraction & drafting) passed all 9 checks: Vite index/proxy, clock advance & reset-seed, stock withdrawal auto-triggering PO `PO-1039`, inline ROP/S & demand override, approving Lex draft (`SENT_AWAITING_ACK`), logging GRN (`HELD_QUARANTINE`), Mailroom PDF invoice upload + Lex extraction on `PO-1037`, supplier memory CRUD + planning recalculate & apply, and headless Chromium DOM mount check.
+- **Slice 5 — AI Activity & Health UI, YAML Eval Runner & Optional Phoenix:**
+  - **Agent-Agnostic YAML Eval Runner & Phoenix Status (`backend/observability/`):**
+    - `backend/observability/eval_runner.py` (exported via `backend/observability/__init__.py`): Declarative YAML suite loader (`load_eval_suite`), assertion evaluator (`evaluate_expectations`), suite runner (`run_eval_suite`), and `EvalRun` persistence/serialization (`list_eval_runs`, `serialize_eval_run`) using an `AgentEvalExecutor` callback protocol so `observability/` stays 100% decoupled from domain and agent modules.
+    - `backend/observability/tracer.py`: Added `get_phoenix_status()` and defensive `find_spec("phoenix")` / `ModuleNotFoundError` guard so `ENABLE_PHOENIX=true` gracefully degrades (`mode="fallback_sqlite"`) when `--extra phoenix` is not installed.
+  - **Lex Eval Adapter & Golden Suite (`backend/agents/lex/`, `backend/evals/lex.yaml`):**
+    - `backend/agents/lex/eval_adapter.py` (exported via `backend/agents/lex/__init__.py`): `LexEvalExecutor` supporting `mode="offline"` (runs `mock_response` through real `LexAgent` guardrails and `AgentTracer.span` with zero network calls) and `mode="live"` (`GeminiLLMClient`), plus synthetic PDF generation (`fpdf2`) from YAML `pdf_spec`.
+    - `backend/evals/lex.yaml`: 16 golden cases (9 `email_triage` covering `PO_CONFIRMATION`, `PRICE_CHANGE`, `DELAY_NOTICE`, `INVOICE_SUBMISSION`, `GENERAL_REPLY`, `< 0.85` `AMBIGUOUS` escalation, and unmatched-PO guardrail; 4 `invoice_extraction` covering clean PDF, price mismatch, missing invoice #, and low-confidence escalation; 3 `email_draft` compliance cases).
+  - **Observability API Routes (`backend/orchestrator/routes/observability.py`):**
+    - Added `GET /api/observability/status` (Phoenix status + registered eval agents), enriched `GET /api/observability/traces` (`human_feedback`) & `GET /api/observability/autonomy` (`total_decisions`, `edit_free_approval_rate`), and added `GET /api/evals/{agent_name}/suite` + `GET/POST /api/evals/{agent_name}/run` (`mode: "offline" | "live"`).
+  - **AI Activity & Health UI (`frontend/src/`):**
+    - `frontend/src/api/types.ts` & `frontend/src/api/client.ts`: Added strict TypeScript types and client methods for observability status, traces, autonomy policies, eval suite metadata, and eval runs.
+    - `frontend/src/pages/AIHealthPage.tsx` (wired into `frontend/src/App.tsx`, replacing and removing `AIHealthPlaceholderPage.tsx`): Agent & task filters, Phoenix status pill, 4 KPI cards, **Lex Draft Trust Metrics** table (`APPROVED_AS_IS`, `APPROVED_EDITED`, `REJECTED`, `Edit-Free %`, stacked distribution bar), **1-Click YAML Eval Runner** (`offline`/`live` mode, run history selector, green/red per-case scorecard with expandable assertions & output), and **Recent Agent Activity Feed** with INR cost (`₹`) and expandable raw prompt/response inspection.
+  - **Tests & E2E Verification (Slice 5):**
+    - Added `tests/observability/test_eval_runner_and_phoenix.py`, `tests/orchestrator/test_observability_routes.py`, and `test_observability_module_remains_agent_and_domain_agnostic` in `tests/test_architecture.py`.
+    - `uv run pytest -v` → **`65 passed, 1 skipped`** (`tests/agents/test_live_gemini_pdf.py` skipped unless `RUN_LIVE_GEMINI=1`).
+    - `uv run ruff check backend tests` → **`All checks passed!`**.
+    - `cd frontend && npm run build` → **`✓ built in 1.82s`**.
+    - Live `uvicorn :8000` + `vite :5173` E2E verification: Vite served `AIHealthPage.tsx` & `App.tsx`, `POST /api/evals/lex/run` (`offline`) scored `16/16 (100.0%)` and logged 16 traces to `/api/observability/traces`, draft approve-as-is / edit-and-approve / reject updated `OVERDUE_CHASE` trust counters (`0/0/0 → 1/1/1`) in `/api/observability/autonomy`, and `ENABLE_PHOENIX=true` cleanly reported `mode="fallback_sqlite"` without `--extra phoenix`.
 
-## Next Active Slice: **Slice 5 — AI Activity & Health UI, YAML Eval Runner & Optional Phoenix**
-- **Read ONLY:** `AGENTS.md`, `STATUS.md`, `DESIGN.md` sections **`§8`**, **`§9`** (View 6), and **`§10`**, plus `backend/orchestrator/routes/observability.py` and `backend/observability/`.
-- **Modules to Build:**
-  - `backend/evals/lex.yaml` + `backend/observability/eval_runner.py` (offline + live-capable structured YAML eval suite covering Lex email triage, PDF invoice extraction, confidence escalation `< 0.85`, and draft quality).
-  - Observability API route(s) for listing `agent_traces`, `autonomy_policies`, and triggering/inspecting eval runs (without breaking `observability/` agent-agnostic design).
-  - `frontend/src/pages/AIHealthPage.tsx` (replacing `AIHealthPlaceholderPage.tsx` in `frontend/src/App.tsx`): Agent trace feed, Lex Draft Trust Metrics (`APPROVED_AS_IS` vs `APPROVED_EDITED` vs `REJECTED`), and 1-click YAML Eval Runner scorecard UI.
-  - Optional Phoenix tracing integration check (`ENABLE_PHOENIX=true`) if `--extra phoenix` is enabled.
-- **Done Criteria:**
-  - `uv run pytest`, `uv run ruff check backend tests`, and `cd frontend && npm run build` all pass cleanly.
-  - Eval runner executes and persists/returns scored results, visible in the AI Activity & Health UI.
-
-## Upcoming Slices
-- **Post-Slice 5:** Optional demo presets / polish (deferred until after Slice 5).
+## Current Status & Optional Next Steps
+- All 5 planned MVP slices (`DESIGN.md §10`) are complete and verified.
+- Optional future work (deferred post-MVP):
+  - Install `uv sync --extra phoenix` and run `uv run phoenix serve` with `ENABLE_PHOENIX=true` to verify live OTel span export to `http://localhost:6006`.
+  - Run `POST /api/evals/lex/run` with `{"mode": "live"}` in a networked environment with `$GEMINI_API_KEY` set to benchmark live `gemini-3.5-flash-lite` pass rates on `backend/evals/lex.yaml`.
+  - Optional demo presets / scenario quick-loaders (explicitly deferred post-Slice 5).
 
 ## Caveats / Design Decisions Made
 - `backend/planning/` follows `DESIGN.md §7` strictly: EWMA (`alpha=0.25`) + intermittent rolling-peak floor (`>50%` zero months), 40/25/20/15 Supplier Reliability Score, `<3` deliveries quoted fallback / `>=3` `max(actual, 0.25*quoted + 0.75*actual)` Effective Lead Time, and Z-factor dynamic ROP/S.
@@ -93,3 +104,4 @@
 - `tests/conftest.py` uses SQLAlchemy `StaticPool` for `:memory:` SQLite fixtures so FastAPI `TestClient` worker threads share the exact seeded in-memory database cleanly.
 - `EXCEPTION_REVIEW` is entered only from `SENT_AWAITING_ACK` or `UNRESPONSIVE_ESCALATED` (respecting `po/state_machine.py` guardrails); post-ack delays route to `DELAYED_CRITICAL` (critical/low-stock) or stay `ACKNOWLEDGED` with updated `revised_eta` (minor delay).
 - Demo presets remain intentionally deferred until after Slice 5.
+- `backend/observability/eval_runner.py` adds an explicit `mode: "offline" | "live"` execution switch (default `"offline"`) vs. `DESIGN.md §8.2` always hitting `gemini-3.5-flash-lite`, so automated tests and sandboxed environments can run all 16 YAML cases deterministically through `LexAgent` guardrails while preserving 1-click live Gemini evaluation when networked.

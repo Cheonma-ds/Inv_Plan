@@ -11,7 +11,7 @@ import { api } from './api/client';
 import type { NavTab } from './api/types';
 import { ClockBar } from './components/ClockBar';
 import { ToastContainer, type ToastMessage } from './components/ToastContainer';
-import { AIHealthPlaceholderPage } from './pages/AIHealthPlaceholderPage';
+import { AIHealthPage } from './pages/AIHealthPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { InventoryPage } from './pages/InventoryPage';
 import { MailroomPage } from './pages/MailroomPage';
@@ -237,7 +237,13 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'ai_health' && <AIHealthPlaceholderPage />}
+          {activeTab === 'ai_health' && (
+            <AIHealthPage
+              refreshNonce={refreshNonce}
+              onMutated={bumpRefresh}
+              onNotify={notify}
+            />
+          )}
         </main>
       </div>
 

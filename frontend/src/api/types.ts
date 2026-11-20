@@ -361,3 +361,98 @@ export interface PlanningRecalcResponse extends PlanningOverview {
   alerts_updated: number;
   alerts_resolved: number;
 }
+
+export interface AgentTraceItem {
+  id: number;
+  agent_name: string;
+  task_type: string;
+  trigger_summary: string;
+  linked_entity_type: string | null;
+  linked_entity_id: number | null;
+  input_summary: string;
+  output_summary: string;
+  confidence: number | null;
+  tool_calls: Array<Record<string, unknown>>;
+  raw_prompt: string;
+  raw_response: string;
+  latency_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_inr: number;
+  human_feedback: string | null;
+  timestamp: string;
+}
+
+export interface AutonomyPolicyItem {
+  id: number;
+  agent_name: string;
+  action_category: string;
+  mode: string;
+  approved_as_is_count: number;
+  approved_edited_count: number;
+  rejected_count: number;
+  total_decisions: number;
+  edit_free_approval_rate: number | null;
+  updated_at: string;
+}
+
+export interface PhoenixStatus {
+  enable_phoenix: boolean;
+  phoenix_installed: boolean;
+  phoenix_initialized: boolean;
+  mode: 'active' | 'fallback_sqlite' | 'disabled' | string;
+}
+
+export interface ObservabilityStatusResponse {
+  phoenix: PhoenixStatus;
+  registered_agents: string[];
+}
+
+export interface EvalSuiteCasePreview {
+  id: string;
+  name: string;
+  task: string;
+  tags: string[];
+}
+
+export interface EvalSuiteMetadata {
+  agent_name: string;
+  suite_name: string;
+  description: string;
+  total_cases: number;
+  cases: EvalSuiteCasePreview[];
+}
+
+export interface EvalAssertionResult {
+  field: string;
+  rule: string;
+  expected: unknown;
+  actual: unknown;
+  passed: boolean;
+  message: string;
+}
+
+export interface EvalCaseResult {
+  id: string;
+  name: string;
+  task: string;
+  passed: boolean;
+  reason: string;
+  latency_ms: number;
+  assertions: EvalAssertionResult[];
+  output: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface EvalRunReport {
+  id: number | null;
+  agent_name: string;
+  suite_name: string;
+  mode: 'offline' | 'live' | string;
+  model_name: string;
+  total_cases: number;
+  passed_cases: number;
+  pass_rate: number;
+  results: EvalCaseResult[];
+  timestamp: string;
+}

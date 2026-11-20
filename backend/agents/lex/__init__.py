@@ -1,4 +1,5 @@
 from backend.agents.lex.agent import CONFIDENCE_THRESHOLD, LexAgent
+from backend.agents.lex.eval_adapter import LexEvalExecutor
 from backend.agents.lex.schemas import (
     EmailDraftInput,
     EmailDraftResult,
@@ -21,6 +22,7 @@ __all__ = [
     "InvoiceExtractionResult",
     "InvoiceLineItem",
     "LexAgent",
+    "LexEvalExecutor",
     "OpenPOContext",
     "ThreadMessageContext",
 ]

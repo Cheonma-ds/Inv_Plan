@@ -32,7 +32,7 @@ def test_no_sideways_imports_between_domain_modules() -> None:
 
 
 def test_no_wall_clock_datetime_calls_in_domain_logic() -> None:
-    checked_modules = ISOLATED_MODULES | {"orchestrator"}
+    checked_modules = ISOLATED_MODULES | {"orchestrator", "observability"}
     violations: list[str] = []
     for mod in sorted(checked_modules):
         for py_file in _iter_module_py_files(mod):
@@ -91,3 +91,23 @@ def test_mailroom_service_delegates_strictly_through_email_transport() -> None:
         if isinstance(node, ast.Name) and node.id == "POCommunication":
             violations.append(f"{service_file}:{node.lineno} references POCommunication directly")
     assert not violations, "Mailroom service transport bypass:\n" + "\n".join(violations)
+
+
+def test_observability_module_remains_agent_and_domain_agnostic() -> None:
+    """Enforce AGENTS.md §2 Rule 6: backend/observability/ must never import domain modules
+    or backend/agents/* (must remain agent-agnostic).
+    """
+    violations: list[str] = []
+    for py_file in _iter_module_py_files("observability"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    if len(parts) >= 2 and parts[0] == "backend" and parts[1] in ISOLATED_MODULES:
+                        violations.append(f"{py_file}: imports {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                parts = node.module.split(".")
+                if len(parts) >= 2 and parts[0] == "backend" and parts[1] in ISOLATED_MODULES:
+                    violations.append(f"{py_file}: imports from {node.module}")
+    assert not violations, "Observability domain/agent import violations:\n" + "\n".join(violations)

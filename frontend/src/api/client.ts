@@ -1,10 +1,15 @@
 import type {
   AdvanceClockResponse,
+  AgentTraceItem,
   AlertItem,
   ApproveDraftResponse,
+  AutonomyPolicyItem,
   ClockResponse,
   ConsumeResponse,
+  EvalRunReport,
+  EvalSuiteMetadata,
   MailroomSendResponse,
+  ObservabilityStatusResponse,
   PODetail,
   POListItem,
   PartItem,
@@ -192,4 +197,32 @@ export const api = {
         ? { rop: rop ?? null, replenishment_point: replenishmentPoint ?? null }
         : {},
     ),
+
+  // Observability & Evals
+  getObservabilityStatus: () =>
+    requestJson<ObservabilityStatusResponse>('/api/observability/status'),
+  listTraces: (params?: { agentName?: string; taskType?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.agentName) qs.set('agent_name', params.agentName);
+    if (params?.taskType) qs.set('task_type', params.taskType);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    const q = qs.toString();
+    return requestJson<AgentTraceItem[]>(
+      q ? `/api/observability/traces?${q}` : '/api/observability/traces',
+    );
+  },
+  listAutonomyPolicies: (agentName?: string) =>
+    requestJson<AutonomyPolicyItem[]>(
+      agentName
+        ? `/api/observability/autonomy?agent_name=${encodeURIComponent(agentName)}`
+        : '/api/observability/autonomy',
+    ),
+  getEvalSuite: (agentName: string) =>
+    requestJson<EvalSuiteMetadata>(`/api/evals/${encodeURIComponent(agentName)}/suite`),
+  listEvalRuns: (agentName: string, limit = 10) =>
+    requestJson<EvalRunReport[]>(
+      `/api/evals/${encodeURIComponent(agentName)}/run?limit=${limit}`,
+    ),
+  runEvalSuite: (agentName: string, mode: 'offline' | 'live' = 'offline') =>
+    jsonPost<EvalRunReport>(`/api/evals/${encodeURIComponent(agentName)}/run`, { mode }),
 };

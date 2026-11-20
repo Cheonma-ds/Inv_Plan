@@ -25,6 +25,29 @@ def estimate_cost_inr(input_tokens: int, output_tokens: int) -> float:
     return round(in_cost + out_cost, 6)
 
 
+def get_phoenix_status() -> dict[str, Any]:
+    """Report Phoenix OpenTelemetry configuration and availability without importing heavy deps."""
+    import importlib.util
+
+    try:
+        available = (
+            importlib.util.find_spec("phoenix") is not None
+            and importlib.util.find_spec("phoenix.otel") is not None
+        )
+    except ModuleNotFoundError:
+        available = False
+    return {
+        "enable_phoenix": bool(settings.enable_phoenix),
+        "phoenix_installed": available,
+        "phoenix_initialized": _phoenix_initialized,
+        "mode": (
+            "active"
+            if (settings.enable_phoenix and available)
+            else ("fallback_sqlite" if settings.enable_phoenix else "disabled")
+        ),
+    }
+
+
 def _maybe_init_phoenix() -> None:
     global _phoenix_initialized
     if _phoenix_initialized or not settings.enable_phoenix:
