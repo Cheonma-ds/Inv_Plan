@@ -9,12 +9,15 @@ from backend.core.enums import Criticality, PersonaKey, POStatus
 from backend.core.models import Part, PartSupplierTerm, Supplier
 from backend.inventory import (
     InsufficientStockError,
+    clear_quarantined_stock,
     consume_stock,
     get_inventory_position,
     get_on_order_stock,
     get_part_snapshot,
     hold_in_quarantine,
+    receive_stock_direct,
     release_quarantined_stock,
+    set_manual_demand_override,
     update_rop_and_replenishment,
 )
 from backend.po import create_po, transition_po
@@ -171,3 +174,64 @@ def test_seeded_hero_part_reproduces_manager_scenario(seeded_session: Session) -
     assert res.snapshot.on_hand_stock == 2
     assert res.reorder_triggered is not None
     assert res.reorder_triggered.order_qty == 4
+
+
+def test_quarantined_stock_deducted_from_on_order_without_spawning_duplicate_po(
+    db_session: Session,
+) -> None:
+    """Verify P10 & P8: When an open PO enters quarantine, units move from on_order_stock to
+    quarantined_stock (zero double-counting), while inventory_position includes quarantined_stock
+    so withdrawals during an invoice dispute do not trigger duplicate POs.
+    """
+    part, sup = _setup_single_part(db_session, on_hand=4, rop=10, replenishment_point=25, moq=10)
+    po = create_po(
+        db_session,
+        part_id=part.id,
+        supplier_id=sup.id,
+        qty=20,
+        unit_price=100.0,
+        initial_status=POStatus.RECEIVED_PENDING_INVOICE,
+    )
+
+    # 1. In RECEIVED_PENDING_INVOICE (before invoice mismatch): on_order=20, quarantined=0
+    snap_pending = get_part_snapshot(db_session, part.id)
+    assert snap_pending.on_hand_stock == 4
+    assert snap_pending.quarantined_stock == 0
+    assert snap_pending.on_order_stock == 20
+    assert snap_pending.inventory_position == 24
+
+    # 2. Invoice mismatches -> hold 20 in quarantine: quarantined=20, on_order=0, inv_pos=24
+    transition_po(db_session, po, POStatus.QUARANTINED_INVOICE_MISMATCH)
+    snap_quar = hold_in_quarantine(db_session, part.id, 20)
+    assert snap_quar.on_hand_stock == 4
+    assert snap_quar.quarantined_stock == 20
+    assert snap_quar.on_order_stock == 0  # Not double-counted!
+    assert snap_quar.inventory_position == 24
+
+    # 3. Withdraw 3 units from on_hand (4 -> 1 < ROP 10): because 20 units are in quarantine
+    # (inv_pos = 1 + 0 + 20 = 21 >= ROP 10), NO duplicate PO is triggered!
+    consume_res = consume_stock(db_session, part.id, 3, note="Line consumption during dispute")
+    assert consume_res.snapshot.on_hand_stock == 1
+    assert consume_res.snapshot.quarantined_stock == 20
+    assert consume_res.snapshot.on_order_stock == 0
+    assert consume_res.snapshot.inventory_position == 21
+    assert consume_res.reorder_triggered is None
+
+    # 4. If the quarantined PO is cancelled, clear_quarantined_stock resets quarantined_stock to 0
+    transition_po(db_session, po, POStatus.CANCELLED)
+    snap_cleared = clear_quarantined_stock(db_session, part.id, 20)
+    assert snap_cleared.quarantined_stock == 0
+    assert snap_cleared.on_order_stock == 0
+    assert snap_cleared.inventory_position == 1
+
+    # 5. Direct receipt helper increments on_hand_stock and logs transaction
+    snap_direct = receive_stock_direct(db_session, part.id, 15, note="Direct matched receipt")
+    assert snap_direct.on_hand_stock == 16
+
+    # 6. Manual demand override helper sets and clears override cleanly
+    snap_ov = set_manual_demand_override(db_session, part.id, 1.5)
+    assert snap_ov.manual_demand_override == 1.5
+    with pytest.raises(ValueError, match="cannot be negative"):
+        set_manual_demand_override(db_session, part.id, -0.5)
+    snap_cleared_ov = set_manual_demand_override(db_session, part.id, None)
+    assert snap_cleared_ov.manual_demand_override is None

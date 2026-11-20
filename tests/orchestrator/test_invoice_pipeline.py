@@ -515,3 +515,168 @@ def test_clean_match_v1_pdf_releases_stock_and_closes_po_immediately(seeded_sess
     assert part.quarantined_stock == 0
     assert part.on_hand_stock == starting_on_hand + 4
 
+
+def test_multiline_invoice_weighted_price_detects_subtotal_math_error_and_match_impacts(
+    seeded_session,
+):
+    """Verify P11: Multi-line invoice with differing unit prices computes weighted average
+    unit price from line items (not subtotal/qty) so subtotal arithmetic errors are caught
+    (math_ok=False), and _handle_invoice_match_outcome consumes match_result fields directly.
+    """
+    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-002", qty=6, price=2000.0)
+    llm = InvoicePipelineMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+    client = _make_client(seeded_session, engine)
+
+    client.post(f"/api/pos/{po.id}/grn", json={"received_qty": 6, "condition": "GOOD"})
+
+    # 2 units @ ₹1,000 + 4 units @ ₹2,500 => true line sum = ₹12,000 (weighted avg ₹2,000),
+    # but PDF subtotal erroneously states ₹13,500 (+₹1,500 arithmetic error)!
+    bad_math_pdf = build_invoice_pdf_bytes(
+        supplier_name=sup.name,
+        invoice_number="INV-MULTI-MATH",
+        po_number=po.po_number,
+        invoice_date="2026-11-20",
+        lines=[
+            InvoiceLineSpec(sku=part.sku, description="Batch A", qty=2, unit_price=1000.0),
+            InvoiceLineSpec(sku=part.sku, description="Batch B", qty=4, unit_price=2500.0),
+        ],
+    )
+    llm.next_triage = EmailTriageResult(
+        matched_po_number=po.po_number,
+        intent=EmailIntent.INVOICE_SUBMISSION,
+        confidence=0.98,
+        summary_for_manager="Multi-line invoice attached.",
+        suggested_action="Verify match.",
+        reasoning="PDF present.",
+    )
+    llm.next_extraction = InvoiceExtractionResult(
+        invoice_number="INV-MULTI-MATH",
+        po_number=po.po_number,
+        supplier_name=sup.name,
+        invoice_date="2026-11-20",
+        line_items=[
+            InvoiceLineItem(
+                description="Batch A",
+                part_sku=part.sku,
+                qty=2,
+                unit_price=1000.0,
+                line_total=2000.0,
+            ),
+            InvoiceLineItem(
+                description="Batch B",
+                part_sku=part.sku,
+                qty=4,
+                unit_price=2500.0,
+                line_total=10000.0,
+            ),
+        ],
+        subtotal=13500.0,  # Wrong subtotal (should be 12000.0)!
+        tax_amount=2430.0,
+        total_amount=15930.0,
+        confidence=0.97,
+    )
+
+    resp = client.post(
+        "/api/mailroom/send",
+        data={
+            "from_persona": PersonaKey.SUP2.value,
+            "to_personas": PersonaKey.LEX.value,
+            "subject": f"Invoice INV-MULTI-MATH for {po.po_number}",
+            "body": "Attached multi-line invoice.",
+        },
+        files={"attachment": ("INV-MULTI-MATH.pdf", bad_math_pdf, "application/pdf")},
+    )
+    assert resp.status_code == 200
+    triage_out = resp.json()["triage"]
+    match_res = triage_out["match_result"]
+    assert match_res["matched"] is False
+    assert match_res["math_ok"] is False
+    assert match_res["total_price_impact"] == 1500.0
+
+    alert = seeded_session.get(ActionItem, triage_out["alert_id"])
+    assert alert is not None
+    assert alert.cta_payload_json["total_price_impact"] == 1500.0
+
+
+def test_cancelling_or_switching_quarantined_po_clears_quarantined_stock_and_resolves_alerts(
+    seeded_session,
+):
+    """Verify P8, P16, P17: Switching a QUARANTINED_INVOICE_MISMATCH PO to a backup supplier
+    (or cancelling it via cancel_po CTA) clears part.quarantined_stock back to 0 and
+    auto-resolves open alerts on the cancelled PO.
+    """
+    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-002", qty=6, price=4800.0)
+    llm = InvoicePipelineMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+    client = _make_client(seeded_session, engine)
+
+    # Log GRN and submit mismatched invoice to put PO into QUARANTINED_INVOICE_MISMATCH
+    client.post(f"/api/pos/{po.id}/grn", json={"received_qty": 6, "condition": "GOOD"})
+    bad_pdf = build_invoice_pdf_bytes(
+        supplier_name=sup.name,
+        invoice_number="INV-QUAR-CANCEL",
+        po_number=po.po_number,
+        invoice_date="2026-11-20",
+        lines=[InvoiceLineSpec(sku=part.sku, description=part.name, qty=6, unit_price=5500.0)],
+    )
+    llm.next_triage = EmailTriageResult(
+        matched_po_number=po.po_number,
+        intent=EmailIntent.INVOICE_SUBMISSION,
+        confidence=0.97,
+        summary_for_manager="Mismatched invoice.",
+        suggested_action="Quarantine.",
+        reasoning="PDF attached.",
+    )
+    llm.next_extraction = InvoiceExtractionResult(
+        invoice_number="INV-QUAR-CANCEL",
+        po_number=po.po_number,
+        supplier_name=sup.name,
+        invoice_date="2026-11-20",
+        line_items=[
+            InvoiceLineItem(
+                description=part.name,
+                part_sku=part.sku,
+                qty=6,
+                unit_price=5500.0,
+                line_total=33000.0,
+            )
+        ],
+        subtotal=33000.0,
+        tax_amount=0.0,
+        total_amount=33000.0,
+        confidence=0.98,
+    )
+    send_resp = client.post(
+        "/api/mailroom/send",
+        data={
+            "from_persona": PersonaKey.SUP2.value,
+            "to_personas": PersonaKey.LEX.value,
+            "subject": f"Invoice for {po.po_number}",
+            "body": "Attached.",
+        },
+        files={"attachment": ("inv.pdf", bad_pdf, "application/pdf")},
+    )
+    assert send_resp.status_code == 200
+    quar_alert_id = send_resp.json()["triage"]["alert_id"]
+
+    seeded_session.refresh(part)
+    seeded_session.refresh(po)
+    assert po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
+    assert part.quarantined_stock == 6
+
+    # Now switch the quarantined PO to backup supplier via POST /api/pos/{id}/switch-supplier
+    sw_resp = client.post(f"/api/pos/{po.id}/switch-supplier", json={})
+    assert sw_resp.status_code == 200
+    sw_data = sw_resp.json()
+    assert sw_data["cancelled_po_id"] == po.id
+    assert sw_data["quarantined_cleared_qty"] == 6
+    assert sw_data["new_po"]["status"] == POStatus.PENDING_DISPATCH_APPROVAL.value
+
+    seeded_session.refresh(part)
+    seeded_session.refresh(po)
+    quar_alert = seeded_session.get(ActionItem, quar_alert_id)
+    assert po.status == POStatus.CANCELLED.value
+    assert part.quarantined_stock == 0
+    assert quar_alert is not None and quar_alert.status == ActionItemStatus.RESOLVED.value
+

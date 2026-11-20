@@ -1,5 +1,6 @@
 from backend.po.actions import (
     ActionItemNotFoundError,
+    compute_urgency_score,
     create_action_item,
     dismiss_action_item,
     list_action_items,
@@ -15,6 +16,7 @@ from backend.po.matching import (
 from backend.po.service import (
     BackupSupplierNotFoundError,
     PONotFoundError,
+    cancel_po,
     create_po,
     generate_po_number,
     get_po,
@@ -45,6 +47,8 @@ __all__ = [
     "ThreeWayMatchResult",
     "append_po_note",
     "can_transition",
+    "cancel_po",
+    "compute_urgency_score",
     "create_action_item",
     "create_po",
     "dismiss_action_item",

@@ -25,6 +25,9 @@ class ThreeWayMatchResult(BaseModel):
     total_price_impact: float
     qty_diff: int
     discrepancy_summary: str
+    stock_action: str = "NONE"
+    stock_qty: int = 0
+    stock_note: str = ""
 
 
 def evaluate_three_way_match(data: ThreeWayMatchInput) -> ThreeWayMatchResult:

@@ -26,6 +26,7 @@ from backend.core.models import (
     SupplierMemoryNote,
 )
 from backend.mailroom import OutboundMessage, save_draft
+from backend.planning import compute_demand_forecast, refresh_supplier_metrics
 from backend.po import create_action_item, transition_po
 
 
@@ -145,6 +146,12 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
             continue
 
         is_critical = part.criticality == Criticality.CRITICAL.value
+        forecast = compute_demand_forecast(session, part, sim_now=sim_now)
+        days_of_supply = (
+            round(part.on_hand_stock / forecast.effective_daily_demand, 2)
+            if forecast.effective_daily_demand > 0
+            else None
+        )
 
         # 1. Ack SLA (SENT_AWAITING_ACK): 24h for CRITICAL, 48h for STANDARD/LOW
         if po.status == POStatus.SENT_AWAITING_ACK.value:
@@ -158,6 +165,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                 if po.follow_up_count < 2:
                     po.follow_up_count += 1
                     po.next_sla_check_at = sim_now + sla_delta
+                    refresh_supplier_metrics(session, supplier.id, part_id=part.id)
                     sent_date = clock.ensure_utc(po.sent_at or po.created_at).date().isoformat()
                     draft = _draft_lex_email_for_po(
                         session,
@@ -180,6 +188,8 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         session,
                         type="ACK_REMINDER_DRAFT",
                         severity=AlertSeverity.HIGH if is_critical else AlertSeverity.MEDIUM,
+                        part_criticality=part.criticality,
+                        days_to_stockout=days_of_supply,
                         title=title,
                         summary=(
                             f"{supplier.name} has not acknowledged {po.po_number} "
@@ -213,6 +223,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         note="Escalated after 2 unanswered acknowledgement follow-ups.",
                     )
                     po.next_sla_check_at = None
+                    refresh_supplier_metrics(session, supplier.id, part_id=part.id)
                     backup = _backup_supplier_payload(session, part.id, supplier.id)
                     suggested = []
                     if backup.get("backup_supplier_id"):
@@ -228,6 +239,8 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         session,
                         type="UNRESPONSIVE_SUPPLIER",
                         severity=AlertSeverity.CRITICAL if is_critical else AlertSeverity.HIGH,
+                        part_criticality=part.criticality,
+                        days_to_stockout=days_of_supply,
                         title=f"Unresponsive supplier on {po.po_number} ({supplier.name})",
                         summary=(
                             f"{supplier.name} failed to respond after 2 follow-ups for "
@@ -272,6 +285,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                     POStatus.OVERDUE,
                     note=f"No goods receipt recorded by {eta_str} (+1d grace).",
                 )
+                refresh_supplier_metrics(session, supplier.id, part_id=part.id)
                 promised_str = (
                     clock.ensure_utc(po.promised_eta).date().isoformat()
                     if po.promised_eta
@@ -303,6 +317,8 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                     session,
                     type="OVERDUE_PO",
                     severity=AlertSeverity.CRITICAL if is_critical else AlertSeverity.HIGH,
+                    part_criticality=part.criticality,
+                    days_to_stockout=days_of_supply,
                     title=f"OVERDUE shipment: {po.po_number} ({part.sku})",
                     summary=(
                         f"{po.po_number} from {supplier.name} missed its ETA ({eta_str}) "
@@ -352,6 +368,8 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                     session,
                     type="PRE_ETA_CHECKIN_DRAFT",
                     severity=AlertSeverity.MEDIUM,
+                    part_criticality=part.criticality,
+                    days_to_stockout=days_of_supply,
                     title=f"Pre-ETA check-in draft for {po.po_number} ({supplier.name})",
                     summary=(
                         f"{po.po_number} is due on {eta_str}. Because of part criticality / "
@@ -386,8 +404,24 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                 .order_by(Invoice.received_at.desc(), Invoice.id.desc())
                 .limit(1)
             )
-            anchor = clock.ensure_utc(
-                latest_inv.received_at if latest_inv else (po.sent_at or po.created_at)
+            latest_grn = session.scalar(
+                select(GoodsReceipt)
+                .where(GoodsReceipt.po_id == po.id)
+                .order_by(GoodsReceipt.received_at.desc(), GoodsReceipt.id.desc())
+                .limit(1)
+            )
+            candidate_anchors = [
+                clock.ensure_utc(ts)
+                for ts in (
+                    latest_inv.received_at if latest_inv else None,
+                    latest_grn.received_at if latest_grn else None,
+                )
+                if ts is not None
+            ]
+            anchor = (
+                max(candidate_anchors)
+                if candidate_anchors
+                else clock.ensure_utc(po.sent_at or po.created_at)
             )
             elapsed_hours = (sim_now - anchor).total_seconds() / 3600.0
 
@@ -404,6 +438,8 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         session,
                         type="QUARANTINE_ESCALATED",
                         severity=AlertSeverity.CRITICAL,
+                        part_criticality=part.criticality,
+                        days_to_stockout=days_of_supply,
                         title=f"CRITICAL: {po.po_number} quarantined >96h (invoice mismatch)",
                         summary=(
                             f"Stock from {po.po_number} ({part.sku}) has remained quarantined "
@@ -456,6 +492,8 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         session,
                         type="QUARANTINE_REMINDER",
                         severity=AlertSeverity.HIGH,
+                        part_criticality=part.criticality,
+                        days_to_stockout=days_of_supply,
                         title=f"Quarantine reminder draft for {po.po_number} (>48h)",
                         summary=(
                             f"Corrected invoice for {po.po_number} has not arrived after 48h. "
@@ -485,16 +523,18 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
     return events
 
 
-def auto_resolve_po_alerts(session: Session, po_id: int, alert_types: tuple[str, ...]) -> int:
-    """Auto-resolve open alerts of specified types for a PO once resolved by an event."""
+def auto_resolve_po_alerts(
+    session: Session, po_id: int, alert_types: tuple[str, ...] | None = None
+) -> int:
+    """Auto-resolve open alerts (of specified types, or all if None) for a PO."""
     sim_now = clock.now(session)
-    rows = session.scalars(
-        select(ActionItem).where(
-            ActionItem.po_id == po_id,
-            ActionItem.status == ActionItemStatus.OPEN.value,
-            ActionItem.type.in_(alert_types),
-        )
-    ).all()
+    stmt = select(ActionItem).where(
+        ActionItem.po_id == po_id,
+        ActionItem.status == ActionItemStatus.OPEN.value,
+    )
+    if alert_types is not None:
+        stmt = stmt.where(ActionItem.type.in_(alert_types))
+    rows = session.scalars(stmt).all()
     for row in rows:
         row.status = ActionItemStatus.RESOLVED.value
         row.resolved_at = sim_now

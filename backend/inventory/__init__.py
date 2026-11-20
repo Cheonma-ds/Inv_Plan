@@ -8,6 +8,7 @@ from backend.inventory.service import (
     InsufficientStockError,
     MissingPrimarySupplierError,
     PartNotFoundError,
+    clear_quarantined_stock,
     consume_stock,
     get_inventory_position,
     get_on_order_stock,
@@ -15,7 +16,9 @@ from backend.inventory.service import (
     hold_in_quarantine,
     list_part_snapshots,
     list_transactions,
+    receive_stock_direct,
     release_quarantined_stock,
+    set_manual_demand_override,
     update_rop_and_replenishment,
 )
 
@@ -27,6 +30,7 @@ __all__ = [
     "PartNotFoundError",
     "PartSnapshot",
     "ReorderTriggered",
+    "clear_quarantined_stock",
     "consume_stock",
     "get_inventory_position",
     "get_on_order_stock",
@@ -34,6 +38,8 @@ __all__ = [
     "hold_in_quarantine",
     "list_part_snapshots",
     "list_transactions",
+    "receive_stock_direct",
     "release_quarantined_stock",
+    "set_manual_demand_override",
     "update_rop_and_replenishment",
 ]

@@ -10,6 +10,7 @@ from backend.inventory import (
     PartNotFoundError,
     get_part_snapshot,
     list_part_snapshots,
+    set_manual_demand_override,
     update_rop_and_replenishment,
 )
 from backend.orchestrator.deps import get_workflow_engine
@@ -26,6 +27,10 @@ class ConsumeStockRequest(BaseModel):
 class UpdateROPRequest(BaseModel):
     rop: int = Field(ge=0)
     replenishment_point: int = Field(gt=0)
+
+
+class UpdateDemandOverrideRequest(BaseModel):
+    manual_demand_override: float | None = Field(default=None, ge=0.0)
 
 
 @router.get("")
@@ -128,8 +133,28 @@ def patch_part_rop(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.commit()
     return {
-        "part_id": part.id,
+        "part_id": part.part_id,
         "sku": part.sku,
         "rop": part.rop,
         "replenishment_point": part.replenishment_point,
     }
+
+
+@router.patch("/{part_id}/demand-override")
+def patch_part_demand_override(
+    part_id: int,
+    payload: UpdateDemandOverrideRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    try:
+        snap = set_manual_demand_override(
+            session,
+            part_id,
+            payload.manual_demand_override,
+        )
+    except PartNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return snap.model_dump()

@@ -84,3 +84,17 @@ def test_promised_eta_is_immutable_while_revised_eta_updates(db_session: Session
     assert clock.ensure_utc(po.promised_eta) == first_eta
     assert clock.ensure_utc(po.revised_eta) == delayed_eta
     assert "Non-critical minor delay accepted" in po.notes
+
+
+def test_delayed_critical_can_transition_to_overdue(db_session: Session) -> None:
+    """Verify P3: DELAYED_CRITICAL PO can transition to OVERDUE if revised ETA is missed."""
+    po = _make_po(db_session, status=POStatus.DELAYED_CRITICAL)
+    assert can_transition(POStatus.DELAYED_CRITICAL, POStatus.OVERDUE) is True
+    transition_po(
+        db_session,
+        po,
+        POStatus.OVERDUE,
+        note="Missed revised ETA by >1 day with no GRN",
+    )
+    assert po.status == POStatus.OVERDUE.value
+    assert "Missed revised ETA" in po.notes

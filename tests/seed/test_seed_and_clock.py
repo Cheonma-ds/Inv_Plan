@@ -2,11 +2,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
+import backend.main as main_mod
 from backend.core import clock
-from backend.core.db import create_db_engine, init_db
+from backend.core.db import create_db_engine, get_session, init_db
 from backend.core.enums import AutonomyMode, Criticality, EmailCategory, POStatus
 from backend.core.models import (
     AutonomyPolicy,
@@ -17,6 +19,7 @@ from backend.core.models import (
     Supplier,
     SupplierMemoryNote,
 )
+from backend.main import create_app
 from backend.seed.data import SEED_START_TIME
 from backend.seed.reset import reset_and_seed
 
@@ -118,3 +121,63 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
     summary2 = reset_and_seed(engine)
     assert summary2 == summary
     engine.dispose()
+
+
+def test_fastapi_lifespan_empty_db_and_admin_reset_seed_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify P1: FastAPI lifespan seeds an empty DB cleanly and POST /api/admin/reset-seed
+    resets an active mutated database without TypeError or SQLite table-lock errors.
+    """
+    db_file = tmp_path / "lifespan_reset.db"
+    test_engine = create_db_engine(f"sqlite:///{db_file}")
+    test_session_local = sessionmaker(
+        bind=test_engine, autoflush=False, autocommit=False, expire_on_commit=False
+    )
+
+    monkeypatch.setattr(main_mod, "init_db", lambda: init_db(test_engine))
+    monkeypatch.setattr(main_mod, "SessionLocal", test_session_local)
+
+    app = create_app()
+
+    def _override_get_session():
+        with test_session_local() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_get_session
+
+    with TestClient(app) as client:
+        # 1. Lifespan automatically seeded the empty DB on startup
+        parts_resp = client.get("/api/parts")
+        assert parts_resp.status_code == 200
+        assert len(parts_resp.json()) == 15
+
+        # 2. Mutate state: advance clock (+5h, within SLA window) and modify a part's ROP
+        adv_resp = client.post("/api/clock/advance", json={"hours": 5})
+        assert adv_resp.status_code == 200
+        part0_id = parts_resp.json()[0]["part_id"]
+        rop_resp = client.patch(
+            f"/api/parts/{part0_id}/rop",
+            json={"rop": 42, "replenishment_point": 90},
+        )
+        assert rop_resp.status_code == 200
+
+        # 3. Call POST /api/admin/reset-seed and verify clean reset to baseline
+        reset_resp = client.post("/api/admin/reset-seed")
+        assert reset_resp.status_code == 200
+        body = reset_resp.json()
+        assert body["status"] == "reset"
+        assert body["summary"]["suppliers"] == 3
+        assert body["summary"]["parts"] == 15
+        assert body["summary"]["closed_pos"] == 36
+        assert body["summary"]["open_pos"] == 2
+
+        clock_resp = client.get("/api/clock")
+        assert clock_resp.status_code == 200
+        assert clock_resp.json()["sim_now"] == SEED_START_TIME.isoformat()
+
+        parts_after = client.get("/api/parts").json()
+        sku1 = next(p for p in parts_after if p["sku"] == "SKU-001")
+        assert sku1["rop"] == 3
+
+    test_engine.dispose()

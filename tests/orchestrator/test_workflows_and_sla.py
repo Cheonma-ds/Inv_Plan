@@ -505,3 +505,290 @@ def test_fastapi_routes_http_end_to_end(seeded_session):
     assert approve_resp.json()["approval_outcome"] == "APPROVED_EDITED"
     row = seeded_session.get(POCommunication, draft_id)
     assert row is not None and row.status == CommStatus.SENT.value
+
+    # 6. Verify P2 & P17: PATCH /api/parts/{id}/rop and PATCH /api/parts/{id}/demand-override
+    rop_ok = client.patch(
+        f"/api/parts/{hero_part['part_id']}/rop",
+        json={"rop": 4, "replenishment_point": 8},
+    )
+    assert rop_ok.status_code == 200
+    assert rop_ok.json()["part_id"] == hero_part["part_id"]
+    assert rop_ok.json()["rop"] == 4
+    assert rop_ok.json()["replenishment_point"] == 8
+
+    rop_bad = client.patch(
+        f"/api/parts/{hero_part['part_id']}/rop",
+        json={"rop": 10, "replenishment_point": 8},
+    )
+    assert rop_bad.status_code == 400
+
+    rop_404 = client.patch(
+        "/api/parts/99999/rop",
+        json={"rop": 3, "replenishment_point": 6},
+    )
+    assert rop_404.status_code == 404
+
+    ov_set = client.patch(
+        f"/api/parts/{hero_part['part_id']}/demand-override",
+        json={"manual_demand_override": 0.75},
+    )
+    assert ov_set.status_code == 200
+    assert ov_set.json()["manual_demand_override"] == 0.75
+
+    ov_clear = client.patch(
+        f"/api/parts/{hero_part['part_id']}/demand-override",
+        json={"manual_demand_override": None},
+    )
+    assert ov_clear.status_code == 200
+    assert ov_clear.json()["manual_demand_override"] is None
+
+    # 7. Verify P17: POST /api/clock direct set time (forward ok, backward 400 unless allow_reset)
+    cur_clock = client.get("/api/clock").json()["sim_now"]
+    back_fail = client.post("/api/clock", json={"sim_now": "2026-11-01T00:00:00Z"})
+    assert back_fail.status_code == 400
+
+    fwd_ok = client.post("/api/clock", json={"sim_now": "2026-11-21T12:00:00Z"})
+    assert fwd_ok.status_code == 200
+    assert fwd_ok.json()["sim_now"].startswith("2026-11-21T12:00:00")
+
+    reset_ok = client.post(
+        "/api/clock",
+        json={"sim_now": cur_clock, "allow_reset": True},
+    )
+    assert reset_ok.status_code == 200
+
+    # 8. Verify P18: PATCH /api/pos/{id} rejects CLOSED POs with 400
+    closed_po = seeded_session.scalar(
+        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.CLOSED.value)
+    )
+    assert closed_po is not None
+    patch_closed = client.patch(
+        f"/api/pos/{closed_po.id}",
+        json={"unit_price": 999.0},
+    )
+    assert patch_closed.status_code == 400
+
+
+def test_scenario_1a_standard_part_above_rop_stockout_math_and_delayed_critical_to_overdue(
+    seeded_session,
+):
+    """Verify P3, P5, P13:
+    1. A STANDARD part above ROP that receives a post-ack delay breaching
+       projected_days_of_supply - 3d transitions to DELAYED_CRITICAL (not minor delay!).
+    2. A STANDARD part with a short safe-buffer delay stays ACKNOWLEDGED (MINOR_DELAY_ACCEPTED).
+    3. If the DELAYED_CRITICAL PO misses its revised_eta + 1d without GRN, run_sla_watcher
+       transitions it to OVERDUE without InvalidPOTransitionError and lowers supplier score.
+    """
+    llm = SmartMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+
+    # Seeded ACKNOWLEDGED PO is on SKU-006 (STANDARD part, on_hand=15 > ROP=12, ~20d supply)
+    po_ack = seeded_session.scalar(
+        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    )
+    assert po_ack is not None
+    part = seeded_session.get(Part, po_ack.part_id)
+    supplier = seeded_session.get(Supplier, po_ack.supplier_id)
+    assert part is not None and supplier is not None
+    assert part.criticality == Criticality.STANDARD.value
+    assert part.on_hand_stock > part.rop
+
+    # 1. Safe minor delay (only 5d out, below projected_days_of_supply - 3d) -> ACKNOWLEDGED
+    llm.next_triage = EmailTriageResult(
+        matched_po_number=po_ack.po_number,
+        intent=EmailIntent.POST_ACK_DELAY,
+        confidence=0.95,
+        proposed_eta_date="2026-11-25",
+        delay_reason="Minor courier rescheduling",
+        summary_for_manager="ETA shifted by 1 day to 2026-11-25.",
+        suggested_action="No action needed.",
+        reasoning="Minor delay.",
+    )
+    res_minor = engine.send_mailroom_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.SUP1,
+            to_personas=[PersonaKey.LEX],
+            subject=f"Minor schedule update {po_ack.po_number}",
+            body="Delivering Nov 25.",
+        ),
+    )
+    seeded_session.refresh(po_ack)
+    assert po_ack.status == POStatus.ACKNOWLEDGED.value
+    minor_alert = seeded_session.get(ActionItem, res_minor["triage"]["alert_id"])
+    assert minor_alert is not None and minor_alert.type == "MINOR_DELAY_ACCEPTED"
+    assert minor_alert.cta_payload_json["projected_days_of_supply"] > 10.0
+
+    # 2. Long delay (45d out -> breaches projected_days_of_supply - 3d even with on_hand > ROP!)
+    llm.next_triage = EmailTriageResult(
+        matched_po_number=po_ack.po_number,
+        intent=EmailIntent.POST_ACK_DELAY,
+        confidence=0.96,
+        proposed_eta_date="2027-01-05",
+        delay_reason="Foundry furnace outage",
+        summary_for_manager="Delayed until 2027-01-05.",
+        suggested_action="Expedite immediately.",
+        reasoning="Long post-ack delay.",
+    )
+    res_crit = engine.send_mailroom_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.SUP1,
+            to_personas=[PersonaKey.LEX],
+            subject=f"Major delay {po_ack.po_number}",
+            body="Delayed to Jan 5, 2027.",
+        ),
+    )
+    seeded_session.refresh(po_ack)
+    assert po_ack.status == POStatus.DELAYED_CRITICAL.value
+    crit_alert = seeded_session.get(ActionItem, res_crit["triage"]["alert_id"])
+    assert crit_alert is not None and crit_alert.type == "CRITICAL_DELAY"
+    assert crit_alert.cta_payload_json["days_short_of_eta"] > 0
+
+    # 3. Advance clock past revised_eta + 2d -> DELAYED_CRITICAL transitions to OVERDUE (P3 & P5)
+    score_before = supplier.reliability_score
+    otd_before = supplier.otd_rate
+    jump_res = engine.jump_to_po_eta_and_watch(seeded_session, po_ack.id, offset_days=2)
+    assert any(
+        e.po_id == po_ack.id and e.event_type == "OVERDUE_DETECTED"
+        for e in jump_res["sla_events"]
+    )
+    seeded_session.refresh(po_ack)
+    seeded_session.refresh(supplier)
+    assert po_ack.status == POStatus.OVERDUE.value
+    assert supplier.otd_rate < otd_before
+    assert supplier.reliability_score <= score_before
+
+
+def test_scenario_2_price_variance_stockout_payload_default_update_po_and_cancel_po_cta(
+    seeded_session,
+):
+    """Verify P13 & P17: Scenario 2 PO_EXCEPTION alert computes deterministic price_variance_inr,
+    price_variance_pct, total_cost_impact_inr, and projected_stockout_date; update_po CTA falls
+    back to cta_payload_json when params omit unit_price/qty/revised_eta; and cancel_po CTA works.
+    """
+    llm = SmartMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+
+    po_await = seeded_session.scalar(
+        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
+    )
+    assert po_await is not None
+    orig_price = po_await.unit_price  # 780.0
+    orig_qty = po_await.qty  # 15
+
+    llm.next_triage = EmailTriageResult(
+        matched_po_number=po_await.po_number,
+        intent=EmailIntent.PRICE_CHANGE,
+        confidence=0.96,
+        proposed_unit_price=936.0,  # +156.0 (+20.0%)
+        proposed_qty=12,
+        proposed_eta_date="2026-12-25",
+        summary_for_manager="Supplier hiked price to ₹936 and cut qty to 12.",
+        suggested_action="Review exception.",
+        reasoning="Price and qty revision.",
+    )
+    res = engine.send_mailroom_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.SUP3,
+            to_personas=[PersonaKey.LEX],
+            subject=f"Update on {po_await.po_number}",
+            body="Price is now Rs 936 for 12 pcs, ETA Dec 25.",
+        ),
+    )
+    alert = seeded_session.get(ActionItem, res["triage"]["alert_id"])
+    assert alert is not None and alert.type == "PO_EXCEPTION"
+    cta = alert.cta_payload_json
+    assert cta["price_variance_inr"] == round(936.0 - orig_price, 2)
+    assert cta["price_variance_pct"] == 20.0
+    assert cta["total_cost_impact_inr"] == round((936.0 - orig_price) * 12, 2)
+    assert cta["projected_stockout_date"] is not None
+    assert cta["projected_days_of_supply"] > 0
+    action_names = [a["action"] for a in alert.suggested_actions_json]
+    assert "cancel_po" in action_names
+    assert "update_po" in action_names
+
+    # Execute update_po CTA with EMPTY params -> must default from cta_payload_json!
+    upd_res = engine.execute_alert_cta(seeded_session, alert.id, action="update_po", params={})
+    seeded_session.refresh(po_await)
+    assert po_await.unit_price == 936.0
+    assert po_await.qty == 12
+    assert po_await.revised_eta is not None
+    assert po_await.status == POStatus.PENDING_DISPATCH_APPROVAL.value
+    assert upd_res["draft_comm_id"] is not None
+
+    # Also verify cancel_po CTA on a second exception alert
+    alert2 = ActionItem(
+        type="PO_EXCEPTION",
+        severity="HIGH",
+        urgency_score=70,
+        po_id=po_await.id,
+        part_id=po_await.part_id,
+        title="Cancel test",
+        summary="Cancel PO via CTA",
+        suggested_actions_json=[{"action": "cancel_po", "label": "Cancel PO"}],
+        cta_payload_json={"po_id": po_await.id},
+        status=ActionItemStatus.OPEN.value,
+        created_at= po_await.created_at,
+    )
+    seeded_session.add(alert2)
+    seeded_session.flush()
+
+    cancel_res = engine.execute_alert_cta(
+        seeded_session,
+        alert2.id,
+        action="cancel_po",
+        params={"note": "Cancelled due to excessive price hike"},
+    )
+    seeded_session.refresh(po_await)
+    seeded_session.refresh(alert2)
+    assert cancel_res["po_status"] == POStatus.CANCELLED.value
+    assert po_await.status == POStatus.CANCELLED.value
+    assert alert2.status == ActionItemStatus.RESOLVED.value
+    assert orig_qty == 15
+
+
+def test_quarantine_sla_timer_anchors_on_max_of_invoice_and_grn_timestamps(seeded_session):
+    """Verify P9: When a mismatched invoice arrives 72h BEFORE the physical GRN is logged,
+    the quarantine SLA timer anchors at max(invoice.received_at, grn.received_at) — i.e., when
+    quarantine actually began — and does NOT fire the 48h reminder early.
+    """
+    llm = SmartMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+
+    po_ack = seeded_session.scalar(
+        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    )
+    assert po_ack is not None
+
+    # 1. Invoice arrives at T=0 (before GRN) with overbilled price -> PENDING_GRN
+    submit_invoice_and_match(
+        seeded_session,
+        po_id=po_ack.id,
+        invoice_number="INV-EARLY-72H",
+        extracted_qty=po_ack.qty,
+        extracted_unit_price=po_ack.unit_price + 200.0,
+        extracted_total=po_ack.qty * (po_ack.unit_price + 200.0),
+    )
+
+    # 2. Advance clock 72h (3 days), then log physical GRN -> quarantine begins NOW at T=72h
+    engine.advance_clock_and_watch(seeded_session, hours=72)
+    engine.record_grn(seeded_session, po_id=po_ack.id, received_qty=po_ack.qty)
+    seeded_session.refresh(po_ack)
+    assert po_ack.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
+
+    # 3. Advance +24h (24h after quarantine start, 96h after invoice arrival):
+    #    Must NOT fire 48h reminder or 96h escalation!
+    r_24h = engine.advance_clock_and_watch(seeded_session, hours=24)
+    quar_events_24h = [
+        e for e in r_24h["sla_events"] if e.po_id == po_ack.id
+    ]
+    assert quar_events_24h == []
+
+    # 4. Advance another +25h (49h after GRN / quarantine start) -> NOW 48h reminder fires!
+    r_49h = engine.advance_clock_and_watch(seeded_session, hours=25)
+    quar_events_49h = [
+        e.event_type for e in r_49h["sla_events"] if e.po_id == po_ack.id
+    ]
+    assert quar_events_49h == ["QUARANTINE_REMINDER_DRAFTED"]

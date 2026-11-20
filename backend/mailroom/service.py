@@ -2,20 +2,30 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.core import clock
-from backend.core.enums import ApprovalOutcome, CommStatus
-from backend.core.models import POCommunication
+from backend.core.enums import ApprovalOutcome
 from backend.mailroom.schemas import OutboundMessage, StoredEmail
-from backend.mailroom.transport import DatabaseEmailTransport, EmailTransport, _to_stored_email
+from backend.mailroom.transport import (
+    CommunicationNotFoundError,
+    DatabaseEmailTransport,
+    EmailTransport,
+    InvalidDraftStateError,
+)
 
-
-class CommunicationNotFoundError(ValueError):
-    pass
-
-
-class InvalidDraftStateError(ValueError):
-    pass
-
+__all__ = [
+    "CommunicationNotFoundError",
+    "InvalidDraftStateError",
+    "annotate_triage",
+    "approve_draft",
+    "default_transport",
+    "get_communication",
+    "get_thread",
+    "list_drafts",
+    "list_inbox",
+    "list_sent",
+    "reject_draft",
+    "save_draft",
+    "send_email",
+]
 
 default_transport: EmailTransport = DatabaseEmailTransport()
 
@@ -75,11 +85,13 @@ def get_thread(
     return transport.get_thread(session, thread_id)
 
 
-def get_communication(session: Session, comm_id: int) -> StoredEmail:
-    row = session.get(POCommunication, comm_id)
-    if row is None:
-        raise CommunicationNotFoundError(f"Communication {comm_id} not found")
-    return _to_stored_email(row)
+def get_communication(
+    session: Session,
+    comm_id: int,
+    *,
+    transport: EmailTransport = default_transport,
+) -> StoredEmail:
+    return transport.get_communication(session, comm_id)
 
 
 def approve_draft(
@@ -88,44 +100,23 @@ def approve_draft(
     *,
     edited_subject: str | None = None,
     edited_body: str | None = None,
+    transport: EmailTransport = default_transport,
 ) -> tuple[StoredEmail, ApprovalOutcome]:
-    row = session.get(POCommunication, comm_id)
-    if row is None:
-        raise CommunicationNotFoundError(f"Draft communication {comm_id} not found")
-    if row.status != CommStatus.DRAFT_PENDING_APPROVAL.value:
-        raise InvalidDraftStateError(
-            f"Communication {comm_id} is in status '{row.status}', not DRAFT_PENDING_APPROVAL"
-        )
-
-    was_edited = False
-    if edited_subject is not None and edited_subject.strip() != row.subject.strip():
-        row.subject = edited_subject.strip()
-        was_edited = True
-    if edited_body is not None and edited_body.strip() != row.body.strip():
-        row.body = edited_body.strip()
-        was_edited = True
-
-    outcome = ApprovalOutcome.APPROVED_EDITED if was_edited else ApprovalOutcome.APPROVED_AS_IS
-    row.status = CommStatus.SENT.value
-    row.approval_outcome = outcome.value
-    row.timestamp = clock.now(session)
-    session.flush()
-    return _to_stored_email(row), outcome
+    return transport.approve_draft(
+        session,
+        comm_id,
+        edited_subject=edited_subject,
+        edited_body=edited_body,
+    )
 
 
-def reject_draft(session: Session, comm_id: int) -> StoredEmail:
-    row = session.get(POCommunication, comm_id)
-    if row is None:
-        raise CommunicationNotFoundError(f"Draft communication {comm_id} not found")
-    if row.status != CommStatus.DRAFT_PENDING_APPROVAL.value:
-        raise InvalidDraftStateError(
-            f"Communication {comm_id} is in status '{row.status}', not DRAFT_PENDING_APPROVAL"
-        )
-
-    row.status = CommStatus.REJECTED.value
-    row.approval_outcome = ApprovalOutcome.REJECTED.value
-    session.flush()
-    return _to_stored_email(row)
+def reject_draft(
+    session: Session,
+    comm_id: int,
+    *,
+    transport: EmailTransport = default_transport,
+) -> StoredEmail:
+    return transport.reject_draft(session, comm_id)
 
 
 def annotate_triage(
@@ -136,14 +127,13 @@ def annotate_triage(
     extracted_json: dict[str, Any],
     confidence: float,
     po_id: int | None = None,
+    transport: EmailTransport = default_transport,
 ) -> StoredEmail:
-    row = session.get(POCommunication, comm_id)
-    if row is None:
-        raise CommunicationNotFoundError(f"Communication {comm_id} not found")
-    row.ai_classification = classification
-    row.ai_extracted_json = extracted_json
-    row.ai_confidence = confidence
-    if po_id is not None:
-        row.po_id = po_id
-    session.flush()
-    return _to_stored_email(row)
+    return transport.annotate_triage(
+        session,
+        comm_id,
+        classification=classification,
+        extracted_json=extracted_json,
+        confidence=confidence,
+        po_id=po_id,
+    )

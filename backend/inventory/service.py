@@ -42,6 +42,7 @@ def _get_part_or_raise(session: Session, part_id: int) -> Part:
 
 
 def get_on_order_stock(session: Session, part_id: int) -> int:
+    part = _get_part_or_raise(session, part_id)
     open_po_ids_stmt = select(PurchaseOrder.id).where(
         PurchaseOrder.part_id == part_id,
         PurchaseOrder.status.not_in(TERMINAL_PO_STATUSES),
@@ -58,12 +59,15 @@ def get_on_order_stock(session: Session, part_id: int) -> int:
             GoodsReceipt.status == GRNStatus.RELEASED.value,
         )
     )
-    return max(0, int(ordered_qty or 0) - int(released_qty or 0))
+    return max(
+        0,
+        int(ordered_qty or 0) - int(released_qty or 0) - int(part.quarantined_stock or 0),
+    )
 
 
 def get_inventory_position(session: Session, part_id: int) -> int:
     part = _get_part_or_raise(session, part_id)
-    return part.on_hand_stock + get_on_order_stock(session, part_id)
+    return part.on_hand_stock + get_on_order_stock(session, part_id) + part.quarantined_stock
 
 
 def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
@@ -77,7 +81,7 @@ def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
         on_hand_stock=part.on_hand_stock,
         quarantined_stock=part.quarantined_stock,
         on_order_stock=on_order,
-        inventory_position=part.on_hand_stock + on_order,
+        inventory_position=part.on_hand_stock + on_order + part.quarantined_stock,
         rop=part.rop,
         replenishment_point=part.replenishment_point,
         target_coverage_days=part.target_coverage_days,
@@ -132,7 +136,7 @@ def consume_stock(
     session.flush()
 
     on_order = get_on_order_stock(session, part.id)
-    inv_pos = part.on_hand_stock + on_order
+    inv_pos = part.on_hand_stock + on_order + part.quarantined_stock
 
     reorder_event: ReorderTriggered | None = None
     if inv_pos < part.rop:
@@ -269,5 +273,54 @@ def release_quarantined_stock(
         note=note,
     )
     session.add(tx)
+    session.flush()
+    return get_part_snapshot(session, part.id)
+
+
+def receive_stock_direct(
+    session: Session,
+    part_id: int,
+    qty: int,
+    *,
+    note: str = "",
+) -> PartSnapshot:
+    if qty <= 0:
+        raise ValueError("Receipt quantity must be positive")
+    part = _get_part_or_raise(session, part_id)
+    part.on_hand_stock += qty
+    tx = InventoryTransaction(
+        part_id=part.id,
+        type=InventoryTxType.RECEIPT_RELEASED.value,
+        qty_delta=qty,
+        timestamp=clock.now(session),
+        note=note,
+    )
+    session.add(tx)
+    session.flush()
+    return get_part_snapshot(session, part.id)
+
+
+def clear_quarantined_stock(
+    session: Session,
+    part_id: int,
+    qty: int,
+) -> PartSnapshot:
+    if qty <= 0:
+        raise ValueError("Clear quantity must be positive")
+    part = _get_part_or_raise(session, part_id)
+    part.quarantined_stock = max(0, part.quarantined_stock - qty)
+    session.flush()
+    return get_part_snapshot(session, part.id)
+
+
+def set_manual_demand_override(
+    session: Session,
+    part_id: int,
+    override: float | None,
+) -> PartSnapshot:
+    if override is not None and override < 0:
+        raise ValueError("manual_demand_override cannot be negative")
+    part = _get_part_or_raise(session, part_id)
+    part.manual_demand_override = round(float(override), 4) if override is not None else None
     session.flush()
     return get_part_snapshot(session, part.id)

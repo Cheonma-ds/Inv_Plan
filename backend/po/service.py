@@ -4,12 +4,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
-from backend.core.enums import GRNStatus, InventoryTxType, InvoiceMatchStatus, POStatus
+from backend.core.enums import GRNStatus, InvoiceMatchStatus, POStatus
 from backend.core.models import (
     GoodsReceipt,
-    InventoryTransaction,
     Invoice,
-    Part,
     PartSupplierTerm,
     PurchaseOrder,
 )
@@ -112,6 +110,8 @@ def update_po_terms(
     note: str | None = None,
 ) -> PurchaseOrder:
     po = _get_po_or_raise(session, po_id)
+    if po.status in (POStatus.CLOSED.value, POStatus.CANCELLED.value):
+        raise ValueError(f"Cannot update terms on {po.status} PO {po.po_number}")
     if qty is not None:
         if qty <= 0:
             raise ValueError("PO quantity must be positive")
@@ -128,6 +128,17 @@ def update_po_terms(
     return po
 
 
+def cancel_po(
+    session: Session,
+    po_id: int,
+    *,
+    note: str | None = None,
+) -> PurchaseOrder:
+    po = _get_po_or_raise(session, po_id)
+    cancel_note = note or f"PO {po.po_number} cancelled by Inventory Manager."
+    return transition_po(session, po, POStatus.CANCELLED, note=cancel_note)
+
+
 def _apply_match_outcome(
     session: Session,
     po: PurchaseOrder,
@@ -135,28 +146,19 @@ def _apply_match_outcome(
     invoice: Invoice,
     result: ThreeWayMatchResult,
 ) -> None:
-    part = session.get(Part, po.part_id)
-    if part is None:
-        raise ValueError(f"Part {po.part_id} missing for PO {po.po_number}")
-
     invoice.match_status = result.match_status.value
     invoice.discrepancy_summary = result.discrepancy_summary
-    sim_now = clock.now(session)
 
     if result.matched:
         was_quarantined = po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
-        if was_quarantined:
-            part.quarantined_stock = max(0, part.quarantined_stock - grn.received_qty)
         grn.status = GRNStatus.RELEASED.value
-        part.on_hand_stock += grn.received_qty
-        tx = InventoryTransaction(
-            part_id=part.id,
-            type=InventoryTxType.RECEIPT_RELEASED.value,
-            qty_delta=grn.received_qty,
-            timestamp=sim_now,
-            note=f"Released {po.po_number} via matched invoice {invoice.invoice_number}",
+        result.stock_action = (
+            "RELEASE_FROM_QUARANTINE" if was_quarantined else "RELEASE_DIRECT"
         )
-        session.add(tx)
+        result.stock_qty = grn.received_qty
+        result.stock_note = (
+            f"Released {po.po_number} via matched invoice {invoice.invoice_number}"
+        )
         transition_po(
             session,
             po,
@@ -166,8 +168,12 @@ def _apply_match_outcome(
     else:
         grn.status = GRNStatus.HELD_QUARANTINE.value
         if po.status == POStatus.RECEIVED_PENDING_INVOICE.value:
-            # Move into quarantined_stock once on the first mismatch; do not double-count.
-            part.quarantined_stock += grn.received_qty
+            # Emit HOLD_QUARANTINE once on the first mismatch; do not double-count.
+            result.stock_action = "HOLD_QUARANTINE"
+            result.stock_qty = grn.received_qty
+            result.stock_note = (
+                f"Quarantined {po.po_number} due to invoice {invoice.invoice_number} mismatch"
+            )
             transition_po(
                 session,
                 po,
@@ -178,6 +184,8 @@ def _apply_match_outcome(
                 ),
             )
         else:
+            result.stock_action = "NONE"
+            result.stock_qty = 0
             append_po_note(
                 session,
                 po,

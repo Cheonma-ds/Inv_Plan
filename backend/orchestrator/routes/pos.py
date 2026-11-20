@@ -7,12 +7,10 @@ from sqlalchemy.orm import Session
 
 from backend.core import clock
 from backend.core.db import get_session
-from backend.core.enums import AlertSeverity, EmailCategory
 from backend.core.models import (
     GoodsReceipt,
     Invoice,
     Part,
-    PartSupplierTerm,
     POCommunication,
     PurchaseOrder,
     Supplier,
@@ -22,8 +20,6 @@ from backend.orchestrator.workflows import WorkflowEngine
 from backend.po import (
     InvalidPOTransitionError,
     PONotFoundError,
-    create_action_item,
-    switch_po_to_backup_supplier,
     update_po_terms,
 )
 
@@ -237,58 +233,24 @@ def post_switch_supplier(
     engine: WorkflowEngine = Depends(get_workflow_engine),
 ) -> dict:
     try:
-        _orig, new_po = switch_po_to_backup_supplier(
-            session, po_id, backup_supplier_id=payload.backup_supplier_id
+        outcome = engine.switch_to_backup_supplier(
+            session,
+            po_id,
+            backup_supplier_id=payload.backup_supplier_id,
         )
     except PONotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (InvalidPOTransitionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    session.commit()
+    new_po = outcome["new_po"]
     part = session.get(Part, new_po.part_id)
     supplier = session.get(Supplier, new_po.supplier_id)
-    assert part is not None and supplier is not None
-    term = session.scalar(
-        select(PartSupplierTerm).where(
-            PartSupplierTerm.part_id == part.id,
-            PartSupplierTerm.supplier_id == supplier.id,
-        )
-    )
-    draft = engine._create_lex_draft(
-        session,
-        po=new_po,
-        part=part,
-        supplier=supplier,
-        category=EmailCategory.PO_DISPATCH,
-        context_facts={
-            "order_qty": new_po.qty,
-            "unit_price": new_po.unit_price,
-            "quoted_lead_time_days": term.quoted_lead_time_days if term else 14,
-            "backup_failover": True,
-        },
-    )
-    alert = create_action_item(
-        session,
-        type="PO_DISPATCH_APPROVAL",
-        severity=AlertSeverity.HIGH,
-        title=f"Approve backup PO dispatch: {new_po.po_number} ({supplier.name})",
-        summary=(
-            f"Created backup PO {new_po.po_number} to {supplier.name}. "
-            "Approve Lex's dispatch draft."
-        ),
-        po_id=new_po.id,
-        part_id=new_po.part_id,
-        draft_comm_id=draft.id,
-        suggested_actions=[
-            {"action": "approve_draft", "label": "Approve & Send Backup PO"},
-            {"action": "reject_draft", "label": "Reject Draft"},
-        ],
-        cta_payload={"draft_comm_id": draft.id, "po_id": new_po.id},
-    )
-    session.commit()
     return {
-        "cancelled_po_id": po_id,
+        "cancelled_po_id": outcome["cancelled_po_id"],
         "new_po": _serialize_po(new_po, part, supplier),
-        "draft_comm_id": draft.id,
-        "alert_id": alert.id,
+        "draft_comm_id": outcome["draft_comm_id"],
+        "alert_id": outcome["alert_id"],
+        "quarantined_cleared_qty": outcome["quarantined_cleared_qty"],
     }

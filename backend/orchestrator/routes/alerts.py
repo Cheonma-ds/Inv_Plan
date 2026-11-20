@@ -46,6 +46,7 @@ def get_alerts(
                 "id": item.id,
                 "type": item.type,
                 "severity": item.severity,
+                "urgency_score": item.urgency_score,
                 "title": item.title,
                 "summary": item.summary,
                 "po_id": item.po_id,

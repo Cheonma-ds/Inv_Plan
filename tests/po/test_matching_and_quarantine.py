@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
@@ -10,15 +9,15 @@ from backend.core.enums import (
     AlertSeverity,
     Criticality,
     GRNStatus,
-    InventoryTxType,
     InvoiceMatchStatus,
     PersonaKey,
     POStatus,
 )
-from backend.core.models import InventoryTransaction, Part, PartSupplierTerm, Supplier
-from backend.inventory import InsufficientStockError, consume_stock, get_on_order_stock
+from backend.core.models import Part, PartSupplierTerm, Supplier
 from backend.po import (
     ThreeWayMatchInput,
+    cancel_po,
+    compute_urgency_score,
     create_action_item,
     create_po,
     dismiss_action_item,
@@ -29,6 +28,7 @@ from backend.po import (
     submit_invoice_and_match,
     switch_po_to_backup_supplier,
     transition_po,
+    update_po_terms,
 )
 
 
@@ -177,6 +177,11 @@ def test_pure_three_way_match_rules_and_tolerance() -> None:
 
 
 def test_quarantine_lock_no_double_count_and_clean_release(db_session: Session) -> None:
+    """Pure po/ domain test: verifies PO/GRN/Invoice state & stock-movement directives.
+
+    Note: Per AGENTS.md §2 & P14, po/ does not directly mutate Part stock or
+    InventoryTransaction rows; it emits structured stock_action directives for orchestrator/.
+    """
     part, primary, _ = _setup_part_with_backup(db_session)
     po = create_po(db_session, part_id=part.id, supplier_id=primary.id, qty=100, unit_price=100.0)
     transition_po(db_session, po, POStatus.SENT_AWAITING_ACK)
@@ -191,10 +196,9 @@ def test_quarantine_lock_no_double_count_and_clean_release(db_session: Session) 
     assert initial_match is None
     assert po.status == POStatus.RECEIVED_PENDING_INVOICE.value
     assert grn.status == GRNStatus.HELD_QUARANTINE.value
-    assert part.on_hand_stock == 10  # Not usable yet!
-    assert get_on_order_stock(db_session, part.id) == 100
 
-    # Invoice v1 overbills at ₹150 -> quarantined!
+    # Invoice v1 overbills at ₹150 -> transitions PO to QUARANTINED_INVOICE_MISMATCH
+    # and emits HOLD_QUARANTINE directive for 100 units.
     inv1, res1 = submit_invoice_and_match(
         db_session,
         po_id=po.id,
@@ -206,14 +210,13 @@ def test_quarantine_lock_no_double_count_and_clean_release(db_session: Session) 
     assert res1 is not None and res1.matched is False
     assert inv1.version == 1
     assert po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
-    assert part.quarantined_stock == 100
+    assert res1.stock_action == "HOLD_QUARANTINE"
+    assert res1.stock_qty == 100
+    assert part.quarantined_stock == 0  # po/ never mutates Part table directly
     assert part.on_hand_stock == 10
 
-    # Quarantined units cannot be consumed!
-    with pytest.raises(InsufficientStockError):
-        consume_stock(db_session, part.id, 20)
-
-    # Invoice v2 STILL wrong (qty 90) -> must NOT double-count quarantined_stock!
+    # Invoice v2 STILL wrong (qty 90) -> must emit stock_action="NONE" so orchestrator
+    # never double-counts quarantined_stock!
     inv2, res2 = submit_invoice_and_match(
         db_session,
         po_id=po.id,
@@ -224,10 +227,11 @@ def test_quarantine_lock_no_double_count_and_clean_release(db_session: Session) 
     )
     assert res2 is not None and res2.matched is False
     assert inv2.version == 2
-    assert part.quarantined_stock == 100
+    assert res2.stock_action == "NONE"
+    assert res2.stock_qty == 0
     assert po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
 
-    # Invoice v3 corrected -> releases quarantine to on_hand_stock and closes PO!
+    # Invoice v3 corrected -> emits RELEASE_FROM_QUARANTINE for 100 units and closes PO!
     inv3, res3 = submit_invoice_and_match(
         db_session,
         po_id=po.id,
@@ -240,18 +244,8 @@ def test_quarantine_lock_no_double_count_and_clean_release(db_session: Session) 
     assert inv3.version == 3
     assert po.status == POStatus.CLOSED.value
     assert grn.status == GRNStatus.RELEASED.value
-    assert part.quarantined_stock == 0
-    assert part.on_hand_stock == 110
-    assert get_on_order_stock(db_session, part.id) == 0
-
-    txs = db_session.scalars(
-        select(InventoryTransaction).where(
-            InventoryTransaction.part_id == part.id,
-            InventoryTransaction.type == InventoryTxType.RECEIPT_RELEASED.value,
-        )
-    ).all()
-    assert len(txs) == 1
-    assert txs[0].qty_delta == 100
+    assert res3.stock_action == "RELEASE_FROM_QUARANTINE"
+    assert res3.stock_qty == 100
 
 
 def test_invoice_arriving_before_grn_reconciles_when_grn_logged(db_session: Session) -> None:
@@ -275,7 +269,8 @@ def test_invoice_arriving_before_grn_reconciles_when_grn_logged(db_session: Sess
     assert res_after is not None and res_after.matched is True
     assert grn.status == GRNStatus.RELEASED.value
     assert po.status == POStatus.CLOSED.value
-    assert part.on_hand_stock == 110
+    assert res_after.stock_action == "RELEASE_DIRECT"
+    assert res_after.stock_qty == 100
 
 
 def test_switch_po_to_backup_supplier(db_session: Session) -> None:
@@ -316,3 +311,97 @@ def test_action_items_lifecycle(db_session: Session) -> None:
     resolve_action_item(db_session, high.id)
     dismiss_action_item(db_session, low.id)
     assert list_action_items(db_session, status=ActionItemStatus.OPEN) == []
+
+
+def test_update_po_terms_rejects_terminal_closed_or_cancelled_pos(db_session: Session) -> None:
+    part, primary, _ = _setup_part_with_backup(db_session)
+    po_cancelled = create_po(
+        db_session, part_id=part.id, supplier_id=primary.id, qty=50, unit_price=100.0
+    )
+    cancel_po(db_session, po_cancelled.id)
+    assert po_cancelled.status == POStatus.CANCELLED.value
+
+    with pytest.raises(ValueError, match="Cannot update terms on CANCELLED PO"):
+        update_po_terms(db_session, po_cancelled.id, unit_price=120.0)
+
+    po_closed = create_po(
+        db_session,
+        part_id=part.id,
+        supplier_id=primary.id,
+        qty=50,
+        unit_price=100.0,
+        initial_status=POStatus.CLOSED,
+    )
+    with pytest.raises(ValueError, match="Cannot update terms on CLOSED PO"):
+        update_po_terms(db_session, po_closed.id, qty=60)
+
+
+def test_compute_urgency_score_strict_severity_hierarchy(db_session: Session) -> None:
+    info_alert = create_action_item(
+        db_session,
+        type="MINOR_DELAY_ACCEPTED",
+        severity=AlertSeverity.INFO,
+        part_criticality=Criticality.CRITICAL,
+        days_to_stockout=0.0,
+        title="Info alert",
+        summary="Minor note",
+    )
+    med_alert = create_action_item(
+        db_session,
+        type="PRE_ETA_CHECKIN_DRAFT",
+        severity=AlertSeverity.MEDIUM,
+        part_criticality=Criticality.LOW,
+        days_to_stockout=30.0,
+        title="Medium alert",
+        summary="Check-in draft",
+    )
+    high_alert = create_action_item(
+        db_session,
+        type="PO_EXCEPTION",
+        severity=AlertSeverity.HIGH,
+        part_criticality=Criticality.LOW,
+        days_to_stockout=30.0,
+        title="High alert",
+        summary="Price exception",
+    )
+    crit_low = create_action_item(
+        db_session,
+        type="OVERDUE_PO",
+        severity=AlertSeverity.CRITICAL,
+        part_criticality=Criticality.STANDARD,
+        days_to_stockout=15.0,
+        title="Critical standard alert",
+        summary="Overdue shipment",
+    )
+    crit_top = create_action_item(
+        db_session,
+        type="ACCELERATED_BURN",
+        severity=AlertSeverity.CRITICAL,
+        part_criticality=Criticality.CRITICAL,
+        days_to_stockout=0.0,
+        title="Critical immediate stockout",
+        summary="0 on-hand units",
+    )
+
+    assert (
+        crit_top.urgency_score
+        > crit_low.urgency_score
+        > high_alert.urgency_score
+        > med_alert.urgency_score
+        > info_alert.urgency_score
+    )
+    assert compute_urgency_score(AlertSeverity.CRITICAL, part_criticality=Criticality.LOW) > (
+        compute_urgency_score(
+            AlertSeverity.HIGH,
+            part_criticality=Criticality.CRITICAL,
+            days_to_stockout=0.0,
+        )
+    )
+    ordered = list_action_items(db_session, status=ActionItemStatus.OPEN)
+    assert [i.id for i in ordered] == [
+        crit_top.id,
+        crit_low.id,
+        high_alert.id,
+        med_alert.id,
+        info_alert.id,
+    ]

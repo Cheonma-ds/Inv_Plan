@@ -1,9 +1,8 @@
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.agents.lex import (
@@ -24,6 +23,7 @@ from backend.core.enums import (
     ApprovalOutcome,
     Criticality,
     EmailCategory,
+    GRNStatus,
     PersonaKey,
     POStatus,
     SupplierMemorySource,
@@ -38,7 +38,15 @@ from backend.core.models import (
     Supplier,
     SupplierMemoryNote,
 )
-from backend.inventory import ConsumeResult, consume_stock, update_rop_and_replenishment
+from backend.inventory import (
+    ConsumeResult,
+    clear_quarantined_stock,
+    consume_stock,
+    hold_in_quarantine,
+    receive_stock_direct,
+    release_quarantined_stock,
+    update_rop_and_replenishment,
+)
 from backend.mailroom import (
     OutboundMessage,
     StoredEmail,
@@ -52,12 +60,20 @@ from backend.mailroom import (
 from backend.mailroom.transport import SUPPLIER_PERSONAS
 from backend.observability import record_approval_outcome
 from backend.orchestrator.sla_watcher import SLAEvent, auto_resolve_po_alerts, run_sla_watcher
-from backend.planning import evaluate_part_recommendation, recalculate_all
+from backend.planning import (
+    compute_demand_forecast,
+    evaluate_part_recommendation,
+    recalculate_all,
+    refresh_supplier_metrics,
+)
 from backend.po import (
     ThreeWayMatchResult,
     append_po_note,
+    cancel_po,
+    compute_urgency_score,
     create_action_item,
     create_po,
+    get_po,
     record_goods_receipt,
     resolve_action_item,
     submit_invoice_and_match,
@@ -256,6 +272,7 @@ class WorkflowEngine:
                     if part.criticality == Criticality.CRITICAL.value
                     else AlertSeverity.MEDIUM
                 ),
+                part_criticality=part.criticality,
                 title=(
                     f"Approve PO dispatch: {created_po.po_number} "
                     f"({part.sku}, {created_po.qty} units)"
@@ -279,10 +296,13 @@ class WorkflowEngine:
         if consume_res.accelerated_burn is not None:
             burn = consume_res.accelerated_burn
             earliest_po_id = burn.open_po_ids[0] if burn.open_po_ids else None
+            part_obj = session.get(Part, burn.part_id)
             alert = create_action_item(
                 session,
                 type="ACCELERATED_BURN",
                 severity=AlertSeverity.CRITICAL,
+                part_criticality=part_obj.criticality if part_obj else None,
+                days_to_stockout=0.0,
                 title=f"Accelerated burn: {burn.sku} hit 0 on-hand units",
                 summary=(
                     f"{burn.sku} reached 0 on-hand units with {burn.days_until_eta:.1f} days "
@@ -508,6 +528,83 @@ class WorkflowEngine:
                         f"{triage_result.summary_for_manager}"
                     ),
                 )
+
+            # Deterministic price variance & stockout risk calculations (PRD.md §4 Module 2 Scen 2)
+            forecast = compute_demand_forecast(session, part, sim_now=sim_now)
+            avg_daily_demand = forecast.effective_daily_demand
+            projected_days_of_supply = (
+                round(part.on_hand_stock / avg_daily_demand, 2)
+                if avg_daily_demand > 0
+                else 999.0
+            )
+            projected_stockout_date = (
+                (sim_now + timedelta(days=projected_days_of_supply)).date().isoformat()
+                if avg_daily_demand > 0
+                else None
+            )
+
+            proposed_eta_dt = (
+                _parse_iso_date_utc(triage_result.proposed_eta_date)
+                or matched_po.revised_eta
+                or matched_po.promised_eta
+            )
+            if proposed_eta_dt is not None:
+                raw_days_to_eta = (
+                    clock.ensure_utc(proposed_eta_dt) - sim_now
+                ).total_seconds() / 86400.0
+                days_to_proposed_eta: float | None = max(0.0, round(raw_days_to_eta, 2))
+                days_short_of_eta = round(
+                    max(0.0, days_to_proposed_eta - projected_days_of_supply), 2
+                )
+            else:
+                days_to_proposed_eta = None
+                days_short_of_eta = 0.0
+
+            if triage_result.proposed_unit_price is not None:
+                price_variance_inr = round(
+                    triage_result.proposed_unit_price - matched_po.unit_price, 2
+                )
+                price_variance_pct = (
+                    round((price_variance_inr / matched_po.unit_price) * 100.0, 2)
+                    if matched_po.unit_price > 0
+                    else 0.0
+                )
+                effective_qty = (
+                    triage_result.proposed_qty
+                    if triage_result.proposed_qty is not None
+                    else matched_po.qty
+                )
+                total_cost_impact_inr = round(price_variance_inr * effective_qty, 2)
+            else:
+                price_variance_inr = 0.0
+                price_variance_pct = 0.0
+                total_cost_impact_inr = 0.0
+
+            impact_notes: list[str] = []
+            if triage_result.proposed_unit_price is not None:
+                sign = "+" if price_variance_inr >= 0 else ""
+                impact_notes.append(
+                    f"Price: ₹{matched_po.unit_price:,.2f} → "
+                    f"₹{triage_result.proposed_unit_price:,.2f} "
+                    f"({sign}₹{price_variance_inr:,.2f} / {sign}{price_variance_pct:.1f}%, "
+                    f"total impact {sign}₹{total_cost_impact_inr:,.2f})."
+                )
+            if projected_stockout_date is not None:
+                if days_short_of_eta > 0:
+                    impact_notes.append(
+                        f"Stockout projected {projected_stockout_date} "
+                        f"({projected_days_of_supply:.1f}d supply vs "
+                        f"{days_to_proposed_eta:.1f}d to ETA "
+                        f"— {days_short_of_eta:.1f}d short)."
+                    )
+                else:
+                    impact_notes.append(
+                        f"Projected stockout date: {projected_stockout_date} "
+                        f"({projected_days_of_supply:.1f}d of supply on hand)."
+                    )
+
+            full_summary = " ".join([triage_result.summary_for_manager, *impact_notes]).strip()
+
             backup = _backup_supplier_info(session, part.id, supplier.id)
             suggested = []
             if triage_result.intent != EmailIntent.OUT_OF_STOCK:
@@ -519,6 +616,7 @@ class WorkflowEngine:
                         "label": f"Switch to {backup['backup_supplier_name']}",
                     }
                 )
+            suggested.append({"action": "cancel_po", "label": "Cancel PO"})
             suggested.append({"action": "add_note", "label": "Add Note"})
 
             severity = (
@@ -526,6 +624,7 @@ class WorkflowEngine:
                 if (
                     part.criticality == Criticality.CRITICAL.value
                     or triage_result.intent == EmailIntent.OUT_OF_STOCK
+                    or days_short_of_eta > 0
                 )
                 else AlertSeverity.HIGH
             )
@@ -534,8 +633,10 @@ class WorkflowEngine:
                 session,
                 type="PO_EXCEPTION",
                 severity=severity,
+                part_criticality=part.criticality,
+                days_to_stockout=projected_days_of_supply,
                 title=f"{intent_label}: {matched_po.po_number} ({part.sku})",
-                summary=triage_result.summary_for_manager,
+                summary=full_summary,
                 po_id=matched_po.id,
                 part_id=part.id,
                 suggested_actions=suggested,
@@ -545,6 +646,14 @@ class WorkflowEngine:
                     "proposed_unit_price": triage_result.proposed_unit_price,
                     "proposed_qty": triage_result.proposed_qty,
                     "proposed_eta_date": triage_result.proposed_eta_date,
+                    "price_variance_inr": price_variance_inr,
+                    "price_variance_pct": price_variance_pct,
+                    "total_cost_impact_inr": total_cost_impact_inr,
+                    "avg_daily_demand": avg_daily_demand,
+                    "projected_days_of_supply": projected_days_of_supply,
+                    "projected_stockout_date": projected_stockout_date,
+                    "days_to_proposed_eta": days_to_proposed_eta,
+                    "days_short_of_eta": days_short_of_eta,
                     **backup,
                 },
             )
@@ -556,8 +665,34 @@ class WorkflowEngine:
             revised_eta = _parse_iso_date_utc(triage_result.proposed_eta_date) or (
                 base_eta + timedelta(days=7)
             )
+
+            # Deterministic Stockout Risk calculation (PRD.md §4 Module 2 Scen 1A)
+            forecast = compute_demand_forecast(session, part, sim_now=sim_now)
+            avg_daily_demand = forecast.effective_daily_demand
+            projected_days_of_supply = (
+                round(part.on_hand_stock / avg_daily_demand, 2)
+                if avg_daily_demand > 0
+                else 999.0
+            )
+            projected_stockout_date = (
+                (sim_now + timedelta(days=projected_days_of_supply)).date().isoformat()
+                if avg_daily_demand > 0
+                else None
+            )
+            days_to_new_eta = max(
+                0.0, round((revised_eta - sim_now).total_seconds() / 86400.0, 2)
+            )
+            buffer_days = 3.0
+            days_short_of_eta = round(
+                max(0.0, days_to_new_eta - projected_days_of_supply), 2
+            )
+            stockout_risk = (
+                days_to_new_eta >= (projected_days_of_supply - buffer_days)
+                if avg_daily_demand > 0
+                else (part.on_hand_stock <= part.rop)
+            )
             is_critical_impact = (
-                part.criticality == Criticality.CRITICAL.value or part.on_hand_stock <= part.rop
+                part.criticality == Criticality.CRITICAL.value or stockout_risk
             )
 
             if is_critical_impact:
@@ -598,6 +733,10 @@ class WorkflowEngine:
                         "part_criticality": part.criticality,
                         "on_hand_stock": part.on_hand_stock,
                         "rop": part.rop,
+                        "avg_daily_demand": avg_daily_demand,
+                        "projected_days_of_supply": projected_days_of_supply,
+                        "projected_stockout_date": projected_stockout_date,
+                        "days_to_new_eta": days_to_new_eta,
                     },
                 )
                 backup = _backup_supplier_info(session, part.id, supplier.id)
@@ -611,18 +750,26 @@ class WorkflowEngine:
                             "label": f"Switch to {backup['backup_supplier_name']}",
                         }
                     )
+                stockout_note = (
+                    f"projected stockout {projected_stockout_date} "
+                    f"({projected_days_of_supply:.1f}d supply vs "
+                    f"{days_to_new_eta:.1f}d to revised ETA)"
+                    if projected_stockout_date
+                    else f"on-hand: {part.on_hand_stock}, ROP: {part.rop}"
+                )
                 created_alert = create_action_item(
                     session,
                     type="CRITICAL_DELAY",
                     severity=AlertSeverity.CRITICAL,
+                    part_criticality=part.criticality,
+                    days_to_stockout=projected_days_of_supply,
                     title=(
                         f"CRITICAL delay on {matched_po.po_number} ({part.sku}) "
                         "— Escalate to Procurement"
                     ),
                     summary=(
                         f"{supplier.name} delayed {matched_po.po_number} to "
-                        f"{revised_eta.date().isoformat()} "
-                        f"(on-hand: {part.on_hand_stock}, ROP: {part.rop}). "
+                        f"{revised_eta.date().isoformat()} ({stockout_note}). "
                         "Lex drafted an expedite request for approval."
                     ),
                     po_id=matched_po.id,
@@ -634,6 +781,11 @@ class WorkflowEngine:
                         "draft_comm_id": created_draft.id,
                         "po_id": matched_po.id,
                         "revised_eta": revised_eta.date().isoformat(),
+                        "avg_daily_demand": avg_daily_demand,
+                        "projected_days_of_supply": projected_days_of_supply,
+                        "projected_stockout_date": projected_stockout_date,
+                        "days_to_new_eta": days_to_new_eta,
+                        "days_short_of_eta": days_short_of_eta,
                         **backup,
                     },
                 )
@@ -648,12 +800,14 @@ class WorkflowEngine:
                     session,
                     type="MINOR_DELAY_ACCEPTED",
                     severity=AlertSeverity.INFO,
+                    part_criticality=part.criticality,
+                    days_to_stockout=projected_days_of_supply,
                     title=f"Minor delay noted on {matched_po.po_number} ({part.sku})",
                     summary=(
                         f"{supplier.name} revised ETA for {matched_po.po_number} to "
                         f"{revised_eta.date().isoformat()}. Part is {part.criticality} with "
-                        f"sufficient stock ({part.on_hand_stock} on hand > ROP {part.rop}); "
-                        "no expedite required."
+                        f"sufficient stock ({projected_days_of_supply:.1f}d supply vs "
+                        f"{days_to_new_eta:.1f}d to ETA); no expedite required."
                     ),
                     po_id=matched_po.id,
                     part_id=part.id,
@@ -661,6 +815,10 @@ class WorkflowEngine:
                     cta_payload={
                         "po_id": matched_po.id,
                         "revised_eta": revised_eta.date().isoformat(),
+                        "avg_daily_demand": avg_daily_demand,
+                        "projected_days_of_supply": projected_days_of_supply,
+                        "projected_stockout_date": projected_stockout_date,
+                        "days_to_new_eta": days_to_new_eta,
                     },
                 )
 
@@ -850,13 +1008,15 @@ class WorkflowEngine:
         else:
             extracted_qty = sum(li.qty for li in extraction.line_items)
             unique_prices = {round(li.unit_price, 4) for li in extraction.line_items}
-            extracted_unit_price = (
-                extraction.line_items[0].unit_price
-                if len(unique_prices) == 1
-                else (
-                    round(extraction.subtotal / extracted_qty, 2) if extracted_qty > 0 else 0.0
+            if len(unique_prices) == 1:
+                extracted_unit_price = extraction.line_items[0].unit_price
+            elif extracted_qty > 0:
+                computed_lines_sum = sum(
+                    li.qty * li.unit_price for li in extraction.line_items
                 )
-            )
+                extracted_unit_price = round(computed_lines_sum / extracted_qty, 2)
+            else:
+                extracted_unit_price = 0.0
 
         invoice, match_result = submit_invoice_and_match(
             session,
@@ -902,12 +1062,13 @@ class WorkflowEngine:
         thread_id: str | None = None,
         thread_subject: str | None = None,
     ) -> dict[str, Any]:
-        """Create alerts and Lex discrepancy drafts based on deterministic 3-way match outcome."""
+        """Apply inventory stock movement directives, refresh supplier score, and create alerts."""
         if match_result is None:
             alert = create_action_item(
                 session,
                 type="INVOICE_PENDING_GRN",
                 severity=AlertSeverity.INFO,
+                part_criticality=part.criticality,
                 title=f"Invoice {invoice.invoice_number} held pending GRN ({po.po_number})",
                 summary=(
                     f"Extracted invoice {invoice.invoice_number} (v{invoice.version}: "
@@ -925,6 +1086,30 @@ class WorkflowEngine:
                 },
             )
             return {"alert_id": alert.id, "draft_comm_id": None}
+
+        # Coordinate PO -> Inventory stock mutation strictly in the orchestrator (AGENTS.md §2)
+        if match_result.stock_action == "RELEASE_FROM_QUARANTINE":
+            release_quarantined_stock(
+                session,
+                part.id,
+                match_result.stock_qty,
+                note=match_result.stock_note,
+            )
+        elif match_result.stock_action == "RELEASE_DIRECT":
+            receive_stock_direct(
+                session,
+                part.id,
+                match_result.stock_qty,
+                note=match_result.stock_note,
+            )
+        elif match_result.stock_action == "HOLD_QUARANTINE":
+            hold_in_quarantine(
+                session,
+                part.id,
+                match_result.stock_qty,
+            )
+
+        refresh_supplier_metrics(session, supplier.id, part_id=part.id)
 
         if match_result.matched:
             auto_resolve_po_alerts(
@@ -949,6 +1134,7 @@ class WorkflowEngine:
                 session,
                 type="INVOICE_MATCHED_CLOSED",
                 severity=AlertSeverity.INFO,
+                part_criticality=part.criticality,
                 title=f"3-way match passed & stock released: {po.po_number} ({part.sku})",
                 summary=(
                     f"Invoice {invoice.invoice_number} (v{invoice.version}) matched "
@@ -977,9 +1163,9 @@ class WorkflowEngine:
             .limit(1)
         )
         grn_qty = grn.received_qty if grn is not None else po.qty
-        price_diff = round(invoice.extracted_unit_price - po.unit_price, 2)
-        total_price_impact = round(price_diff * invoice.extracted_qty, 2)
-        qty_diff = invoice.extracted_qty - grn_qty
+        price_diff = match_result.price_diff_per_unit
+        total_price_impact = match_result.total_price_impact
+        qty_diff = match_result.qty_diff
 
         draft = self._create_lex_draft(
             session,
@@ -1019,6 +1205,7 @@ class WorkflowEngine:
             session,
             type="INVOICE_MISMATCH_QUARANTINE",
             severity=severity,
+            part_criticality=part.criticality,
             title=f"Stock Quarantined — Invoice Mismatch on {po.po_number} ({part.sku})",
             summary=(
                 f"Invoice {invoice.invoice_number} (v{invoice.version}) from {supplier.name} "
@@ -1040,7 +1227,9 @@ class WorkflowEngine:
                 "invoice_number": invoice.invoice_number,
                 "match_status": match_result.match_status.value,
                 "discrepancy_summary": match_result.discrepancy_summary,
+                "price_diff_per_unit": price_diff,
                 "total_price_impact": total_price_impact,
+                "qty_diff": qty_diff,
             },
         )
         return {"alert_id": alert.id, "draft_comm_id": draft.id}
@@ -1154,10 +1343,14 @@ class WorkflowEngine:
             if existing_alerts:
                 primary = existing_alerts[0]
                 primary.severity = severity.value
+                primary.urgency_score = compute_urgency_score(
+                    severity,
+                    part_criticality=rec.criticality,
+                )
                 primary.title = title
                 primary.summary = rec.reason
-                primary.suggested_actions_json = json.dumps(suggested)
-                primary.cta_payload_json = json.dumps(cta_payload)
+                primary.suggested_actions_json = suggested
+                primary.cta_payload_json = cta_payload
                 alerts_updated += 1
                 for dup in existing_alerts[1:]:
                     resolve_action_item(session, dup.id)
@@ -1167,6 +1360,7 @@ class WorkflowEngine:
                     session,
                     type="ROP_RECOMMENDATION",
                     severity=severity,
+                    part_criticality=rec.criticality,
                     title=title,
                     summary=rec.reason,
                     part_id=rec.part_id,
@@ -1317,6 +1511,150 @@ class WorkflowEngine:
             },
         }
 
+    def _clear_quarantined_stock_for_cancelled_po(
+        self,
+        session: Session,
+        po: PurchaseOrder,
+        *,
+        was_quarantined: bool,
+    ) -> int:
+        if not was_quarantined:
+            return 0
+        held_qty = int(
+            session.scalar(
+                select(func.coalesce(func.sum(GoodsReceipt.received_qty), 0)).where(
+                    GoodsReceipt.po_id == po.id,
+                    GoodsReceipt.status == GRNStatus.HELD_QUARANTINE.value,
+                )
+            )
+            or 0
+        )
+        if held_qty > 0:
+            clear_quarantined_stock(session, po.part_id, held_qty)
+            append_po_note(
+                session,
+                po,
+                f"Cleared {held_qty} quarantined units upon PO cancellation.",
+            )
+        return held_qty
+
+    def cancel_po_workflow(
+        self,
+        session: Session,
+        po_id: int,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Cancel an open PO, clear any quarantined stock held against it, and resolve PO alerts."""
+        po = get_po(session, po_id)
+        was_quarantined = po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
+        cancel_po(session, po_id, note=note)
+        cleared_qty = self._clear_quarantined_stock_for_cancelled_po(
+            session, po, was_quarantined=was_quarantined
+        )
+        resolved_alerts = auto_resolve_po_alerts(session, po.id)
+        session.flush()
+        return {
+            "po_id": po.id,
+            "po_number": po.po_number,
+            "po_status": po.status,
+            "quarantined_cleared_qty": cleared_qty,
+            "resolved_alerts": resolved_alerts,
+        }
+
+    def switch_to_backup_supplier(
+        self,
+        session: Session,
+        po_id: int,
+        *,
+        backup_supplier_id: int | None = None,
+        note: str = "",
+    ) -> dict[str, Any]:
+        """Cancel original PO (cleaning up quarantine & alerts) and create + draft backup PO."""
+        orig_before = get_po(session, po_id)
+        was_quarantined = orig_before.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
+
+        orig_po, new_po = switch_po_to_backup_supplier(
+            session,
+            po_id,
+            backup_supplier_id=backup_supplier_id,
+            note=note,
+        )
+        cleared_qty = self._clear_quarantined_stock_for_cancelled_po(
+            session, orig_po, was_quarantined=was_quarantined
+        )
+        auto_resolve_po_alerts(session, orig_po.id)
+
+        part = session.get(Part, new_po.part_id)
+        supplier = session.get(Supplier, new_po.supplier_id)
+        assert part is not None and supplier is not None
+        quoted_lt = _quoted_lead_time_days(session, part.id, supplier.id)
+        draft = self._create_lex_draft(
+            session,
+            po=new_po,
+            part=part,
+            supplier=supplier,
+            category=EmailCategory.PO_DISPATCH,
+            context_facts={
+                "order_qty": new_po.qty,
+                "unit_price": new_po.unit_price,
+                "quoted_lead_time_days": quoted_lt,
+                "backup_failover": True,
+            },
+        )
+        alert = create_action_item(
+            session,
+            type="PO_DISPATCH_APPROVAL",
+            severity=AlertSeverity.HIGH,
+            part_criticality=part.criticality,
+            title=f"Approve backup PO dispatch: {new_po.po_number} ({supplier.name})",
+            summary=(
+                f"Switched order to backup supplier {supplier.name} under {new_po.po_number} "
+                f"({new_po.qty} units @ ₹{new_po.unit_price:,.2f}). Approve dispatch email."
+            ),
+            po_id=new_po.id,
+            part_id=new_po.part_id,
+            draft_comm_id=draft.id,
+            suggested_actions=[
+                {"action": "approve_draft", "label": "Approve & Send Backup PO"},
+                {"action": "reject_draft", "label": "Reject Draft"},
+            ],
+            cta_payload={"draft_comm_id": draft.id, "po_id": new_po.id},
+        )
+        session.flush()
+        return {
+            "cancelled_po_id": orig_po.id,
+            "cancelled_po": orig_po,
+            "new_po": new_po,
+            "new_po_id": new_po.id,
+            "new_po_number": new_po.po_number,
+            "draft_comm_id": draft.id,
+            "alert_id": alert.id,
+            "quarantined_cleared_qty": cleared_qty,
+        }
+
+    def set_clock_and_watch(
+        self,
+        session: Session,
+        target: datetime,
+        *,
+        allow_reset: bool = False,
+    ) -> dict[str, Any]:
+        target_utc = clock.ensure_utc(target)
+        current = clock.now(session)
+        if target_utc < current and not allow_reset:
+            raise ValueError(
+                "Cannot move simulated clock backwards unless allow_reset=True"
+            )
+        new_now = clock.set_time(session, target_utc)
+        sla_events: list[SLAEvent] = (
+            run_sla_watcher(session, self.lex) if target_utc >= current else []
+        )
+        return {
+            "sim_now": new_now,
+            "sla_events": sla_events,
+        }
+
     def advance_clock_and_watch(
         self,
         session: Session,
@@ -1367,6 +1705,7 @@ class WorkflowEngine:
         item = session.get(ActionItem, action_item_id)
         if item is None:
             raise ValueError(f"ActionItem {action_item_id} not found")
+        cta = item.cta_payload_json or {}
 
         if action == "approve_draft":
             draft_id = int(params.get("draft_comm_id") or item.draft_comm_id or 0)
@@ -1386,15 +1725,31 @@ class WorkflowEngine:
             return self.reject_lex_draft(session, draft_id)
 
         if action == "update_po":
-            po_id = int(params.get("po_id") or item.po_id or 0)
+            po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
             if not po_id:
                 raise ValueError("No po_id linked to this alert")
-            revised_eta = _parse_iso_date_utc(params.get("revised_eta"))
+            qty_val = (
+                params.get("qty")
+                if params.get("qty") is not None
+                else cta.get("proposed_qty")
+            )
+            price_val = (
+                params.get("unit_price")
+                if params.get("unit_price") is not None
+                else cta.get("proposed_unit_price")
+            )
+            eta_raw = (
+                params.get("revised_eta")
+                or params.get("proposed_eta_date")
+                or cta.get("proposed_eta_date")
+                or cta.get("revised_eta")
+            )
+            revised_eta = _parse_iso_date_utc(eta_raw)
             po = update_po_terms(
                 session,
                 po_id,
-                qty=params.get("qty"),
-                unit_price=params.get("unit_price"),
+                qty=int(qty_val) if qty_val is not None else None,
+                unit_price=float(price_val) if price_val is not None else None,
                 revised_eta=revised_eta,
                 note=params.get("note"),
             )
@@ -1430,6 +1785,7 @@ class WorkflowEngine:
                     session,
                     type="PO_DISPATCH_APPROVAL",
                     severity=AlertSeverity.MEDIUM,
+                    part_criticality=part.criticality,
                     title=f"Approve revised PO dispatch: {po.po_number}",
                     summary=(
                         f"Revised {po.po_number} ({po.qty} units @ ₹{po.unit_price:,.2f}). "
@@ -1452,64 +1808,41 @@ class WorkflowEngine:
             }
 
         if action == "switch_backup_supplier":
-            po_id = int(params.get("po_id") or item.po_id or 0)
+            po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
             backup_supplier_id = (
-                params.get("backup_supplier_id")
-                or (item.cta_payload_json or {}).get("backup_supplier_id")
+                params.get("backup_supplier_id") or cta.get("backup_supplier_id")
             )
             if not po_id:
                 raise ValueError("po_id is required")
-            _orig, new_po = switch_po_to_backup_supplier(
+            outcome = self.switch_to_backup_supplier(
                 session,
                 po_id,
                 backup_supplier_id=int(backup_supplier_id) if backup_supplier_id else None,
-            )
-            part = session.get(Part, new_po.part_id)
-            supplier = session.get(Supplier, new_po.supplier_id)
-            assert part is not None and supplier is not None
-            quoted_lt = _quoted_lead_time_days(session, part.id, supplier.id)
-            draft = self._create_lex_draft(
-                session,
-                po=new_po,
-                part=part,
-                supplier=supplier,
-                category=EmailCategory.PO_DISPATCH,
-                context_facts={
-                    "order_qty": new_po.qty,
-                    "unit_price": new_po.unit_price,
-                    "quoted_lead_time_days": quoted_lt,
-                    "backup_failover": True,
-                },
-            )
-            create_action_item(
-                session,
-                type="PO_DISPATCH_APPROVAL",
-                severity=AlertSeverity.HIGH,
-                title=f"Approve backup PO dispatch: {new_po.po_number} ({supplier.name})",
-                summary=(
-                    f"Switched order to backup supplier {supplier.name} under {new_po.po_number} "
-                    f"({new_po.qty} units @ ₹{new_po.unit_price:,.2f}). Approve dispatch email."
-                ),
-                po_id=new_po.id,
-                part_id=new_po.part_id,
-                draft_comm_id=draft.id,
-                suggested_actions=[
-                    {"action": "approve_draft", "label": "Approve & Send Backup PO"},
-                    {"action": "reject_draft", "label": "Reject Draft"},
-                ],
-                cta_payload={"draft_comm_id": draft.id, "po_id": new_po.id},
+                note=str(params.get("note") or ""),
             )
             resolve_action_item(session, item.id)
             return {
-                "cancelled_po_id": po_id,
-                "new_po_id": new_po.id,
-                "new_po_number": new_po.po_number,
-                "draft_comm_id": draft.id,
+                "cancelled_po_id": outcome["cancelled_po_id"],
+                "new_po_id": outcome["new_po_id"],
+                "new_po_number": outcome["new_po_number"],
+                "draft_comm_id": outcome["draft_comm_id"],
+                "alert_id": outcome["alert_id"],
+                "quarantined_cleared_qty": outcome["quarantined_cleared_qty"],
             }
 
+        if action == "cancel_po":
+            po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
+            if not po_id:
+                raise ValueError("po_id is required")
+            outcome = self.cancel_po_workflow(
+                session,
+                po_id,
+                note=params.get("note"),
+            )
+            resolve_action_item(session, item.id)
+            return outcome
+
         if action == "approve_rop":
-            raw_cta = item.cta_payload_json
-            cta = json.loads(raw_cta) if isinstance(raw_cta, str) and raw_cta else (raw_cta or {})
             part_id = int(params.get("part_id") or cta.get("part_id") or item.part_id or 0)
             rop_val = params.get("rop", cta.get("rop"))
             s_val = params.get("replenishment_point", cta.get("replenishment_point"))

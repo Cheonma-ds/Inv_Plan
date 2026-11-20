@@ -1,6 +1,6 @@
 # STATUS.md — Live Session Baton
 
-**Current Stage:** Slice 3 Complete → Ready for **Slice 4**  
+**Current Stage:** Slices 1–3 + Pre-Slice 4 Audit Hardening (`P1`–`P18`) Complete → Ready for **Slice 4**  
 **Last Updated:** 2026-11-20
 
 ## Completed
@@ -16,7 +16,7 @@
   - `backend/observability/`: `tracer.py`, `autonomy.py`.
   - `backend/agents/`: `base.py`, `llm_client.py`, `lex/` (`schemas.py`, `prompts.py`, `agent.py`).
   - `backend/orchestrator/`: `sla_watcher.py`, `workflows.py`, `deps.py`, `routes/` (`clock`, `parts`, `pos`, `alerts`, `mailroom`, `suppliers`, `observability`, `admin`), wired in `backend/main.py`.
-- **Slice 3 — PDF Invoice Pipeline + Planning Intelligence Engine:**
+- **Slice 3 (`013bf32`) — PDF Invoice Pipeline + Planning Intelligence Engine:**
   - `backend/agents/lex/prompts.py` & `agent.py`: Added `INVOICE_EXTRACTION_SYSTEM_PROMPT` and `LexAgent.extract_invoice(session, pdf_bytes, ...)` (temp `0.0`, multimodal PDF via `GeminiLLMClient`, extracts numbers verbatim with zero match math, logs `AgentTrace` with `task_type="invoice_extraction"`, enforces empty-lines / missing-invoice-number confidence cap).
   - `backend/orchestrator/workflows.py`, `routes/mailroom.py`, `routes/pos.py`:
     - Wired `_process_pdf_invoice_email()` for inbound supplier emails with `.pdf` attachments or `INVOICE_SUBMISSION` intent (even if email body omits PO#, PDF `po_number` resolves open POs safely).
@@ -31,10 +31,27 @@
     - `rop.py`: Criticality Z-factors (`CRITICAL=2.05`, `STANDARD=1.65`, `LOW=1.28`), `SS = Z * sqrt(L_eff * sigma_D^2 + D_bar^2 * sigma_L^2)`, `ROP_rec = ceil(D_bar * L_eff + SS)`, `S_rec = ROP_rec + ceil(D_bar * target_coverage_days)`.
     - `service.py` & `__init__.py`: `evaluate_part_recommendation`, `get_planning_overview`, `recalculate_all`.
   - `backend/orchestrator/routes/planning.py` (registered in `routes/__init__.py`): `GET /api/planning/overview`, `POST /api/planning/recalculate`, `POST /api/planning/parts/{part_id}/apply-recommendation`.
+- **Pre-Slice 4 Audit Hardening Pass (`P1`–`P18` in `problems_to_resolve.md`):**
+  - **Runtime & Data Integrity (`P1`–`P4`):**
+    - `backend/seed/data.py`: `seed_database(session, *, reset: bool = False)` now supports in-session `reset=True` (deleting rows in reverse topological order and clearing session identity map) for `POST /api/admin/reset-seed` and `reset=False` for FastAPI lifespan auto-seeding (`P1`).
+    - `backend/orchestrator/routes/parts.py`: Fixed `PATCH /api/parts/{part_id}/rop` to access `PartSnapshot.part_id` (`P2`).
+    - `backend/po/state_machine.py` & `DESIGN.md §4.2`: Added `POStatus.DELAYED_CRITICAL -> POStatus.OVERDUE` transition so `run_sla_watcher()` transitions delayed critical POs that miss their `revised_eta + 1d` (`P3`).
+    - `backend/orchestrator/workflows.py`: Fixed `recalculate_planning()` to assign native Python `list`/`dict` objects to `suggested_actions_json` and `cta_payload_json` without `json.dumps()` double-encoding (`P4`).
+  - **Domain Math & PRD Alignment (`P5`–`P13`):**
+    - `backend/planning/scoring.py` & `service.py`: Included `OVERDUE` POs without GRN in OTD evaluation (`P5`), computed supplier-level lead-time consistency from `actual_lt - quoted_lt` deviations so heterogeneous SKU lead times do not penalize on-time suppliers (`P6`), updated `evaluate_part_recommendation()` to compute live effective lead times matching `get_planning_overview()` (`P7`), and added `refresh_supplier_metrics()` triggered on PO overdue/close/mismatch/reminder events (`P5`).
+    - `backend/inventory/service.py` & `backend/orchestrator/workflows.py`: Added `receive_stock_direct()`, `clear_quarantined_stock()`, and `set_manual_demand_override()`. Deducted `part.quarantined_stock` from `get_on_order_stock()` while keeping `inventory_position = on_hand_stock + on_order_stock + quarantined_stock` (eliminating double-counting while preventing duplicate POs during quarantine disputes, `P10`), and wired quarantine stock cleanup on PO cancellation / backup switch (`P8`).
+    - `backend/orchestrator/sla_watcher.py`: Anchored Quarantine 48h/96h SLA timer at `max(latest_inv.received_at, latest_grn.received_at)` so pre-GRN invoices only start the quarantine clock once physical goods arrive (`P9`).
+    - `backend/orchestrator/workflows.py`: Computed multi-line invoice weighted average unit price from `sum(li.qty * li.unit_price) / extracted_qty` so subtotal arithmetic errors are never masked, and consumed `match_result.price_diff_per_unit`, `total_price_impact`, and `qty_diff` directly (`P11`).
+    - `backend/po/actions.py` & `backend/orchestrator/routes/alerts.py`: Implemented deterministic `compute_urgency_score()` with strict non-overlapping severity bands (`CRITICAL`: 80–100, `HIGH`: 60–79, `MEDIUM`: 35–54, `INFO`: 10–29) and exposed `"urgency_score"` in `GET /api/alerts` (`P12`).
+    - `backend/orchestrator/workflows.py`: Added deterministic stockout projection (`avg_daily_demand`, `projected_days_of_supply`, `projected_stockout_date`, `days_to_new_eta` with 3-day safety buffer branching) for Scenario 1A (`POST_ACK_DELAY`) and deterministic price variance (`price_variance_inr`, `price_variance_pct`, `total_cost_impact_inr`) + stockout projection for Scenario 2 (`PO_EXCEPTION`) (`P13`).
+  - **Module Independence & API Completeness (`P14`–`P18`):**
+    - `backend/po/service.py` & `matching.py`: Decoupled `po/` from `Part` and `InventoryTransaction` mutations; `_apply_match_outcome()` emits `stock_action` directives on `ThreeWayMatchResult` that `WorkflowEngine._handle_invoice_match_outcome()` executes via `backend/inventory/service.py` (`P14`).
+    - `backend/mailroom/transport.py` & `service.py`: Extended `EmailTransport` & `DatabaseEmailTransport` with `get_communication`, `approve_draft`, `reject_draft`, and `annotate_triage` so `mailroom/service.py` delegates 100% through `EmailTransport` (`P15`).
+    - `backend/orchestrator/workflows.py` & `routes/pos.py`: Unified backup supplier switching into `WorkflowEngine.switch_to_backup_supplier()` (`P16`).
+    - `backend/orchestrator/routes/parts.py`, `routes/clock.py`, `workflows.py`: Added `PATCH /api/parts/{part_id}/demand-override`, `POST /api/clock`, `cancel_po` CTA (`WorkflowEngine.cancel_po_workflow`), and `cta_payload_json` fallback defaults on `update_po` CTA (`P17`).
+    - `backend/agents/lex/schemas.py`, `DESIGN.md §6.2`, `backend/po/service.py`: Added `po_reference`, `grand_total`, `part_code` aliases/properties on `InvoiceExtractionResult` / `InvoiceLineItem` without introducing `anyOf` into `model_json_schema()`, and guarded `update_po_terms()` against mutating `CLOSED` or `CANCELLED` POs (`P18`).
   - **Tests & Verification:**
-    - Added `tests/helpers/invoice_pdf.py` (`fpdf2` commercial invoice PDF generator), `tests/planning/test_planning_engine.py`, `tests/orchestrator/test_invoice_pipeline.py`, and `tests/agents/test_live_gemini_pdf.py`.
-    - Offline suite: `uv run pytest` → **`41 passed, 1 skipped`** (including `tests/test_architecture.py` AST boundary & clock checks).
-    - Live multimodal smoke test: `RUN_LIVE_GEMINI=1 uv run pytest tests/agents/test_live_gemini_pdf.py -v` → **`1 passed`** (`gemini-3.5-flash-lite` extracted `INV-LIVE-2026-088`, `PO-1042`, qty `6`, unit price `₹5,250.00`, subtotal `₹31,500.00`, `confidence >= 0.85`, logged trace tokens, and triggered deterministic `MISMATCH_PRICE` against PO `₹4,800.00`).
+    - Offline suite: `uv run pytest -v` → **`58 passed, 1 skipped`** (including 17 new unit, integration, and AST architecture boundary tests across `tests/test_architecture.py`, `tests/seed/`, `tests/po/`, `tests/inventory/`, `tests/mailroom/`, `tests/planning/`, `tests/agents/`, and `tests/orchestrator/`).
     - Lint: `uv run ruff check backend tests` → **`All checks passed!`**.
 
 ## Next Active Slice: **Slice 4 — React Operations Dashboard & 5-Persona Mailroom UI**

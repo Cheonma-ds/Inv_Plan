@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.core.enums import EmailCategory
 
@@ -70,6 +70,19 @@ class InvoiceLineItem(BaseModel):
     unit_price: float
     line_total: float
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_part_code_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "part_code" in data and "part_sku" not in data:
+            copied = dict(data)
+            copied["part_sku"] = copied.pop("part_code")
+            return copied
+        return data
+
+    @property
+    def part_code(self) -> str | None:
+        return self.part_sku
+
 
 class InvoiceExtractionResult(BaseModel):
     invoice_number: str
@@ -83,6 +96,26 @@ class InvoiceExtractionResult(BaseModel):
     total_amount: float
     confidence: float = Field(ge=0.0, le=1.0)
     notes: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_design_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            copied = dict(data)
+            if "po_reference" in copied and "po_number" not in copied:
+                copied["po_number"] = copied.pop("po_reference")
+            if "grand_total" in copied and "total_amount" not in copied:
+                copied["total_amount"] = copied.pop("grand_total")
+            return copied
+        return data
+
+    @property
+    def po_reference(self) -> str | None:
+        return self.po_number
+
+    @property
+    def grand_total(self) -> float:
+        return self.total_amount
 
 
 class EmailDraftInput(BaseModel):

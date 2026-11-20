@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from backend.core import clock
+from backend.core.db import Base
 from backend.core.enums import (
     AutonomyMode,
     Criticality,
@@ -395,8 +396,14 @@ PART_SPECS: tuple[PartSpec, ...] = (
 )
 
 
-def seed_database(session: Session) -> dict[str, int]:
+def seed_database(session: Session, *, reset: bool = False) -> dict[str, int]:
     """Populate a fresh database with deterministic 12-month realistic baseline data."""
+    if reset:
+        for table in reversed(Base.metadata.sorted_tables):
+            session.execute(table.delete())
+        session.flush()
+        session.expunge_all()
+
     rng = random.Random(42)
     sim_now = clock.set_time(session, SEED_START_TIME)
 

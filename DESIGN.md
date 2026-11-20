@@ -123,7 +123,7 @@ Valid states & transitions are enforced via an explicit allow-list dictionary (i
 - `EXCEPTION_REVIEW` → `PENDING_DISPATCH_APPROVAL` (manager revises PO → Lex drafts revised PO) | `CANCELLED` (cancel or switch to backup supplier, which creates a new PO for backup)
 - `UNRESPONSIVE_ESCALATED` → `ACKNOWLEDGED` (late reply) | `EXCEPTION_REVIEW` | `CANCELLED` (switch supplier)
 - `ACKNOWLEDGED` → `DELAYED_CRITICAL` (Scen 1A critical/high risk) | `ACKNOWLEDGED` (Scen 1A non-critical safe delay updates `revised_eta`) | `OVERDUE` (Scen 1B) | `RECEIVED_PENDING_INVOICE` (GRN logged)
-- `DELAYED_CRITICAL` → `RECEIVED_PENDING_INVOICE` | `CANCELLED`
+- `DELAYED_CRITICAL` → `OVERDUE` (Scen 1B if revised ETA missed) | `RECEIVED_PENDING_INVOICE` | `CANCELLED`
 - `OVERDUE` → `RECEIVED_PENDING_INVOICE` | `CANCELLED`
 - `RECEIVED_PENDING_INVOICE` → `QUARANTINED_INVOICE_MISMATCH` (Scen 1C mismatch) | `CLOSED` (3-way match passed → stock released)
 - `QUARANTINED_INVOICE_MISMATCH` → `CLOSED` (corrected PDF invoice passes 3-way match → quarantined stock released) | `CANCELLED`
@@ -182,7 +182,7 @@ class EmailTransport(Protocol):
    - Output fields: `matched_po_number`, `intent` (`ACKNOWLEDGED` | `PRICE_CHANGE` | `LEAD_TIME_CHANGE` | `PARTIAL_AVAILABILITY` | `OUT_OF_STOCK` | `POST_ACK_DELAY` | `INVOICE_SUBMISSION` | `GENERAL_REPLY` | `AMBIGUOUS`), `confidence` (`0.0–1.0`), `proposed_unit_price`, `proposed_qty`, `proposed_eta_date`, `delay_reason`, `summary_for_manager`, `suggested_action`, `new_memory_note` (optional, only if genuinely noteworthy pattern), `reasoning`.
    - **Safety Guardrail:** If `confidence < 0.85` OR `matched_po_number` cannot be uniquely resolved → force `AMBIGUOUS`, do not mutate PO state, route straight to `InventoryManager` Alert.
 2. **`InvoiceExtractionResult`** *(temperature `0.0`, multimodal PDF input)*:
-   - Output fields: `invoice_number`, `po_reference`, `supplier_name`, `invoice_date`, `line_items` (`part_code`, `description`, `qty`, `unit_price`, `line_total`), `subtotal`, `tax_amount`, `grand_total`, `confidence`.
+   - Output fields: `invoice_number`, `po_number` (alias `po_reference`), `supplier_name`, `invoice_date`, `currency`, `line_items` (`part_sku` / alias `part_code`, `description`, `qty`, `unit_price`, `line_total`), `subtotal`, `tax_amount`, `total_amount` (alias `grand_total`), `confidence`, `notes`.
    - **Safety Guardrail:** Lex *only* extracts numbers; `po/matching.py` performs all arithmetic and match decisions.
 3. **`EmailDraftResult`** *(temperature `0.2`)*:
    - Inputs: drafting intent/category, PO details, discrepancy or delay facts, recipient persona, `SupplierMemoryNote` list, persona directory (so Lex knows who to `CC`—e.g., always CC `inventory_manager` on supplier escalations/discrepancies).

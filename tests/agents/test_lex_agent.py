@@ -8,6 +8,8 @@ from backend.agents.lex import (
     EmailIntent,
     EmailTriageInput,
     EmailTriageResult,
+    InvoiceExtractionResult,
+    InvoiceLineItem,
     LexAgent,
     OpenPOContext,
 )
@@ -152,3 +154,34 @@ def test_draft_email_enforces_manager_cc_and_po_subject(seeded_session):
     traces = list_traces(seeded_session, agent_name="lex", task_type="email_draft")
     assert len(traces) == 1
     assert traces[0].linked_entity_id == 38
+
+
+def test_invoice_extraction_result_supports_design_aliases_cleanly() -> None:
+    """Verify P18: InvoiceExtractionResult and InvoiceLineItem support both canonical fields
+    (po_number, total_amount, part_sku) and DESIGN.md §6.2 aliases (po_reference, grand_total,
+    part_code) without polluting model_json_schema() with anyOf constructs.
+    """
+    item = InvoiceLineItem(
+        description="Hex Bolt",
+        part_code="SKU-004",
+        qty=10,
+        unit_price=100.0,
+        line_total=1000.0,
+    )
+    assert item.part_sku == "SKU-004"
+    assert item.part_code == "SKU-004"
+
+    inv = InvoiceExtractionResult(
+        invoice_number="INV-100",
+        po_reference="PO-1040",
+        supplier_name="Bharat Fasteners",
+        line_items=[item],
+        subtotal=1000.0,
+        tax_amount=180.0,
+        grand_total=1180.0,
+        confidence=0.95,
+    )
+    assert inv.po_number == "PO-1040"
+    assert inv.po_reference == "PO-1040"
+    assert inv.total_amount == 1180.0
+    assert inv.grand_total == 1180.0

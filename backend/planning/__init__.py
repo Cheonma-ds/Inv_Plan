@@ -16,6 +16,7 @@ from backend.planning.service import (
     evaluate_part_recommendation,
     get_planning_overview,
     recalculate_all,
+    refresh_supplier_metrics,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "evaluate_part_recommendation",
     "get_planning_overview",
     "recalculate_all",
+    "refresh_supplier_metrics",
 ]

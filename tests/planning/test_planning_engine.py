@@ -1,11 +1,28 @@
 import math
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from backend.core import clock
 from backend.core.db import get_session
-from backend.core.enums import ActionItemStatus, Criticality, PersonaKey
-from backend.core.models import ActionItem, Part, PartSupplierTerm, Supplier
+from backend.core.enums import (
+    ActionItemStatus,
+    Criticality,
+    GRNStatus,
+    InvoiceMatchStatus,
+    PersonaKey,
+    POStatus,
+)
+from backend.core.models import (
+    ActionItem,
+    GoodsReceipt,
+    Invoice,
+    Part,
+    PartSupplierTerm,
+    PurchaseOrder,
+    Supplier,
+)
 from backend.main import create_app
 from backend.planning import (
     Z_FACTORS,
@@ -13,6 +30,8 @@ from backend.planning import (
     compute_effective_lead_time,
     compute_rop_recommendation,
     compute_supplier_score,
+    evaluate_part_recommendation,
+    get_planning_overview,
     recalculate_all,
 )
 
@@ -196,9 +215,21 @@ def test_planning_api_recalculate_alerts_and_apply_recommendation(seeded_session
     assert recalc_data["alerts_created"] == recalc_data["recommendations_needing_update"]
 
     # Re-running recalculate must NOT duplicate open ROP_RECOMMENDATION alerts
+    # and must keep suggested_actions (list) and cta_payload (dict) as native JSON types (P4)
     recalc2 = client.post("/api/planning/recalculate")
     assert recalc2.status_code == 200
     assert recalc2.json()["alerts_created"] == 0
+    assert recalc2.json()["alerts_updated"] == recalc_data["recommendations_needing_update"]
+
+    alerts_resp = client.get("/api/alerts")
+    assert alerts_resp.status_code == 200
+    rop_alerts = [a for a in alerts_resp.json() if a["type"] == "ROP_RECOMMENDATION"]
+    assert len(rop_alerts) > 0
+    for rop_alert in rop_alerts:
+        assert isinstance(rop_alert["suggested_actions"], list)
+        assert isinstance(rop_alert["cta_payload"], dict)
+        assert isinstance(rop_alert["urgency_score"], int)
+        assert rop_alert["urgency_score"] >= 35
 
     sku2_rec = next(r for r in recalc_data["recommendations"] if r["sku"] == "SKU-002")
     part_id = sku2_rec["part_id"]
@@ -243,3 +274,175 @@ def test_planning_api_recalculate_alerts_and_apply_recommendation(seeded_session
         assert cta_resp.status_code == 200
         seeded_session.refresh(another_alert)
         assert another_alert.status == ActionItemStatus.RESOLVED.value
+
+
+def test_overdue_po_without_grn_penalizes_supplier_otd_and_reliability_score(seeded_session):
+    """Verify P5: An OVERDUE PO with no physical GRN immediately lowers otd_rate,
+    increases avg_days_late, and reduces reliability_score.
+    """
+    sup1 = seeded_session.scalar(
+        select(Supplier).where(Supplier.persona_key == PersonaKey.SUP1.value)
+    )
+    sku1 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    assert sup1 is not None and sku1 is not None
+
+    baseline_score = compute_supplier_score(seeded_session, sup1)
+
+    sim_now = clock.now(seeded_session)
+    overdue_po = PurchaseOrder(
+        po_number="PO-OVERDUE-TEST",
+        part_id=sku1.id,
+        supplier_id=sup1.id,
+        qty=10,
+        unit_price=1200.0,
+        status=POStatus.OVERDUE.value,
+        notes="Overdue with no GRN",
+        created_at=sim_now - timedelta(days=15),
+        sent_at=sim_now - timedelta(days=15),
+        promised_eta=sim_now - timedelta(days=5),
+        follow_up_count=0,
+    )
+    seeded_session.add(overdue_po)
+    seeded_session.flush()
+
+    after_score = compute_supplier_score(seeded_session, sup1)
+    assert after_score.otd_rate < baseline_score.otd_rate
+    assert after_score.avg_days_late > baseline_score.avg_days_late
+    assert after_score.reliability_score < baseline_score.reliability_score
+
+
+def test_lead_time_consistency_across_heterogeneous_sku_lead_times(db_session):
+    """Verify P6: A supplier delivering two parts with different quoted lead times (8d and 14d)
+    exactly on their respective quotes receives 0.0 lead_time_std_dev and full 25/25 consistency.
+    """
+    sim_now = clock.now(db_session)
+    sup = Supplier(
+        persona_key=PersonaKey.SUP1.value,
+        name="Heterogeneous LT Supplier",
+        email="lt@apex.in",
+    )
+    part_a = Part(
+        sku="LT-8D",
+        name="Fast Part (8d quote)",
+        criticality=Criticality.STANDARD.value,
+        on_hand_stock=10,
+        rop=5,
+        replenishment_point=15,
+    )
+    part_b = Part(
+        sku="LT-14D",
+        name="Longer Part (14d quote)",
+        criticality=Criticality.STANDARD.value,
+        on_hand_stock=10,
+        rop=5,
+        replenishment_point=15,
+    )
+    db_session.add_all([sup, part_a, part_b])
+    db_session.flush()
+
+    db_session.add_all(
+        [
+            PartSupplierTerm(
+                part_id=part_a.id,
+                supplier_id=sup.id,
+                supplier_rank=1,
+                agreed_unit_price=100.0,
+                quoted_lead_time_days=8,
+                effective_lead_time_days=8.0,
+                lead_time_std_dev=0.0,
+                moq=1,
+                last_validated_at=sim_now,
+            ),
+            PartSupplierTerm(
+                part_id=part_b.id,
+                supplier_id=sup.id,
+                supplier_rank=1,
+                agreed_unit_price=200.0,
+                quoted_lead_time_days=14,
+                effective_lead_time_days=14.0,
+                lead_time_std_dev=0.0,
+                moq=1,
+                last_validated_at=sim_now,
+            ),
+        ]
+    )
+    db_session.flush()
+
+    pairs = [(part_a, 8), (part_b, 14), (part_a, 8), (part_b, 14)]
+    for idx, (part, quoted_days) in enumerate(pairs):
+        sent = sim_now - timedelta(days=60 - idx * 10)
+        eta = sent + timedelta(days=quoted_days)
+        po = PurchaseOrder(
+            po_number=f"PO-HET-{idx}",
+            part_id=part.id,
+            supplier_id=sup.id,
+            qty=5,
+            unit_price=100.0,
+            status=POStatus.CLOSED.value,
+            created_at=sent,
+            sent_at=sent,
+            promised_eta=eta,
+            follow_up_count=0,
+        )
+        db_session.add(po)
+        db_session.flush()
+        db_session.add(
+            GoodsReceipt(
+                po_id=po.id,
+                received_qty=5,
+                received_at=eta,  # delivered in exactly quoted_days!
+                status=GRNStatus.RELEASED.value,
+            )
+        )
+        db_session.add(
+            Invoice(
+                po_id=po.id,
+                invoice_number=f"INV-HET-{idx}",
+                extracted_qty=5,
+                extracted_unit_price=100.0,
+                extracted_total=500.0,
+                match_status=InvoiceMatchStatus.MATCHED.value,
+                version=1,
+                received_at=eta,
+            )
+        )
+    db_session.flush()
+
+    score = compute_supplier_score(db_session, sup, sim_now=sim_now)
+    assert score.lead_time_std_dev == 0.0
+    assert score.lead_time_consistency_component == 25.0
+    assert score.reliability_score == 100.0
+
+
+def test_evaluate_part_recommendation_matches_overview_even_with_stale_persisted_term(
+    seeded_session,
+):
+    """Verify P7: evaluate_part_recommendation() computes live effective lead times matching
+    get_planning_overview() even when PartSupplierTerm has stale persisted columns before
+    /api/planning/recalculate is called.
+    """
+    sku2 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-002"))
+    assert sku2 is not None
+    term = seeded_session.scalar(
+        select(PartSupplierTerm).where(
+            PartSupplierTerm.part_id == sku2.id,
+            PartSupplierTerm.supplier_rank == 1,
+        )
+    )
+    assert term is not None
+    # Force stale persisted effective LT on the DB row
+    term.effective_lead_time_days = 15.0
+    term.lead_time_std_dev = 0.0
+    seeded_session.flush()
+
+    overview = get_planning_overview(seeded_session)
+    overview_rec = next(r for r in overview.recommendations if r.part_id == sku2.id)
+    single_rec = evaluate_part_recommendation(seeded_session, sku2.id)
+
+    assert single_rec.effective_lead_time_days == overview_rec.effective_lead_time_days
+    assert single_rec.effective_lead_time_days > 15.0
+    assert single_rec.recommended_rop == overview_rec.recommended_rop
+    assert (
+        single_rec.recommended_replenishment_point
+        == overview_rec.recommended_replenishment_point
+    )

@@ -120,22 +120,35 @@ def compute_supplier_score(
     )
     term_lookup = {(t.part_id, t.supplier_id): t.quoted_lead_time_days for t in terms}
 
-    # 1. OTD Rate (40%) & 2. Lead Time Consistency (25%) over delivered POs
-    delivered_count = 0
+    # 1. OTD Rate (40%) & 2. Lead Time Consistency (25%) over delivered / overdue POs
+    otd_evaluated_count = 0
     on_time_count = 0
     lateness_days: list[float] = []
-    actual_lts: list[float] = []
+    lt_deltas: list[float] = []
     quoted_lts: list[float] = []
 
     for po in pos:
         grn = grns_by_po.get(po.id)
         if grn is None:
+            if po.status == POStatus.OVERDUE.value:
+                otd_evaluated_count += 1
+                eta_anchor = po.promised_eta or po.revised_eta
+                if eta_anchor is not None:
+                    raw_late = (
+                        now - clock.ensure_utc(eta_anchor)
+                    ).total_seconds() / 86400.0
+                    late_days = max(1.0, raw_late)
+                else:
+                    late_days = 1.0
+                lateness_days.append(late_days)
             continue
-        delivered_count += 1
+
+        otd_evaluated_count += 1
         actual_lt = _actual_lead_time_days(po, grn)
         if actual_lt is not None:
-            actual_lts.append(actual_lt)
-            quoted_lts.append(_quoted_lead_time_for_po(po, term_lookup))
+            quoted_lt = _quoted_lead_time_for_po(po, term_lookup)
+            lt_deltas.append(actual_lt - quoted_lt)
+            quoted_lts.append(quoted_lt)
         if po.promised_eta is not None:
             late_days = (
                 clock.ensure_utc(grn.received_at) - clock.ensure_utc(po.promised_eta)
@@ -146,8 +159,8 @@ def compute_supplier_score(
             else:
                 lateness_days.append(late_days)
 
-    if delivered_count > 0:
-        otd_rate = on_time_count / delivered_count
+    if otd_evaluated_count > 0:
+        otd_rate = on_time_count / otd_evaluated_count
         avg_days_late = sum(lateness_days) / len(lateness_days) if lateness_days else 0.0
     else:
         otd_rate = 1.0
@@ -156,7 +169,7 @@ def compute_supplier_score(
     late_penalty = min(LATE_PENALTY_CAP, avg_days_late * LATE_PENALTY_PER_DAY)
     otd_component = max(0.0, (otd_rate * OTD_WEIGHT) - late_penalty)
 
-    lt_std_dev = statistics.stdev(actual_lts) if len(actual_lts) >= 2 else 0.0
+    lt_std_dev = statistics.stdev(lt_deltas) if len(lt_deltas) >= 2 else 0.0
     avg_quoted_lt = (sum(quoted_lts) / len(quoted_lts)) if quoted_lts else 14.0
     cv_ratio = lt_std_dev / max(avg_quoted_lt, 1.0)
     # cv_ratio = 0 -> full 25 pts; cv_ratio >= 0.5 -> 0 pts
