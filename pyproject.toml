@@ -1,0 +1,42 @@
+[project]
+name = "inv-plan"
+version = "0.1.0"
+description = "Demand-to-Delivery & Inventory Planning Agentic Prototype"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy>=2.0.35",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-multipart>=0.0.12",
+    "google-genai>=1.0.0",
+    "pyyaml>=6.0.2",
+    "fpdf2>=2.8.0",
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+]
+
+[project.optional-dependencies]
+phoenix = [
+    "arize-phoenix>=8.0.0",
+    "arize-phoenix-otel>=0.8.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "httpx>=0.27.0",
+    "ruff>=0.7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

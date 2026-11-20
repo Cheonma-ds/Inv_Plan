@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Frontend / Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Local runtime data (SQLite DB & PDF invoice attachments)
+data/
+
+# Secrets / local env
+.env
+.env.local
+
+# OS / Editors
+.DS_Store
+.vscode/
+.idea/
