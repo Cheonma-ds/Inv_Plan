@@ -23,7 +23,6 @@ from backend.po import (
     InvalidPOTransitionError,
     PONotFoundError,
     create_action_item,
-    record_goods_receipt,
     switch_po_to_backup_supplier,
     update_po_terms,
 )
@@ -166,9 +165,10 @@ def post_grn(
     po_id: int,
     payload: RecordGRNRequest,
     session: Session = Depends(get_session),
+    engine: WorkflowEngine = Depends(get_workflow_engine),
 ) -> dict:
     try:
-        grn, match_res = record_goods_receipt(
+        outcome = engine.record_grn(
             session,
             po_id=po_id,
             received_qty=payload.received_qty,
@@ -179,6 +179,8 @@ def post_grn(
     except (InvalidPOTransitionError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.commit()
+    grn = outcome["grn"]
+    match_res = outcome["match_result"]
     po = session.get(PurchaseOrder, po_id)
     assert po is not None
     return {
@@ -188,6 +190,8 @@ def post_grn(
         "received_qty": grn.received_qty,
         "grn_status": grn.status,
         "match_result": match_res.model_dump(mode="json") if match_res else None,
+        "alert_id": outcome["alert_id"],
+        "draft_comm_id": outcome["draft_comm_id"],
     }
 
 

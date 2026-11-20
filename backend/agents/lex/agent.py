@@ -3,13 +3,18 @@ import json
 from sqlalchemy.orm import Session
 
 from backend.agents.base import BaseAgent
-from backend.agents.lex.prompts import DRAFT_SYSTEM_PROMPT, TRIAGE_SYSTEM_PROMPT
+from backend.agents.lex.prompts import (
+    DRAFT_SYSTEM_PROMPT,
+    INVOICE_EXTRACTION_SYSTEM_PROMPT,
+    TRIAGE_SYSTEM_PROMPT,
+)
 from backend.agents.lex.schemas import (
     EmailDraftInput,
     EmailDraftResult,
     EmailIntent,
     EmailTriageInput,
     EmailTriageResult,
+    InvoiceExtractionResult,
 )
 from backend.agents.llm_client import GeminiLLMClient, LLMClientProtocol
 from backend.core.enums import PersonaKey
@@ -164,6 +169,80 @@ class LexAgent(BaseAgent):
             span.output_summary = (
                 f"Draft '{result.subject}' -> {result.to_personas} (CC: {result.cc_personas})"
             )
+            span.raw_response = llm_res.raw_text
+            span.input_tokens = llm_res.input_tokens
+            span.output_tokens = llm_res.output_tokens
+            span.cost_inr = llm_res.cost_inr
+
+        return result
+
+    def extract_invoice(
+        self,
+        session: Session,
+        pdf_bytes: bytes,
+        *,
+        filename: str = "invoice.pdf",
+        supplier_name: str | None = None,
+        linked_comm_id: int | None = None,
+        linked_po_id: int | None = None,
+    ) -> InvoiceExtractionResult:
+        """Multimodal PDF invoice extraction (temp 0.0). Extracts numbers only — zero match math."""
+        prompt_payload = {
+            "task": (
+                "Extract all invoice header and line-item fields verbatim "
+                "from the attached PDF."
+            ),
+            "filename": filename,
+            "sender_supplier_hint": supplier_name,
+        }
+        prompt = json.dumps(prompt_payload, indent=2)
+        trigger = f"PDF invoice extraction: {filename}"
+
+        with AgentTracer.span(
+            session,
+            agent_name=self.agent_name,
+            task_type="invoice_extraction",
+            trigger_summary=trigger,
+            linked_entity_type="communication"
+            if linked_comm_id
+            else ("po" if linked_po_id else None),
+            linked_entity_id=linked_comm_id or linked_po_id,
+        ) as span:
+            span.input_summary = f"PDF={filename} ({len(pdf_bytes)} bytes)"
+            span.raw_prompt = prompt
+
+            llm_res = self.llm.generate_structured(
+                prompt=prompt,
+                response_schema=InvoiceExtractionResult,
+                system_instruction=INVOICE_EXTRACTION_SYSTEM_PROMPT,
+                temperature=0.0,
+                pdf_bytes=pdf_bytes,
+            )
+            result = llm_res.parsed
+
+            # Guardrail: empty line items or missing invoice number cannot pass high-confidence gate
+            guardrail_notes: list[str] = []
+            adjusted_confidence = result.confidence
+            if not result.line_items:
+                guardrail_notes.append("No line items extracted from PDF")
+                adjusted_confidence = min(adjusted_confidence, 0.5)
+            if not result.invoice_number.strip():
+                guardrail_notes.append("Missing invoice_number in PDF")
+                adjusted_confidence = min(adjusted_confidence, 0.5)
+
+            if guardrail_notes:
+                prefix = f"[Guardrail: {'; '.join(guardrail_notes)}]"
+                merged_notes = f"{prefix} {result.notes or ''}".strip()
+                result = result.model_copy(
+                    update={"confidence": adjusted_confidence, "notes": merged_notes}
+                )
+
+            span.output_summary = (
+                f"Invoice={result.invoice_number or 'UNKNOWN'} | PO={result.po_number or 'NONE'} | "
+                f"Lines={len(result.line_items)} | Subtotal={result.subtotal:.2f} | "
+                f"Conf={result.confidence:.2f}"
+            )
+            span.confidence = result.confidence
             span.raw_response = llm_res.raw_text
             span.input_tokens = llm_res.input_tokens
             span.output_tokens = llm_res.output_tokens

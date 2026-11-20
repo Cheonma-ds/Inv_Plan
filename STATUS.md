@@ -1,6 +1,6 @@
 # STATUS.md — Live Session Baton
 
-**Current Stage:** Slice 2 Complete → Ready for **Slice 3**  
+**Current Stage:** Slice 3 Complete → Ready for **Slice 4**  
 **Last Updated:** 2026-11-20
 
 ## Completed
@@ -11,34 +11,51 @@
   - `backend/inventory/`: `schemas.py`, `service.py` (Inventory Position, `PENDING_DISPATCH_APPROVAL` duplicate-PO safety, MOQ rounding, `AcceleratedBurnAlert`, quarantine helpers).
   - `backend/po/`: `state_machine.py`, `matching.py`, `service.py`, `actions.py`.
   - `backend/seed/`: `data.py` & `reset.py` (3 suppliers, 15 parts with primary + backup terms, 12m consumption ledger, 36 closed POs + 2 open POs, 8 Lex `AutonomyPolicy` rows).
-- **Slice 2 — 5-Persona Mailroom + SLA Watcher + Lex Email Agent:**
-  - `backend/mailroom/`: `schemas.py`, `attachments.py` (PDF validation & storage under `data/attachments/`), `transport.py` (`EmailTransport` protocol + `DatabaseEmailTransport`, blocks manual send-as-`lex` with `ManualLexSendForbiddenError`), `service.py` (`approve_draft`, `reject_draft`, `annotate_triage`).
-  - `backend/observability/`: `tracer.py` (agent-agnostic `AgentTracer` writing SQLite `agent_traces` + OTel span hook + optional Phoenix init + INR cost estimation), `autonomy.py` (`record_approval_outcome`, `list_autonomy_policies`).
-  - `backend/agents/`: `base.py` (`BaseAgent`), `llm_client.py` (`LLMClientProtocol` + `GeminiLLMClient` wrapping `google-genai` SDK with `gemini-3.5-flash-lite`, native PDF byte support, Pydantic `response_schema`, token/INR metering), `lex/` (`schemas.py`, `prompts.py`, `agent.py` with `< 0.85` confidence / unmatched-PO `AMBIGUOUS` guardrail, CC enforcement, and PO-number subject guard).
-  - `backend/orchestrator/`: `sla_watcher.py` (Ack SLA 24h/48h × 3 escalation, Pre-ETA check-in, Overdue detection, Quarantine 48h/96h SLA), `workflows.py` (`WorkflowEngine`: stock withdrawal → PO + draft, inbound supplier triage & routing across Scenarios 1/1A/2/3/AMBIGUOUS + Supplier Memory learning, Draft approval/rejection + autonomy tracking, inline Alert CTA execution), `deps.py`, `routes/` (`clock`, `parts`, `pos`, `alerts`, `mailroom`, `suppliers`, `observability`, `admin`), wired in `backend/main.py` with lifespan auto-seed + CORS for `:5173`.
-  - **Tests & Verification:** `31 passed` (`tests/mailroom/test_mailroom.py`, `tests/agents/test_lex_agent.py`, `tests/orchestrator/test_workflows_and_sla.py`, plus all Slice 1 + AST architecture tests in `tests/test_architecture.py`), `uv run ruff check backend tests` clean, and live `gemini-3.5-flash-lite` smoke test verified structured `EmailTriageResult` (`PRICE_CHANGE`, `confidence=0.99`, `proposed_unit_price=1350.0`, `new_memory_note` extracted).
+- **Slice 2 (`779e512`) — 5-Persona Mailroom + SLA Watcher + Lex Email Agent:**
+  - `backend/mailroom/`: `schemas.py`, `attachments.py`, `transport.py`, `service.py`.
+  - `backend/observability/`: `tracer.py`, `autonomy.py`.
+  - `backend/agents/`: `base.py`, `llm_client.py`, `lex/` (`schemas.py`, `prompts.py`, `agent.py`).
+  - `backend/orchestrator/`: `sla_watcher.py`, `workflows.py`, `deps.py`, `routes/` (`clock`, `parts`, `pos`, `alerts`, `mailroom`, `suppliers`, `observability`, `admin`), wired in `backend/main.py`.
+- **Slice 3 — PDF Invoice Pipeline + Planning Intelligence Engine:**
+  - `backend/agents/lex/prompts.py` & `agent.py`: Added `INVOICE_EXTRACTION_SYSTEM_PROMPT` and `LexAgent.extract_invoice(session, pdf_bytes, ...)` (temp `0.0`, multimodal PDF via `GeminiLLMClient`, extracts numbers verbatim with zero match math, logs `AgentTrace` with `task_type="invoice_extraction"`, enforces empty-lines / missing-invoice-number confidence cap).
+  - `backend/orchestrator/workflows.py`, `routes/mailroom.py`, `routes/pos.py`:
+    - Wired `_process_pdf_invoice_email()` for inbound supplier emails with `.pdf` attachments or `INVOICE_SUBMISSION` intent (even if email body omits PO#, PDF `po_number` resolves open POs safely).
+    - Hard guardrail: confidence `< 0.85`, PO conflict, unresolved PO, or empty line items escalate to `INVOICE_EXTRACTION_REVIEW` with zero PO/stock mutation.
+    - Runs deterministic `po.submit_invoice_and_match()`: `PENDING_GRN` creates `INVOICE_PENDING_GRN` alert; mismatch transitions PO to `QUARANTINED_INVOICE_MISMATCH`, holds stock in quarantine, drafts Lex `INVOICE_DISCREPANCY` email (`DRAFT_PENDING_APPROVAL`), and raises `HIGH`/`CRITICAL` `INVOICE_MISMATCH_QUARANTINE` alert; clean match (v1 or corrected v2) releases quarantined stock to `on_hand_stock`, closes PO, and auto-resolves open quarantine/GRN alerts.
+    - Added `WorkflowEngine.record_grn()` (wired into `POST /api/pos/{po_id}/grn`) so GRN logged after an early invoice also triggers mismatch draft + alert or clean release.
+    - Added `recalculate_planning()` (deduped/upserted `ROP_RECOMMENDATION` alerts) and `apply_rop_recommendation()`, plus fixed `execute_alert_cta` (`approve_rop`) to read `cta_payload_json` and `PartSnapshot.part_id`.
+  - `backend/planning/` (100% deterministic Python, zero LLM calls, zero sideways imports):
+    - `schemas.py`: `DemandForecastResult`, `SupplierScoreResult`, `EffectiveLeadTimeResult`, `ROPRecommendation`, `PlanningRecalculationSummary`.
+    - `forecast.py`: 12-month consumption bucket builder anchored at `clock.now(session)`, EWMA (`alpha=0.25`) for `avg_daily_demand` (`D_bar`) & `daily_demand_std` (`sigma_D`), intermittent detector (`>50%` zero months with conservative rolling-peak floor), additive `manual_demand_override`.
+    - `scoring.py`: Rolling 12m Supplier Reliability Score (OTD 40% with `-2 pts/day` avg late penalty, Lead Time Consistency 25%, Invoice Accuracy v1 20%, Responsiveness 0-nudge 15%) and Effective Lead Time (`<3` closed deliveries → quoted; `>=3` → `max(actual_mean, 0.25*quoted + 0.75*actual_mean)`).
+    - `rop.py`: Criticality Z-factors (`CRITICAL=2.05`, `STANDARD=1.65`, `LOW=1.28`), `SS = Z * sqrt(L_eff * sigma_D^2 + D_bar^2 * sigma_L^2)`, `ROP_rec = ceil(D_bar * L_eff + SS)`, `S_rec = ROP_rec + ceil(D_bar * target_coverage_days)`.
+    - `service.py` & `__init__.py`: `evaluate_part_recommendation`, `get_planning_overview`, `recalculate_all`.
+  - `backend/orchestrator/routes/planning.py` (registered in `routes/__init__.py`): `GET /api/planning/overview`, `POST /api/planning/recalculate`, `POST /api/planning/parts/{part_id}/apply-recommendation`.
+  - **Tests & Verification:**
+    - Added `tests/helpers/invoice_pdf.py` (`fpdf2` commercial invoice PDF generator), `tests/planning/test_planning_engine.py`, `tests/orchestrator/test_invoice_pipeline.py`, and `tests/agents/test_live_gemini_pdf.py`.
+    - Offline suite: `uv run pytest` → **`41 passed, 1 skipped`** (including `tests/test_architecture.py` AST boundary & clock checks).
+    - Live multimodal smoke test: `RUN_LIVE_GEMINI=1 uv run pytest tests/agents/test_live_gemini_pdf.py -v` → **`1 passed`** (`gemini-3.5-flash-lite` extracted `INV-LIVE-2026-088`, `PO-1042`, qty `6`, unit price `₹5,250.00`, subtotal `₹31,500.00`, `confidence >= 0.85`, logged trace tokens, and triggered deterministic `MISMATCH_PRICE` against PO `₹4,800.00`).
+    - Lint: `uv run ruff check backend tests` → **`All checks passed!`**.
 
-## Next Active Slice: **Slice 3 — PDF Invoice Pipeline + Planning Intelligence Engine**
-- **Read ONLY:** `AGENTS.md`, `STATUS.md`, `DESIGN.md` sections **`§4.3`**, **`§6.2`**, **`§7`**, **`§9`**, and **`§10`**.
-- **Modules to Build:**
-  - `backend/agents/lex/agent.py` + `prompts.py` — add `extract_invoice(session, pdf_bytes, ...)` using `GeminiLLMClient(..., pdf_bytes=...)` returning `InvoiceExtractionResult` (already defined in `backend/agents/lex/schemas.py`) with `< 0.85` confidence escalation and `AgentTracer` logging (`task_type="invoice_extraction"`).
-  - `backend/orchestrator/workflows.py` — wire PDF invoice extraction when an inbound supplier email has a `.pdf` attachment (or `INVOICE_SUBMISSION` intent): extract PDF → invoke `po.submit_invoice_and_match()` → on mismatch (`QUARANTINED_INVOICE_MISMATCH`), have Lex draft `INVOICE_DISCREPANCY` email + raise `HIGH`/`CRITICAL` quarantine alert; on match (`CLOSED`), release quarantined stock to `on_hand_stock` and auto-resolve open quarantine alerts!
-  - `backend/planning/` — 100% deterministic Python (zero LLM calls):
-    - `forecasting.py` — 12-month consumption analysis (WMA for regular parts, Croston's method for intermittent spare parts where ≥50% months are zero, trend/seasonality flag, manual override support).
-    - `scoring.py` — Supplier Reliability Score (`0.50*OTD + 0.30*InvoiceAccuracy + 0.20*ResponseRate`), Effective Lead Time (`0.70*actual + 0.30*quoted` with recency weighting), Lead Time std dev, and recalculation persistence onto `Supplier` + `PartSupplierTerm`.
-    - `rop.py` — Dynamic Safety Stock (`Z_alpha * sqrt(L_eff * sigma_d^2 + d_bar^2 * sigma_L^2)`), Dynamic ROP (`ceil(d_bar * L_eff + SS)`), Dynamic Replenishment Point `S`, and `ActionItem` recommendations when drift ≥ 20% or ≥ 2 units.
-  - `backend/orchestrator/routes/planning.py` — FastAPI endpoints for `GET /api/planning/overview`, `POST /api/planning/recalculate`, and `POST /api/planning/parts/{part_id}/apply-recommendation` (and optional sample PDF invoice generator utility in `tests/` using `fpdf2` for realistic testing!).
+## Next Active Slice: **Slice 4 — React Operations Dashboard & 5-Persona Mailroom UI**
+- **Read ONLY:** `AGENTS.md`, `STATUS.md`, `DESIGN.md` sections **`§9`** and **`§10`** (plus `PRD.md` only if UX flow details are ambiguous).
+- **Modules to Build (`frontend/`):**
+  - Shared API client (`frontend/src/api/`), types, and top-level layout with global **Simulated Clock** bar (`+6h`, `+24h`, `+3d`, `+7d`, Reset & Seed Demo), persona/view navigation, and toast/status feedback.
+  - **Action Center** (prioritized `ActionItem` feed with severity badges, inline Lex draft preview/edit/approve/reject, and 1-click CTAs for PO dispatch, price-change/delay/backup-supplier, quarantine, and ROP approval).
+  - **Inventory & Planning View** (15-SKU table with on-hand / on-order / quarantined / ROP / S, quick Stock Withdrawal modal, `Recalculate Planning` trigger, and per-part recommended vs current ROP/S apply action + supplier reliability panel).
+  - **Purchase Orders & GRN View** (PO lifecycle list/detail with status badges, promised vs revised ETA, invoice history, and Log GRN form).
+  - **5-Persona Mailroom UI** (`inventory_manager`, `sup1`, `sup2`, `sup3`, `lex` persona switcher, Inbox/Sent tabs, manual compose with `.pdf` invoice upload, read-only enforcement for `lex`, inline draft approval controls).
+  - Remember guardrail: **No hardcoded demo preset scripts** in the UI; keep Mailroom cleanly usable with manual compose/PDF upload.
 - **Done Criteria:**
-  - `uv run pytest` passes deterministic unit tests for WMA, Croston's, Supplier Reliability Score, Effective Lead Time, Dynamic Safety Stock/ROP/S, and end-to-end PDF invoice upload → quarantine → corrected PDF → release flow.
-  - At least 1 live `gemini-3.5-flash-lite` PDF extraction smoke test using an `fpdf2`-generated invoice PDF.
-  - `tests/test_architecture.py` and `uv run ruff check backend tests` pass cleanly.
+  - `cd frontend && npm run build` passes TypeScript + Vite production build cleanly.
+  - Backend + frontend verified end-to-end against live local FastAPI server (or API contract checks), plus `uv run pytest` and `uv run ruff check backend tests` remain green.
 
 ## Upcoming Slices
-- **Slice 4:** React Operations Dashboard & 5-Persona Mailroom UI (`DESIGN.md §9`)
 - **Slice 5:** AI Activity & Health UI, YAML Eval Runner (`evals/lex.yaml`) & Optional Phoenix (`DESIGN.md §8, §9`)
 
 ## Caveats / Design Decisions Made
+- `backend/planning/` follows `DESIGN.md §7` strictly: EWMA (`alpha=0.25`) + intermittent rolling-peak floor (`>50%` zero months), 40/25/20/15 Supplier Reliability Score, `<3` deliveries quoted fallback / `>=3` `max(actual, 0.25*quoted + 0.75*actual)` Effective Lead Time, and Z-factor dynamic ROP/S.
+- `tests/agents/test_live_gemini_pdf.py` is gated behind `RUN_LIVE_GEMINI=1` (in addition to `$GEMINI_API_KEY`) so default offline `uv run pytest` stays fast and deterministic, while opt-in live verification exercises real `gemini-3.5-flash-lite` multimodal PDF extraction.
 - `tests/conftest.py` uses SQLAlchemy `StaticPool` for `:memory:` SQLite fixtures so FastAPI `TestClient` worker threads share the exact seeded in-memory database cleanly.
 - `EXCEPTION_REVIEW` is entered only from `SENT_AWAITING_ACK` or `UNRESPONSIVE_ESCALATED` (respecting `po/state_machine.py` guardrails); post-ack delays route to `DELAYED_CRITICAL` (critical/low-stock) or stay `ACKNOWLEDGED` with updated `revised_eta` (minor delay).
-- `InvoiceExtractionResult` schema is already pre-defined in `backend/agents/lex/schemas.py` ready for Slice 3.
 - Demo presets remain intentionally deferred until after Slice 5.

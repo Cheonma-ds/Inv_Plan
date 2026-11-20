@@ -123,10 +123,9 @@ async def send_email_endpoint(
     triage = result["triage"]
     triage_serialized = None
     if triage is not None:
-        triage_obj = triage.get("triage")
         triage_serialized = {
-            **triage,
-            "triage": triage_obj.model_dump(mode="json") if triage_obj is not None else None,
+            k: (v.model_dump(mode="json") if isinstance(v, BaseModel) else v)
+            for k, v in triage.items()
         }
     return {
         "email": result["email"].model_dump(mode="json"),

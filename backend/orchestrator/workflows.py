@@ -1,14 +1,18 @@
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agents.lex import (
+    CONFIDENCE_THRESHOLD,
     EmailDraftInput,
     EmailIntent,
     EmailTriageInput,
     EmailTriageResult,
+    InvoiceExtractionResult,
     LexAgent,
     OpenPOContext,
     ThreadMessageContext,
@@ -26,6 +30,8 @@ from backend.core.enums import (
 )
 from backend.core.models import (
     ActionItem,
+    GoodsReceipt,
+    Invoice,
     Part,
     PartSupplierTerm,
     PurchaseOrder,
@@ -46,11 +52,15 @@ from backend.mailroom import (
 from backend.mailroom.transport import SUPPLIER_PERSONAS
 from backend.observability import record_approval_outcome
 from backend.orchestrator.sla_watcher import SLAEvent, auto_resolve_po_alerts, run_sla_watcher
+from backend.planning import evaluate_part_recommendation, recalculate_all
 from backend.po import (
+    ThreeWayMatchResult,
     append_po_note,
     create_action_item,
     create_po,
+    record_goods_receipt,
     resolve_action_item,
+    submit_invoice_and_match,
     switch_po_to_backup_supplier,
     transition_po,
     update_po_terms,
@@ -407,6 +417,24 @@ class WorkflowEngine:
         created_alert: ActionItem | None = None
         created_draft: StoredEmail | None = None
 
+        # If a PDF attachment is present and triage either classified INVOICE_SUBMISSION or
+        # escalated AMBIGUOUS solely because the email body omitted the PO number, run the
+        # multimodal PDF invoice extraction pipeline first so the PDF PO reference can be used.
+        should_run_invoice_pipeline = triage_result.intent == EmailIntent.INVOICE_SUBMISSION or (
+            bool(email.attachment_path)
+            and triage_result.intent == EmailIntent.AMBIGUOUS
+            and matched_po is None
+        )
+        if should_run_invoice_pipeline:
+            return self._process_pdf_invoice_email(
+                session,
+                email=email,
+                supplier=supplier,
+                matched_po=matched_po,
+                po_by_number=po_by_number,
+                triage_result=triage_result,
+            )
+
         # Route intent with deterministic guardrails
         if triage_result.intent == EmailIntent.AMBIGUOUS or matched_po is None:
             if triage_result.intent == EmailIntent.GENERAL_REPLY and matched_po is None:
@@ -636,23 +664,6 @@ class WorkflowEngine:
                     },
                 )
 
-        elif triage_result.intent == EmailIntent.INVOICE_SUBMISSION:
-            created_alert = create_action_item(
-                session,
-                type="INVOICE_RECEIVED",
-                severity=AlertSeverity.INFO,
-                title=f"Invoice email received for {matched_po.po_number}",
-                summary=triage_result.summary_for_manager,
-                po_id=matched_po.id,
-                part_id=part.id,
-                suggested_actions=[],
-                cta_payload={
-                    "po_id": matched_po.id,
-                    "comm_id": email.id,
-                    "attachment_path": email.attachment_path,
-                },
-            )
-
         elif triage_result.intent == EmailIntent.GENERAL_REPLY:
             created_alert = create_action_item(
                 session,
@@ -672,6 +683,547 @@ class WorkflowEngine:
             "matched_po_id": matched_po.id,
             "alert_id": created_alert.id if created_alert else None,
             "draft_comm_id": created_draft.id if created_draft else None,
+        }
+
+    def _process_pdf_invoice_email(
+        self,
+        session: Session,
+        *,
+        email: StoredEmail,
+        supplier: Supplier,
+        matched_po: PurchaseOrder | None,
+        po_by_number: dict[str, PurchaseOrder],
+        triage_result: EmailTriageResult,
+    ) -> dict[str, Any]:
+        """Extract PDF invoice via Lex, run 3-way match, and drive quarantine/release."""
+        if not email.attachment_path:
+            alert = create_action_item(
+                session,
+                type="INVOICE_MISSING_PDF",
+                severity=AlertSeverity.MEDIUM,
+                title=(
+                    "Invoice email missing PDF attachment"
+                    + (f" ({matched_po.po_number})" if matched_po else "")
+                ),
+                summary=(
+                    f"{supplier.name} sent an invoice email without a PDF attachment. "
+                    "No PO state was modified; request a PDF invoice before matching."
+                ),
+                po_id=matched_po.id if matched_po else None,
+                part_id=matched_po.part_id if matched_po else None,
+                suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
+                cta_payload={"comm_id": email.id, "po_id": matched_po.id if matched_po else None},
+            )
+            session.flush()
+            return {
+                "triage": triage_result,
+                "matched_po_id": matched_po.id if matched_po else None,
+                "alert_id": alert.id,
+                "draft_comm_id": None,
+                "invoice_extraction": None,
+                "invoice_id": None,
+                "match_result": None,
+            }
+
+        pdf_file = Path(email.attachment_path)
+        if not pdf_file.is_file():
+            alert = create_action_item(
+                session,
+                type="INVOICE_EXTRACTION_REVIEW",
+                severity=AlertSeverity.HIGH,
+                title=f"Unreadable invoice PDF from {supplier.name}",
+                summary=(
+                    f"Attachment '{email.attachment_path}' could not be read from disk. "
+                    "No PO state was modified."
+                ),
+                po_id=matched_po.id if matched_po else None,
+                part_id=matched_po.part_id if matched_po else None,
+                suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
+                cta_payload={"comm_id": email.id, "attachment_path": email.attachment_path},
+            )
+            session.flush()
+            return {
+                "triage": triage_result,
+                "matched_po_id": matched_po.id if matched_po else None,
+                "alert_id": alert.id,
+                "draft_comm_id": None,
+                "invoice_extraction": None,
+                "invoice_id": None,
+                "match_result": None,
+            }
+
+        extraction: InvoiceExtractionResult = self.lex.extract_invoice(
+            session,
+            pdf_file.read_bytes(),
+            filename=pdf_file.name,
+            supplier_name=supplier.name,
+            linked_comm_id=email.id,
+            linked_po_id=matched_po.id if matched_po else None,
+        )
+
+        # Resolve target PO and guard against conflicting PO references between email & PDF
+        target_po = matched_po
+        po_conflict_reason: str | None = None
+        if extraction.po_number:
+            pdf_po = po_by_number.get(extraction.po_number)
+            if target_po is None:
+                target_po = pdf_po
+            elif extraction.po_number != target_po.po_number:
+                po_conflict_reason = (
+                    f"Email referenced {target_po.po_number}, but PDF invoice references "
+                    f"{extraction.po_number}."
+                )
+
+        annotate_triage(
+            session,
+            email.id,
+            classification=EmailIntent.INVOICE_SUBMISSION.value
+            if extraction.confidence >= CONFIDENCE_THRESHOLD and target_po is not None
+            else EmailIntent.AMBIGUOUS.value,
+            extracted_json={
+                "triage": triage_result.model_dump(mode="json"),
+                "invoice_extraction": extraction.model_dump(mode="json"),
+            },
+            confidence=min(triage_result.confidence, extraction.confidence)
+            if matched_po is not None
+            else extraction.confidence,
+            po_id=target_po.id if target_po else email.po_id,
+        )
+
+        # Guardrail: confidence < 0.85, unresolved PO, PO conflict, or empty lines -> zero mutation
+        escalation_reasons: list[str] = []
+        if extraction.confidence < CONFIDENCE_THRESHOLD:
+            escalation_reasons.append(
+                f"PDF extraction confidence {extraction.confidence:.0%} is below "
+                f"{CONFIDENCE_THRESHOLD:.0%}"
+            )
+        if po_conflict_reason:
+            escalation_reasons.append(po_conflict_reason)
+        if target_po is None:
+            escalation_reasons.append(
+                f"Could not match PDF PO ref '{extraction.po_number or 'NONE'}' to an open PO "
+                f"for {supplier.name}"
+            )
+        if not extraction.line_items:
+            escalation_reasons.append("No billable line items were extracted from the PDF")
+
+        if escalation_reasons:
+            alert = create_action_item(
+                session,
+                type="INVOICE_EXTRACTION_REVIEW",
+                severity=AlertSeverity.HIGH,
+                title=f"Manual invoice review needed ({supplier.name})",
+                summary=(
+                    f"Lex could not safely auto-match PDF '{pdf_file.name}': "
+                    f"{'; '.join(escalation_reasons)}. Zero PO state changes were made."
+                ),
+                po_id=target_po.id if target_po else None,
+                part_id=target_po.part_id if target_po else None,
+                suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
+                cta_payload={
+                    "comm_id": email.id,
+                    "attachment_path": email.attachment_path,
+                    "invoice_number": extraction.invoice_number,
+                    "pdf_po_number": extraction.po_number,
+                    "confidence": extraction.confidence,
+                    "reasons": escalation_reasons,
+                },
+            )
+            session.flush()
+            return {
+                "triage": triage_result,
+                "matched_po_id": target_po.id if target_po else None,
+                "alert_id": alert.id,
+                "draft_comm_id": None,
+                "invoice_extraction": extraction,
+                "invoice_id": None,
+                "match_result": None,
+            }
+
+        assert target_po is not None
+        part = session.get(Part, target_po.part_id)
+        assert part is not None
+
+        if len(extraction.line_items) == 1:
+            extracted_qty = extraction.line_items[0].qty
+            extracted_unit_price = extraction.line_items[0].unit_price
+        else:
+            extracted_qty = sum(li.qty for li in extraction.line_items)
+            unique_prices = {round(li.unit_price, 4) for li in extraction.line_items}
+            extracted_unit_price = (
+                extraction.line_items[0].unit_price
+                if len(unique_prices) == 1
+                else (
+                    round(extraction.subtotal / extracted_qty, 2) if extracted_qty > 0 else 0.0
+                )
+            )
+
+        invoice, match_result = submit_invoice_and_match(
+            session,
+            po_id=target_po.id,
+            invoice_number=extraction.invoice_number,
+            extracted_qty=extracted_qty,
+            extracted_unit_price=extracted_unit_price,
+            extracted_total=extraction.subtotal,
+            pdf_path=email.attachment_path,
+            comm_id=email.id,
+        )
+
+        outcome = self._handle_invoice_match_outcome(
+            session,
+            po=target_po,
+            part=part,
+            supplier=supplier,
+            invoice=invoice,
+            match_result=match_result,
+            thread_id=email.thread_id,
+            thread_subject=email.subject,
+        )
+        session.flush()
+        return {
+            "triage": triage_result,
+            "matched_po_id": target_po.id,
+            "alert_id": outcome["alert_id"],
+            "draft_comm_id": outcome["draft_comm_id"],
+            "invoice_extraction": extraction,
+            "invoice_id": invoice.id,
+            "match_result": match_result,
+        }
+
+    def _handle_invoice_match_outcome(
+        self,
+        session: Session,
+        *,
+        po: PurchaseOrder,
+        part: Part,
+        supplier: Supplier,
+        invoice: Invoice,
+        match_result: ThreeWayMatchResult | None,
+        thread_id: str | None = None,
+        thread_subject: str | None = None,
+    ) -> dict[str, Any]:
+        """Create alerts and Lex discrepancy drafts based on deterministic 3-way match outcome."""
+        if match_result is None:
+            alert = create_action_item(
+                session,
+                type="INVOICE_PENDING_GRN",
+                severity=AlertSeverity.INFO,
+                title=f"Invoice {invoice.invoice_number} held pending GRN ({po.po_number})",
+                summary=(
+                    f"Extracted invoice {invoice.invoice_number} (v{invoice.version}: "
+                    f"{invoice.extracted_qty} units @ ₹{invoice.extracted_unit_price:,.2f}, "
+                    f"subtotal ₹{invoice.extracted_total:,.2f}) for {po.po_number}. "
+                    "Awaiting physical Goods Receipt before 3-way match."
+                ),
+                po_id=po.id,
+                part_id=part.id,
+                suggested_actions=[],
+                cta_payload={
+                    "po_id": po.id,
+                    "invoice_id": invoice.id,
+                    "invoice_number": invoice.invoice_number,
+                },
+            )
+            return {"alert_id": alert.id, "draft_comm_id": None}
+
+        if match_result.matched:
+            auto_resolve_po_alerts(
+                session,
+                po.id,
+                (
+                    "INVOICE_MISMATCH_QUARANTINE",
+                    "QUARANTINE_REMINDER",
+                    "QUARANTINE_ESCALATED",
+                    "OVERDUE_PO",
+                    "INVOICE_PENDING_GRN",
+                ),
+            )
+            grn = session.scalar(
+                select(GoodsReceipt)
+                .where(GoodsReceipt.po_id == po.id)
+                .order_by(GoodsReceipt.id.desc())
+                .limit(1)
+            )
+            released_qty = grn.received_qty if grn is not None else invoice.extracted_qty
+            alert = create_action_item(
+                session,
+                type="INVOICE_MATCHED_CLOSED",
+                severity=AlertSeverity.INFO,
+                title=f"3-way match passed & stock released: {po.po_number} ({part.sku})",
+                summary=(
+                    f"Invoice {invoice.invoice_number} (v{invoice.version}) matched "
+                    f"PO {po.po_number} and GRN ({released_qty} units @ ₹{po.unit_price:,.2f}). "
+                    f"Released {released_qty} units to usable on-hand stock "
+                    f"(now {part.on_hand_stock} on hand, {part.quarantined_stock} quarantined) "
+                    "and closed PO."
+                ),
+                po_id=po.id,
+                part_id=part.id,
+                suggested_actions=[],
+                cta_payload={
+                    "po_id": po.id,
+                    "invoice_id": invoice.id,
+                    "invoice_number": invoice.invoice_number,
+                    "released_qty": released_qty,
+                },
+            )
+            return {"alert_id": alert.id, "draft_comm_id": None}
+
+        # Match FAILED -> stock is quarantined; draft Lex correction request for manager approval
+        grn = session.scalar(
+            select(GoodsReceipt)
+            .where(GoodsReceipt.po_id == po.id)
+            .order_by(GoodsReceipt.id.desc())
+            .limit(1)
+        )
+        grn_qty = grn.received_qty if grn is not None else po.qty
+        price_diff = round(invoice.extracted_unit_price - po.unit_price, 2)
+        total_price_impact = round(price_diff * invoice.extracted_qty, 2)
+        qty_diff = invoice.extracted_qty - grn_qty
+
+        draft = self._create_lex_draft(
+            session,
+            po=po,
+            part=part,
+            supplier=supplier,
+            category=EmailCategory.INVOICE_DISCREPANCY,
+            thread_id=thread_id,
+            thread_subject=thread_subject or f"[{po.po_number}] Invoice Discrepancy",
+            context_facts={
+                "invoice_number": invoice.invoice_number,
+                "invoice_version": invoice.version,
+                "match_status": match_result.match_status.value,
+                "discrepancy_summary": match_result.discrepancy_summary,
+                "po_qty": po.qty,
+                "po_unit_price": po.unit_price,
+                "grn_received_qty": grn_qty,
+                "invoice_qty": invoice.extracted_qty,
+                "invoice_unit_price": invoice.extracted_unit_price,
+                "invoice_subtotal": invoice.extracted_total,
+                "price_diff_per_unit": price_diff,
+                "total_price_impact": total_price_impact,
+                "qty_diff": qty_diff,
+                "quarantined_qty": grn_qty,
+                "requested_action": (
+                    "Please issue a revised PDF invoice matching the agreed PO quantity and "
+                    "unit price so we can release quarantined stock and process payment."
+                ),
+            },
+        )
+        severity = (
+            AlertSeverity.CRITICAL
+            if (part.criticality == Criticality.CRITICAL.value or part.on_hand_stock <= part.rop)
+            else AlertSeverity.HIGH
+        )
+        alert = create_action_item(
+            session,
+            type="INVOICE_MISMATCH_QUARANTINE",
+            severity=severity,
+            title=f"Stock Quarantined — Invoice Mismatch on {po.po_number} ({part.sku})",
+            summary=(
+                f"Invoice {invoice.invoice_number} (v{invoice.version}) from {supplier.name} "
+                f"failed 3-way match ({match_result.match_status.value}): "
+                f"{match_result.discrepancy_summary}. {grn_qty} units are held in quarantine "
+                "(excluded from on-hand stock). Lex drafted a correction request for approval."
+            ),
+            po_id=po.id,
+            part_id=part.id,
+            draft_comm_id=draft.id,
+            suggested_actions=[
+                {"action": "approve_draft", "label": "Approve & Send Correction Request"},
+                {"action": "reject_draft", "label": "Reject Draft"},
+            ],
+            cta_payload={
+                "draft_comm_id": draft.id,
+                "po_id": po.id,
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+                "match_status": match_result.match_status.value,
+                "discrepancy_summary": match_result.discrepancy_summary,
+                "total_price_impact": total_price_impact,
+            },
+        )
+        return {"alert_id": alert.id, "draft_comm_id": draft.id}
+
+    def record_grn(
+        self,
+        session: Session,
+        *,
+        po_id: int,
+        received_qty: int,
+        condition: str = "GOOD",
+    ) -> dict[str, Any]:
+        """Log a physical Goods Receipt and trigger invoice quarantine/release if pending."""
+        grn, match_result = record_goods_receipt(
+            session,
+            po_id=po_id,
+            received_qty=received_qty,
+            condition=condition,
+        )
+        auto_resolve_po_alerts(session, po_id, ("OVERDUE_PO", "PRE_ETA_CHECKIN_DRAFT"))
+
+        alert_id: int | None = None
+        draft_comm_id: int | None = None
+        if match_result is not None:
+            po = session.get(PurchaseOrder, po_id)
+            assert po is not None
+            part = session.get(Part, po.part_id)
+            supplier = session.get(Supplier, po.supplier_id)
+            latest_invoice = session.scalar(
+                select(Invoice)
+                .where(Invoice.po_id == po_id)
+                .order_by(Invoice.version.desc(), Invoice.id.desc())
+                .limit(1)
+            )
+            if part is not None and supplier is not None and latest_invoice is not None:
+                outcome = self._handle_invoice_match_outcome(
+                    session,
+                    po=po,
+                    part=part,
+                    supplier=supplier,
+                    invoice=latest_invoice,
+                    match_result=match_result,
+                )
+                alert_id = outcome["alert_id"]
+                draft_comm_id = outcome["draft_comm_id"]
+
+        session.flush()
+        return {
+            "grn": grn,
+            "match_result": match_result,
+            "alert_id": alert_id,
+            "draft_comm_id": draft_comm_id,
+        }
+
+    def recalculate_planning(self, session: Session) -> dict[str, Any]:
+        """Run deterministic Planning Intelligence and sync ROP_RECOMMENDATION alerts."""
+        summary = recalculate_all(session)
+        alerts_created = 0
+        alerts_updated = 0
+        alerts_resolved = 0
+
+        for rec in summary.recommendations:
+            existing_alerts = list(
+                session.scalars(
+                    select(ActionItem).where(
+                        ActionItem.type == "ROP_RECOMMENDATION",
+                        ActionItem.part_id == rec.part_id,
+                        ActionItem.status == ActionItemStatus.OPEN.value,
+                    )
+                ).all()
+            )
+            if not rec.needs_update:
+                for item in existing_alerts:
+                    resolve_action_item(session, item.id)
+                    alerts_resolved += 1
+                continue
+
+            severity = (
+                AlertSeverity.HIGH
+                if (
+                    rec.criticality == Criticality.CRITICAL.value
+                    and rec.recommended_rop > rec.current_rop
+                )
+                else AlertSeverity.MEDIUM
+            )
+            title = (
+                f"Update ROP/S for {rec.sku}: "
+                f"ROP {rec.current_rop} → {rec.recommended_rop}, "
+                f"S {rec.current_replenishment_point} → {rec.recommended_replenishment_point}"
+            )
+            suggested = [
+                {
+                    "action": "approve_rop",
+                    "label": (
+                        f"Approve ROP {rec.recommended_rop} / "
+                        f"S {rec.recommended_replenishment_point}"
+                    ),
+                }
+            ]
+            cta_payload = {
+                "part_id": rec.part_id,
+                "rop": rec.recommended_rop,
+                "replenishment_point": rec.recommended_replenishment_point,
+                "current_rop": rec.current_rop,
+                "current_replenishment_point": rec.current_replenishment_point,
+                "effective_lead_time_days": rec.effective_lead_time_days,
+                "quoted_lead_time_days": rec.quoted_lead_time_days,
+                "safety_stock": rec.safety_stock,
+            }
+
+            if existing_alerts:
+                primary = existing_alerts[0]
+                primary.severity = severity.value
+                primary.title = title
+                primary.summary = rec.reason
+                primary.suggested_actions_json = json.dumps(suggested)
+                primary.cta_payload_json = json.dumps(cta_payload)
+                alerts_updated += 1
+                for dup in existing_alerts[1:]:
+                    resolve_action_item(session, dup.id)
+                    alerts_resolved += 1
+            else:
+                create_action_item(
+                    session,
+                    type="ROP_RECOMMENDATION",
+                    severity=severity,
+                    title=title,
+                    summary=rec.reason,
+                    part_id=rec.part_id,
+                    suggested_actions=suggested,
+                    cta_payload=cta_payload,
+                )
+                alerts_created += 1
+
+        session.flush()
+        return {
+            "summary": summary,
+            "alerts_created": alerts_created,
+            "alerts_updated": alerts_updated,
+            "alerts_resolved": alerts_resolved,
+        }
+
+    def apply_rop_recommendation(
+        self,
+        session: Session,
+        *,
+        part_id: int,
+        rop: int | None = None,
+        replenishment_point: int | None = None,
+    ) -> dict[str, Any]:
+        """Apply recommended (or explicitly supplied) ROP & S values and resolve open ROP alerts."""
+        rec = evaluate_part_recommendation(session, part_id)
+        target_rop = rec.recommended_rop if rop is None else int(rop)
+        target_s = (
+            rec.recommended_replenishment_point
+            if replenishment_point is None
+            else int(replenishment_point)
+        )
+        part = update_rop_and_replenishment(
+            session, part_id, rop=target_rop, replenishment_point=target_s
+        )
+
+        resolved_count = 0
+        open_rop_alerts = list(
+            session.scalars(
+                select(ActionItem).where(
+                    ActionItem.type == "ROP_RECOMMENDATION",
+                    ActionItem.part_id == part_id,
+                    ActionItem.status == ActionItemStatus.OPEN.value,
+                )
+            ).all()
+        )
+        for item in open_rop_alerts:
+            resolve_action_item(session, item.id)
+            resolved_count += 1
+
+        session.flush()
+        return {
+            "part_id": part.part_id,
+            "sku": part.sku,
+            "rop": part.rop,
+            "replenishment_point": part.replenishment_point,
+            "resolved_alerts": resolved_count,
         }
 
     def approve_lex_draft(
@@ -956,15 +1508,19 @@ class WorkflowEngine:
             }
 
         if action == "approve_rop":
-            part_id = int(params.get("part_id") or item.part_id or 0)
-            new_rop = int(params["rop"])
-            new_s = int(params["replenishment_point"])
+            raw_cta = item.cta_payload_json
+            cta = json.loads(raw_cta) if isinstance(raw_cta, str) and raw_cta else (raw_cta or {})
+            part_id = int(params.get("part_id") or cta.get("part_id") or item.part_id or 0)
+            rop_val = params.get("rop", cta.get("rop"))
+            s_val = params.get("replenishment_point", cta.get("replenishment_point"))
+            if not part_id or rop_val is None or s_val is None:
+                raise ValueError("part_id, rop, and replenishment_point are required")
             part = update_rop_and_replenishment(
-                session, part_id, rop=new_rop, replenishment_point=new_s
+                session, part_id, rop=int(rop_val), replenishment_point=int(s_val)
             )
             resolve_action_item(session, item.id)
             return {
-                "part_id": part.id,
+                "part_id": part.part_id,
                 "rop": part.rop,
                 "replenishment_point": part.replenishment_point,
             }
