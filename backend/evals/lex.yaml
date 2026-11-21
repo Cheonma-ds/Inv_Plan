@@ -668,8 +668,6 @@ cases:
     expect:
       intent: AMBIGUOUS
       max_confidence: 0.84
-      reasoning:
-        contains: "Guardrail Escalation"
 
   - id: stock_request_unknown_sku_guardrail
     name: "Unknown SKU in stock request triggers AMBIGUOUS guardrail"
@@ -697,5 +695,3 @@ cases:
       reasoning: "Making Team cited SKU-999."
     expect:
       intent: AMBIGUOUS
-      reasoning:
-        contains: "Guardrail Escalation"

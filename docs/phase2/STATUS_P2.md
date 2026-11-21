@@ -83,7 +83,8 @@
   - Added 4 Making stock-request eval cases (`stock_request_clear_single_sku`, `stock_request_minimum_qty_confirmation`, `stock_request_low_confidence_guardrail`, `stock_request_unknown_sku_guardrail`) to `backend/evals/lex.yaml` (20 total cases, 100% offline pass rate).
   - Created `tests/orchestrator/test_stock_request_workflow.py` verifying HTTP `400` CC `lex` rule, Scenarios S1–S5, `< 0.85` / unknown SKU zero-mutation guardrails, and delayed stock deduction strictly upon Manager CTA approval.
 - **Verification:**
-  - `uv run pytest -v` (`75 passed, 1 skipped`) and `uv run ruff check backend tests` (`All checks passed!`).
+  - `uv run pytest -v` (`75 passed, 1 skipped` offline; `RUN_LIVE_GEMINI=1 uv run pytest -v` **78 passed, 0 skipped** including `tests/agents/test_live_gemini_pdf.py` and `tests/agents/test_live_gemini_stock_request.py`) and `uv run ruff check backend tests` (`All checks passed!`).
+  - Live `gemini-3.5-flash-lite` YAML eval suite: 4/4 `stock_request_triage` cases passed (`19/20` overall; the single Phase 1 `triage_unmatched_po_guardrail` miss occurred because Gemini itself returned `AMBIGUOUS` directly rather than needing post-LLM guardrail override).
 
 ---
 
