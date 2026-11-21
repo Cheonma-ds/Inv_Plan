@@ -119,6 +119,9 @@ export function POTrackerPage({
 
   useEffect(() => {
     setShowEscalationModal(false);
+  }, [selectedPoId]);
+
+  useEffect(() => {
     if (selectedPoId !== null) {
       void loadDetail(selectedPoId);
     } else {
