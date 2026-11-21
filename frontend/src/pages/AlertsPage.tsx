@@ -64,6 +64,33 @@ function asOpenPos(v: unknown): OpenPoSummary[] | null {
     }));
 }
 
+function SupplierTermSuffix({
+  unitPrice,
+  effectiveLt,
+  moq,
+  reliability,
+}: {
+  unitPrice: number | null;
+  effectiveLt: number | null;
+  moq: number | null;
+  reliability?: number | null;
+}) {
+  return (
+    <>
+      {unitPrice !== null && (
+        <span className="text-[#6E6E73]"> @ {formatInr(unitPrice)}</span>
+      )}
+      {effectiveLt !== null && (
+        <span className="text-[#6E6E73]"> · {effectiveLt.toFixed(1)}d LT</span>
+      )}
+      {moq !== null && <span className="text-[#6E6E73]"> · MOQ {moq}</span>}
+      {reliability !== null && reliability !== undefined && (
+        <span className="text-[#6E6E73]"> · Rel {Math.round(reliability * 100)}%</span>
+      )}
+    </>
+  );
+}
+
 export function AlertsPage({
   refreshNonce,
   onMutated,
@@ -274,7 +301,9 @@ export function AlertsPage({
             const proposedEta = asString(payload.proposed_eta_date);
             const backupName = asString(payload.backup_supplier_name);
             const backupPrice = asNumber(payload.backup_unit_price);
-            const backupLt = asNumber(payload.backup_lead_time_days);
+            const backupLt =
+              asNumber(payload.backup_lead_time_days) ??
+              asNumber(payload.backup_effective_lt);
             const recRop = asNumber(payload.rop);
             const recS = asNumber(payload.replenishment_point);
 
@@ -467,27 +496,12 @@ export function AlertsPage({
                             {primarySupName && (
                               <span className="text-[#1D1D1F]"> via {primarySupName}</span>
                             )}
-                            {primaryUnitPrice !== null && (
-                              <span className="text-[#6E6E73]">
-                                {' '}
-                                @ {formatInr(primaryUnitPrice)}
-                              </span>
-                            )}
-                            {primaryEffLt !== null && (
-                              <span className="text-[#6E6E73]">
-                                {' '}
-                                · {primaryEffLt.toFixed(1)}d LT
-                              </span>
-                            )}
-                            {primaryMoq !== null && (
-                              <span className="text-[#6E6E73]"> · MOQ {primaryMoq}</span>
-                            )}
-                            {primaryReliability !== null && (
-                              <span className="text-[#6E6E73]">
-                                {' '}
-                                · Rel {Math.round(primaryReliability * 100)}%
-                              </span>
-                            )}
+                            <SupplierTermSuffix
+                              unitPrice={primaryUnitPrice}
+                              effectiveLt={primaryEffLt}
+                              moq={primaryMoq}
+                              reliability={primaryReliability}
+                            />
                           </div>
                         )}
                         {!willTriggerPo &&
@@ -497,21 +511,11 @@ export function AlertsPage({
                             <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
                               <span className="text-[#6E6E73]">Primary Supplier:</span>{' '}
                               <span className="font-semibold text-[#1D1D1F]">{primarySupName}</span>
-                              {primaryUnitPrice !== null && (
-                                <span className="text-[#6E6E73]">
-                                  {' '}
-                                  @ {formatInr(primaryUnitPrice)}
-                                </span>
-                              )}
-                              {primaryEffLt !== null && (
-                                <span className="text-[#6E6E73]">
-                                  {' '}
-                                  · {primaryEffLt.toFixed(1)}d LT
-                                </span>
-                              )}
-                              {primaryMoq !== null && (
-                                <span className="text-[#6E6E73]"> · MOQ {primaryMoq}</span>
-                              )}
+                              <SupplierTermSuffix
+                                unitPrice={primaryUnitPrice}
+                                effectiveLt={primaryEffLt}
+                                moq={primaryMoq}
+                              />
                             </div>
                           )}
                         {openPos !== null && (
@@ -720,7 +724,7 @@ export function AlertsPage({
                         const isSwitchOrPartial =
                           cta.action === 'switch_backup_supplier' ||
                           cta.action === 'issue_partial_stock';
-                        const draftAlreadySent =
+                        const draftUnavailable =
                           cta.action === 'ask_making_minimum' &&
                           draft !== null &&
                           draft.status !== 'DRAFT_PENDING_APPROVAL';
@@ -733,15 +737,21 @@ export function AlertsPage({
                               ? 'bg-white text-[#B82923] border-[#C9342D]/25 hover:bg-[#C9342D]/[0.07]'
                               : 'bg-white text-[#1D1D1F] border-black/[0.10] hover:bg-[#FBFBFD]';
 
+                        const buttonLabel = draftUnavailable
+                          ? draft.status === 'SENT'
+                            ? 'Min-Qty Inquiry Sent'
+                            : 'Draft Rejected'
+                          : cta.label;
+
                         return (
                           <button
                             key={cta.action}
                             type="button"
-                            disabled={isBusy || draftAlreadySent}
+                            disabled={isBusy || draftUnavailable}
                             onClick={() => void handleExecuteCta(item, cta.action, cta.label)}
                             className={`apple-press inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-1.5 text-xs font-semibold disabled:opacity-45 ${btnClass}`}
                           >
-                            {draftAlreadySent ? 'Min-Qty Inquiry Sent' : cta.label}
+                            {buttonLabel}
                           </button>
                         );
                       })}
