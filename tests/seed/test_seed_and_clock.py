@@ -110,6 +110,20 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
         assert closed_count == 36
         assert open_count == 2
 
+        # Verify distinct lifecycle timestamps and logistics metadata on seeded POs (Slice P2-3)
+        all_pos = session.scalars(select(PurchaseOrder)).all()
+        assert all(po.sent_at is None or po.created_at < po.sent_at for po in all_pos)
+        closed_pos = [po for po in all_pos if po.status == POStatus.CLOSED.value]
+        assert all(
+            po.acknowledged_at is not None
+            and po.promised_dispatch_date is not None
+            and po.actual_dispatch_date is not None
+            and po.carrier_name
+            and po.tracking_number
+            and po.closed_at is not None
+            for po in closed_pos
+        )
+
         # All Lex email categories locked to APPROVAL_REQUIRED in MVP
         policies = session.scalars(
             select(AutonomyPolicy).where(AutonomyPolicy.agent_name == "lex")

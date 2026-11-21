@@ -461,7 +461,7 @@ def test_fastapi_routes_http_end_to_end(seeded_session):
 
     autonomy_resp = client.get("/api/observability/autonomy?agent_name=lex")
     assert autonomy_resp.status_code == 200
-    assert len(autonomy_resp.json()) == 8
+    assert len(autonomy_resp.json()) == len(EmailCategory)
 
     # 4. Suppliers + memory note CRUD
     sup_resp = client.get("/api/suppliers")

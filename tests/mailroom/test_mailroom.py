@@ -321,3 +321,42 @@ def test_swappable_custom_email_transport_handles_all_mailroom_operations(db_ses
     )
     rejected = reject_draft(db_session, draft2.id, transport=mock_tx)
     assert rejected.status == CommStatus.REJECTED.value
+
+
+def test_making_and_procurement_personas_mailroom_routing(seeded_session):
+    making_msg = send_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.MAKING,
+            to_personas=[PersonaKey.INVENTORY_MANAGER],
+            cc_personas=[PersonaKey.LEX],
+            subject="Need 5 units of SKU-001",
+            body="Line 1 needs 5 spindle bearings.",
+        ),
+    )
+    assert making_msg.direction == CommDirection.INBOUND.value
+    assert making_msg.status == CommStatus.RECEIVED.value
+    mgr_inbox = list_inbox(seeded_session, PersonaKey.INVENTORY_MANAGER.value)
+    assert any(m.id == making_msg.id for m in mgr_inbox)
+    assert any(m.id == making_msg.id for m in list_inbox(seeded_session, PersonaKey.LEX.value))
+    assert any(m.id == making_msg.id for m in list_sent(seeded_session, PersonaKey.MAKING.value))
+
+    proc_msg = send_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.INVENTORY_MANAGER,
+            to_personas=[PersonaKey.PROCUREMENT],
+            cc_personas=[PersonaKey.LEX],
+            subject="Escalation: PO-1038",
+            body="Supplier unresponsive; please intervene.",
+        ),
+    )
+    assert proc_msg.direction == CommDirection.OUTBOUND.value
+    assert proc_msg.status == CommStatus.SENT.value
+    assert any(
+        m.id == proc_msg.id for m in list_inbox(seeded_session, PersonaKey.PROCUREMENT.value)
+    )
+    assert any(
+        m.id == proc_msg.id for m in list_sent(seeded_session, PersonaKey.INVENTORY_MANAGER.value)
+    )
+

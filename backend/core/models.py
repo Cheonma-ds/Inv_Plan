@@ -139,6 +139,31 @@ class PurchaseOrder(Base):
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    promised_dispatch_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    actual_dispatch_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    carrier_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tracking_number: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    dispatch_details_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NONE"
+    )
+    dispatch_details_due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    missing_dispatch_fields_json: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    escalated_to_procurement_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    procurement_escalation_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     promised_eta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revised_eta: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     follow_up_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -301,3 +326,25 @@ class AutonomyPolicy(Base):
     approved_edited_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rejected_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class StockRequest(Base):
+    __tablename__ = "stock_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    comm_id: Mapped[int] = mapped_column(
+        ForeignKey("po_communications.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    part_id: Mapped[int] = mapped_column(
+        ForeignKey("parts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requested_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PENDING_REVIEW", index=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    analysis_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

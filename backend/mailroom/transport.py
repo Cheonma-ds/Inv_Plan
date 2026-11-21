@@ -10,6 +10,7 @@ from backend.core.models import POCommunication
 from backend.mailroom.schemas import OutboundMessage, StoredEmail
 
 SUPPLIER_PERSONAS = {PersonaKey.SUP1.value, PersonaKey.SUP2.value, PersonaKey.SUP3.value}
+INBOUND_PERSONAS = SUPPLIER_PERSONAS | {PersonaKey.MAKING.value}
 DELIVERED_STATUSES = (CommStatus.SENT.value, CommStatus.RECEIVED.value)
 
 
@@ -92,7 +93,7 @@ class EmailTransport(Protocol):
 
 
 class DatabaseEmailTransport:
-    """Built-in 5-persona DB-backed EmailTransport synced to SimulatedClock."""
+    """Built-in 7-persona DB-backed EmailTransport synced to SimulatedClock."""
 
     def send(
         self,
@@ -107,9 +108,9 @@ class DatabaseEmailTransport:
                 "Lex emails must be generated as drafts and approved by InventoryManager."
             )
 
-        is_supplier = msg.from_persona.value in SUPPLIER_PERSONAS
-        direction = CommDirection.INBOUND.value if is_supplier else CommDirection.OUTBOUND.value
-        status = CommStatus.RECEIVED.value if is_supplier else CommStatus.SENT.value
+        is_inbound = msg.from_persona.value in INBOUND_PERSONAS
+        direction = CommDirection.INBOUND.value if is_inbound else CommDirection.OUTBOUND.value
+        status = CommStatus.RECEIVED.value if is_inbound else CommStatus.SENT.value
         thread_id = msg.thread_id or f"thr-{uuid.uuid4().hex[:12]}"
 
         row = POCommunication(

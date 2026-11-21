@@ -9,6 +9,7 @@ from backend.core.db import Base
 from backend.core.enums import (
     AutonomyMode,
     Criticality,
+    DispatchDetailsStatus,
     EmailCategory,
     GRNStatus,
     InventoryTxType,
@@ -595,8 +596,16 @@ def seed_database(session: Session, *, reset: bool = False) -> dict[str, int]:
                 had_invoice_mismatch = idx == 9  # 1/12 mismatched v1 invoice
 
             delivered_at = promised_eta + timedelta(days=actual_delta)
+            ack_delay_hours = 6 if sup_key == PersonaKey.SUP1.value else 18
+            acknowledged_at = sent_at + timedelta(hours=ack_delay_hours)
+            promised_dispatch = promised_eta - timedelta(days=3)
+            actual_dispatch = delivered_at - timedelta(days=3)
+            carrier_options = ("BlueDart", "Delhivery", "DTDC")
+            carrier_name = carrier_options[idx % len(carrier_options)]
+            carrier_prefix = {"BlueDart": "BD", "Delhivery": "DLV", "DTDC": "DT"}[carrier_name]
             order_qty = max(spec.primary_moq, spec.replenishment_point - spec.rop)
             po_num = f"PO-{po_counter}"
+            tracking_number = f"{carrier_prefix}-{po_counter * 97}"
             po_counter += 1
 
             po = PurchaseOrder(
@@ -609,6 +618,13 @@ def seed_database(session: Session, *, reset: bool = False) -> dict[str, int]:
                 notes="Historical completed PO (seeded).",
                 created_at=created_at,
                 sent_at=sent_at,
+                acknowledged_at=acknowledged_at,
+                promised_dispatch_date=promised_dispatch,
+                actual_dispatch_date=actual_dispatch,
+                carrier_name=carrier_name,
+                tracking_number=tracking_number,
+                dispatch_details_status=DispatchDetailsStatus.COMPLETE.value,
+                closed_at=delivered_at + timedelta(hours=2),
                 promised_eta=promised_eta,
                 revised_eta=None,
                 follow_up_count=follow_ups,
@@ -699,8 +715,13 @@ def seed_database(session: Session, *, reset: bool = False) -> dict[str, int]:
             unit_price=1450.0,
             status=POStatus.ACKNOWLEDGED.value,
             notes="Acknowledged by Apex Precision; ETA in 4 days.",
-            created_at=sim_now - timedelta(days=6),
+            created_at=sim_now - timedelta(days=6, hours=3),
             sent_at=sim_now - timedelta(days=6),
+            acknowledged_at=sim_now - timedelta(days=5, hours=18),
+            promised_dispatch_date=sim_now + timedelta(days=1),
+            carrier_name="BlueDart",
+            tracking_number="BD-440192",
+            dispatch_details_status=DispatchDetailsStatus.COMPLETE.value,
             promised_eta=sim_now + timedelta(days=4),
             follow_up_count=0,
             pre_eta_checked=False,
@@ -713,7 +734,7 @@ def seed_database(session: Session, *, reset: bool = False) -> dict[str, int]:
             unit_price=780.0,
             status=POStatus.SENT_AWAITING_ACK.value,
             notes="Dispatched to Deccan Electro-Spares 24h ago; awaiting acknowledgement.",
-            created_at=sim_now - timedelta(days=1),
+            created_at=sim_now - timedelta(days=1, hours=2),
             sent_at=sim_now - timedelta(days=1),
             promised_eta=None,
             follow_up_count=0,

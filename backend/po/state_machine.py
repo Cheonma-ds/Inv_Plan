@@ -97,6 +97,12 @@ def transition_po(
     if target_enum == POStatus.SENT_AWAITING_ACK and po.sent_at is None:
         po.sent_at = sim_now
 
+    if target_enum == POStatus.ACKNOWLEDGED and po.acknowledged_at is None:
+        po.acknowledged_at = sim_now
+
+    if target_enum == POStatus.CLOSED and po.closed_at is None:
+        po.closed_at = sim_now
+
     # Original promised_eta is immutable once set so OTD scoring stays truthful.
     if promised_eta is not None and po.promised_eta is None:
         po.promised_eta = clock.ensure_utc(promised_eta)

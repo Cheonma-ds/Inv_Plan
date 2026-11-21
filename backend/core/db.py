@@ -40,8 +40,11 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 def init_db(target_engine: Engine | None = None) -> None:
     # Ensure all ORM models are registered on Base.metadata before create_all.
     import backend.core.models  # noqa: F401
+    from backend.core.migrations import ensure_schema_migrations
 
-    Base.metadata.create_all(bind=target_engine or engine)
+    effective_engine = target_engine or engine
+    Base.metadata.create_all(bind=effective_engine)
+    ensure_schema_migrations(effective_engine)
 
 
 def get_session() -> Generator[Session, None, None]:
