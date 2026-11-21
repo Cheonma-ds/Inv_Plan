@@ -60,6 +60,12 @@ from backend.mailroom import (
 from backend.mailroom.transport import SUPPLIER_PERSONAS
 from backend.observability import record_approval_outcome
 from backend.orchestrator.sla_watcher import SLAEvent, auto_resolve_po_alerts, run_sla_watcher
+from backend.orchestrator.stock_request_workflow import (
+    STOCK_REQUEST_CTA_ACTIONS,
+    execute_stock_request_cta,
+    mark_stock_requests_awaiting_min_qty,
+    process_inbound_making_email,
+)
 from backend.planning import (
     compute_demand_forecast,
     evaluate_part_recommendation,
@@ -334,6 +340,8 @@ class WorkflowEngine:
         recipients = set(stored.to_personas) | set(stored.cc_personas)
         if stored.from_persona in SUPPLIER_PERSONAS and PersonaKey.LEX.value in recipients:
             triage_outcome = self.process_inbound_supplier_email(session, stored)
+        elif stored.from_persona == PersonaKey.MAKING.value and PersonaKey.LEX.value in recipients:
+            triage_outcome = process_inbound_making_email(session, self, stored)
 
         return {
             "email": stored,
@@ -1471,6 +1479,9 @@ class WorkflowEngine:
         for item in open_items:
             resolve_action_item(session, item.id)
 
+        if sent_email.category == EmailCategory.STOCK_REQUEST_CLARIFICATION.value:
+            mark_stock_requests_awaiting_min_qty(session, sent_email.thread_id)
+
         session.flush()
         return {
             "email": sent_email,
@@ -1868,5 +1879,14 @@ class WorkflowEngine:
             if params.get("resolve", True):
                 resolve_action_item(session, item.id)
             return {"po_id": po_id, "note_added": bool(note_text)}
+
+        if action in STOCK_REQUEST_CTA_ACTIONS:
+            return execute_stock_request_cta(
+                session,
+                self,
+                item,
+                action=action,
+                params=params,
+            )
 
         raise ValueError(f"Unsupported alert CTA action: '{action}'")

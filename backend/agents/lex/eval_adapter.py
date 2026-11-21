@@ -5,7 +5,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.agents.lex.agent import LexAgent
-from backend.agents.lex.schemas import EmailDraftInput, EmailTriageInput
+from backend.agents.lex.schemas import (
+    EmailDraftInput,
+    EmailTriageInput,
+    StockRequestTriageInput,
+)
 from backend.agents.llm_client import GeminiLLMClient, LLMClientProtocol, LLMResult
 from backend.core.config import settings
 
@@ -197,5 +201,9 @@ class LexEvalExecutor:
         if task == "email_draft":
             draft_input = EmailDraftInput.model_validate(case_input)
             return lex.draft_email(session, draft_input).model_dump(mode="json")
+
+        if task == "stock_request_triage":
+            sr_input = StockRequestTriageInput.model_validate(case_input)
+            return lex.triage_stock_request(session, sr_input).model_dump(mode="json")
 
         raise ValueError(f"Unsupported Lex eval task '{task}'.")

@@ -9,6 +9,12 @@ from backend.agents.lex.schemas import (
     InvoiceExtractionResult,
     InvoiceLineItem,
     OpenPOContext,
+    PendingStockRequestContext,
+    StockPartContext,
+    StockRequestIntent,
+    StockRequestItem,
+    StockRequestTriageInput,
+    StockRequestTriageResult,
     ThreadMessageContext,
 )
 
@@ -24,5 +30,11 @@ __all__ = [
     "LexAgent",
     "LexEvalExecutor",
     "OpenPOContext",
+    "PendingStockRequestContext",
+    "StockPartContext",
+    "StockRequestIntent",
+    "StockRequestItem",
+    "StockRequestTriageInput",
+    "StockRequestTriageResult",
     "ThreadMessageContext",
 ]

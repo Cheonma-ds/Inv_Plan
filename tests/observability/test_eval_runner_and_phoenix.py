@@ -142,7 +142,8 @@ cases:
 def test_lex_yaml_suite_runs_cleanly_offline_and_logs_traces(seeded_session) -> None:
     suite_path = PROJECT_ROOT / "backend" / "evals" / "lex.yaml"
     suite = load_eval_suite(suite_path)
-    assert len(suite.cases) == 16
+    expected_count = len(suite.cases)
+    assert expected_count >= 20
 
     report = run_eval_suite(
         seeded_session,
@@ -155,14 +156,19 @@ def test_lex_yaml_suite_runs_cleanly_offline_and_logs_traces(seeded_session) -> 
 
     failures = [f"{r.id}: {r.reason}" for r in report.results if not r.passed]
     assert not failures, "Lex offline eval failures:\n" + "\n".join(failures)
-    assert report.total_cases == 16
-    assert report.passed_cases == 16
+    assert report.total_cases == expected_count
+    assert report.passed_cases == expected_count
     assert report.pass_rate == 100.0
 
-    traces = list_traces(seeded_session, agent_name="lex", limit=50)
-    assert len(traces) == 16
+    traces = list_traces(seeded_session, agent_name="lex", limit=100)
+    assert len(traces) == expected_count
     task_types = {t.task_type for t in traces}
-    assert task_types == {"email_triage", "invoice_extraction", "email_draft"}
+    assert {
+        "email_triage",
+        "invoice_extraction",
+        "email_draft",
+        "stock_request_triage",
+    }.issubset(task_types)
 
 
 def test_phoenix_tracing_disabled_and_enabled_hooks(seeded_session, monkeypatch) -> None:

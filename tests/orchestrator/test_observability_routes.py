@@ -68,7 +68,8 @@ def test_observability_status_traces_and_eval_endpoints(seeded_session) -> None:
 
         suite_res = client.get("/api/evals/lex/suite")
         assert suite_res.status_code == 200
-        assert suite_res.json()["total_cases"] == 16
+        expected_cases = suite_res.json()["total_cases"]
+        assert expected_cases >= 20
 
         missing_res = client.get("/api/evals/unknown_agent/suite")
         assert missing_res.status_code == 404
@@ -78,8 +79,8 @@ def test_observability_status_traces_and_eval_endpoints(seeded_session) -> None:
         run_data = run_res.json()
         assert run_data["agent_name"] == "lex"
         assert run_data["mode"] == "offline"
-        assert run_data["total_cases"] == 16
-        assert run_data["passed_cases"] == 16
+        assert run_data["total_cases"] == expected_cases
+        assert run_data["passed_cases"] == expected_cases
         assert run_data["pass_rate"] == 100.0
 
         history_res = client.get("/api/evals/lex/run")
@@ -91,7 +92,7 @@ def test_observability_status_traces_and_eval_endpoints(seeded_session) -> None:
         traces_res = client.get("/api/observability/traces?agent_name=lex&limit=50")
         assert traces_res.status_code == 200
         traces = traces_res.json()
-        assert len(traces) == 16
+        assert len(traces) == expected_cases
         assert "human_feedback" in traces[0]
 
         filtered_traces = client.get("/api/observability/traces?task_type=invoice_extraction")

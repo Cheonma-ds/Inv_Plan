@@ -120,11 +120,11 @@ class InvoiceExtractionResult(BaseModel):
 
 class EmailDraftInput(BaseModel):
     category: EmailCategory
-    po_number: str
+    po_number: str = ""
     part_sku: str
     part_name: str
     qty: int
-    unit_price: float
+    unit_price: float = 0.0
     recipient_persona: str
     recipient_name: str
     current_date: str
@@ -138,3 +138,50 @@ class EmailDraftResult(BaseModel):
     cc_personas: list[str]
     subject: str
     body: str
+
+
+class StockRequestIntent(StrEnum):
+    STOCK_REQUEST = "STOCK_REQUEST"
+    MINIMUM_QTY_CONFIRMATION = "MINIMUM_QTY_CONFIRMATION"
+    GENERAL_MESSAGE = "GENERAL_MESSAGE"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+class StockRequestItem(BaseModel):
+    part_sku: str | None = None
+    part_name: str | None = None
+    requested_qty: int | None = None
+
+
+class StockPartContext(BaseModel):
+    part_sku: str
+    part_name: str
+    criticality: str
+
+
+class PendingStockRequestContext(BaseModel):
+    part_sku: str
+    part_name: str
+    requested_qty: int
+    status: str
+
+
+class StockRequestTriageInput(BaseModel):
+    sender_persona: str = "making"
+    sender_name: str = "Making Team"
+    subject: str
+    body: str
+    current_date: str
+    catalog_parts: list[StockPartContext] = Field(default_factory=list)
+    thread_history: list[ThreadMessageContext] = Field(default_factory=list)
+    pending_requests: list[PendingStockRequestContext] = Field(default_factory=list)
+
+
+class StockRequestTriageResult(BaseModel):
+    intent: StockRequestIntent
+    confidence: float = Field(ge=0.0, le=1.0)
+    requested_items: list[StockRequestItem] = Field(default_factory=list)
+    urgency_note: str | None = None
+    summary_for_manager: str
+    suggested_action: str
+    reasoning: str

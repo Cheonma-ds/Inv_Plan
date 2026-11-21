@@ -15,7 +15,10 @@ from backend.agents.lex.schemas import (
     EmailTriageInput,
     EmailTriageResult,
     InvoiceExtractionResult,
+    StockRequestTriageInput,
+    StockRequestTriageResult,
 )
+from backend.agents.lex.stock_request import run_stock_request_triage
 from backend.agents.llm_client import GeminiLLMClient, LLMClientProtocol
 from backend.core.enums import PersonaKey
 from backend.observability.tracer import AgentTracer
@@ -106,6 +109,22 @@ class LexAgent(BaseAgent):
 
         return result
 
+    def triage_stock_request(
+        self,
+        session: Session,
+        triage_input: StockRequestTriageInput,
+        *,
+        linked_comm_id: int | None = None,
+    ) -> StockRequestTriageResult:
+        return run_stock_request_triage(
+            session,
+            llm=self.llm,
+            agent_name=self.agent_name,
+            triage_input=triage_input,
+            confidence_threshold=CONFIDENCE_THRESHOLD,
+            linked_comm_id=linked_comm_id,
+        )
+
     def draft_email(
         self,
         session: Session,
@@ -114,7 +133,8 @@ class LexAgent(BaseAgent):
         linked_po_id: int | None = None,
     ) -> EmailDraftResult:
         prompt = json.dumps(draft_input.model_dump(mode="json"), indent=2)
-        trigger = f"Draft {draft_input.category.value} for {draft_input.po_number}"
+        ref = draft_input.po_number.strip() or draft_input.part_sku
+        trigger = f"Draft {draft_input.category.value} for {ref}"
 
         with AgentTracer.span(
             session,
@@ -125,7 +145,7 @@ class LexAgent(BaseAgent):
             linked_entity_id=linked_po_id,
         ) as span:
             span.input_summary = (
-                f"Category={draft_input.category.value} | PO={draft_input.po_number} | "
+                f"Category={draft_input.category.value} | Ref={ref} | "
                 f"To={draft_input.recipient_persona}"
             )
             span.raw_prompt = prompt
@@ -138,7 +158,7 @@ class LexAgent(BaseAgent):
             )
             result = llm_res.parsed
 
-            # Sanitize recipients & enforce manager visibility CC on supplier messages
+            # Sanitize recipients & enforce manager visibility CC on supplier/making messages
             clean_to = [p for p in result.to_personas if p in VALID_PERSONA_VALUES]
             if not clean_to:
                 clean_to = [draft_input.recipient_persona]
@@ -155,8 +175,11 @@ class LexAgent(BaseAgent):
                 clean_cc.append(PersonaKey.INVENTORY_MANAGER.value)
 
             subject = result.subject.strip()
-            if draft_input.po_number not in subject:
-                subject = f"[{draft_input.po_number}] {subject}"
+            po_ref = draft_input.po_number.strip()
+            if po_ref and po_ref.upper() != "N/A" and po_ref not in subject:
+                subject = f"[{po_ref}] {subject}"
+            elif not po_ref and draft_input.part_sku and draft_input.part_sku not in subject:
+                subject = f"[{draft_input.part_sku}] {subject}"
 
             result = result.model_copy(
                 update={

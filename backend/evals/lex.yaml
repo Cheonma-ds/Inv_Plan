@@ -559,3 +559,143 @@ cases:
           - "we agree to extra expedite fee"
           - "waive all penalties"
           - "approved extra surcharge"
+
+  # ---------------------------------------------------------------------------
+  # 4. Making Team Stock Request Triage Cases
+  # ---------------------------------------------------------------------------
+  - id: stock_request_clear_single_sku
+    name: "Making Team clearly requests SKU-001 quantity"
+    task: stock_request_triage
+    tags: [stock_request, making]
+    input:
+      sender_persona: making
+      sender_name: Making Team
+      subject: "Need Precision Ball Bearing 6205 for Spindle Assembly"
+      body: "Hi Inventory team, please issue 2 units of SKU-001 (Precision Ball Bearing 6205) for Spindle Assembly #3 today."
+      current_date: "2026-11-20"
+      catalog_parts:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          criticality: CRITICAL
+        - part_sku: SKU-004
+          part_name: High-Tensile Hex Bolt M12
+          criticality: STANDARD
+    mock_response:
+      intent: STOCK_REQUEST
+      confidence: 0.96
+      requested_items:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          requested_qty: 2
+      urgency_note: "Needed today for Spindle Assembly #3"
+      summary_for_manager: "Making Team requested 2 units of SKU-001 (Precision Ball Bearing 6205) for Spindle Assembly #3."
+      suggested_action: "Review stock availability and approve withdrawal if sufficient."
+      reasoning: "Explicit SKU-001 and quantity 2 requested by Making Team."
+    expect:
+      intent: STOCK_REQUEST
+      requested_items.0.part_sku: SKU-001
+      requested_items.0.requested_qty: 2
+      min_confidence: 0.85
+
+  - id: stock_request_minimum_qty_confirmation
+    name: "Making Team replies with minimum needed quantity on shortage thread"
+    task: stock_request_triage
+    tags: [stock_request, min_qty]
+    input:
+      sender_persona: making
+      sender_name: Making Team
+      subject: "Re: [SKU-001] Clarification on Minimum Quantity Needed"
+      body: "We can manage with minimum 2 units right now until the open PO arrives."
+      current_date: "2026-11-20"
+      catalog_parts:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          criticality: CRITICAL
+      pending_requests:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          requested_qty: 10
+          status: AWAITING_MIN_QTY
+      thread_history:
+        - from_persona: making
+          subject: "Need 10 units SKU-001"
+          body: "Please issue 10 units of SKU-001."
+          timestamp: "2026-11-20T09:00:00+00:00"
+    mock_response:
+      intent: MINIMUM_QTY_CONFIRMATION
+      confidence: 0.95
+      requested_items:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          requested_qty: 2
+      urgency_note: "Bridge until open PO arrives"
+      summary_for_manager: "Making Team confirmed minimum 2 units of SKU-001 are needed right now."
+      suggested_action: "Approve and issue 2 units of SKU-001."
+      reasoning: "Reply specifies minimum 2 units for pending SKU-001 request."
+    expect:
+      intent: MINIMUM_QTY_CONFIRMATION
+      requested_items.0.part_sku: SKU-001
+      requested_items.0.requested_qty: 2
+      min_confidence: 0.85
+
+  - id: stock_request_low_confidence_guardrail
+    name: "Vague stock request (< 0.85 confidence) escalates to AMBIGUOUS"
+    task: stock_request_triage
+    tags: [stock_request, guardrail, ambiguous]
+    input:
+      sender_persona: making
+      sender_name: Making Team
+      subject: "Need some parts soon"
+      body: "Hey, send over maybe 4 or 5 bearings or bolts whenever you get a chance."
+      current_date: "2026-11-20"
+      catalog_parts:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          criticality: CRITICAL
+        - part_sku: SKU-004
+          part_name: High-Tensile Hex Bolt M12
+          criticality: STANDARD
+    mock_response:
+      intent: STOCK_REQUEST
+      confidence: 0.61
+      requested_items:
+        - part_sku: null
+          part_name: bearings or bolts
+          requested_qty: 4
+      summary_for_manager: "Vague stock request from Making Team without a specific SKU or firm quantity."
+      suggested_action: "Escalate for manual Inventory Manager review."
+      reasoning: "Ambiguous part description and uncertain quantity."
+    expect:
+      intent: AMBIGUOUS
+      max_confidence: 0.84
+      reasoning:
+        contains: "Guardrail Escalation"
+
+  - id: stock_request_unknown_sku_guardrail
+    name: "Unknown SKU in stock request triggers AMBIGUOUS guardrail"
+    task: stock_request_triage
+    tags: [stock_request, guardrail, ambiguous]
+    input:
+      sender_persona: making
+      sender_name: Making Team
+      subject: "Request for SKU-999"
+      body: "Please issue 5 units of SKU-999 immediately."
+      current_date: "2026-11-20"
+      catalog_parts:
+        - part_sku: SKU-001
+          part_name: Precision Ball Bearing 6205
+          criticality: CRITICAL
+    mock_response:
+      intent: STOCK_REQUEST
+      confidence: 0.92
+      requested_items:
+        - part_sku: SKU-999
+          part_name: Unknown Part
+          requested_qty: 5
+      summary_for_manager: "Making Team requested 5 units of SKU-999, which is not in the catalog."
+      suggested_action: "Verify part SKU with Making Team."
+      reasoning: "Making Team cited SKU-999."
+    expect:
+      intent: AMBIGUOUS
+      reasoning:
+        contains: "Guardrail Escalation"

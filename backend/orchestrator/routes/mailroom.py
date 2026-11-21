@@ -94,6 +94,17 @@ async def send_email_endpoint(
             status_code=400, detail="At least one recipient in to_personas is required."
         )
 
+    if (
+        sender == PersonaKey.MAKING
+        and PersonaKey.INVENTORY_MANAGER in to_list
+        and PersonaKey.LEX not in to_list
+        and PersonaKey.LEX not in cc_list
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Making Team emails to Inventory Manager must include 'lex' in To or CC.",
+        )
+
     attachment_path: str | None = None
     if attachment is not None and attachment.filename:
         raw_bytes = await attachment.read()

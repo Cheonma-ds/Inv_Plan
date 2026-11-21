@@ -1,6 +1,6 @@
 # STATUS_P2.md — Phase 2 Live Session Baton
 
-**Current Stage:** Slices P2-1, P2-2 & P2-3 Complete (Ready for **Slice P2-4** or **Slice P2-6**)  
+**Current Stage:** Slices P2-1, P2-2, P2-3 & P2-4 Complete (Ready for **Slice P2-5** or **Slice P2-6**)  
 **Last Updated:** 2026-11-21  
 **Baseline Reference:** Phase 1 MVP Complete (Slices 1–5 in [`STATUS.md`](../../STATUS.md))  
 **Planning Docs:** [`PRD_P2.md`](PRD_P2.md) · [`DESIGN_P2.md`](DESIGN_P2.md) · [`SLICES_P2.md`](SLICES_P2.md)
@@ -12,7 +12,7 @@
 - [x] **Slice P2-1:** Apple HIG Design System, Calm Palette, Smooth Animations & Wider Horizontal Layout
 - [x] **Slice P2-2:** Universal `DataTable` (Dual-Axis Scroll, Frozen Title Case Headers, Zero-Icon Hover Tooltips, Resizable Columns)
 - [x] **Slice P2-3:** Backend Core Schema, Idempotent SQLite Migrations, 7 Personas (`making`, `procurement`) & PO Logistics Fields + Seed Fix
-- [ ] **Slice P2-4:** Backend Making-Team Stock Request Pipeline & Lex Analysis
+- [x] **Slice P2-4:** Backend Making-Team Stock Request Pipeline & Lex Analysis
 - [ ] **Slice P2-5:** Frontend 7-Persona Mailroom, Remove `Withdraw` from Inventory & Stock-Request Alerts
 - [ ] **Slice P2-6:** Backend PO Logistics Triage, 2-Day Deferred SLA, Mandatory Lex Action Alerts & Procurement Escalation
 - [ ] **Slice P2-7:** Frontend Horizontal Order Tracking Stepper, Logistics Card & `Escalate to Procurement` UI
@@ -70,12 +70,27 @@
   - Updated `tests/orchestrator/test_workflows_and_sla.py` (`len(autonomy_resp.json()) == len(EmailCategory)` instead of hardcoded `8`, matching `tests/seed/test_seed_and_clock.py`).
   - Verified with `uv run pytest -v` (`69 passed, 1 skipped`) and `uv run ruff check backend tests` (`All checks passed!`).
 
+### Slice P2-4 — Backend Making-Team Stock Request Pipeline & Lex Analysis
+- **Lex Schemas, Prompts & Helper (`backend/agents/lex/schemas.py`, `backend/agents/lex/prompts.py`, `backend/agents/lex/stock_request.py`, `backend/agents/lex/agent.py`, `backend/agents/lex/__init__.py`, `backend/agents/lex/eval_adapter.py`):**
+  - Added flat JSON-schema-safe `StockRequestIntent`, `StockRequestItem`, `StockPartContext`, `PendingStockRequestContext`, `StockRequestTriageInput`, and `StockRequestTriageResult`, plus `STOCK_REQUEST_TRIAGE_PROMPT` and drafting guidance for `STOCK_REQUEST_CLARIFICATION` / `STOCK_REQUEST_RESPONSE`.
+  - Created `backend/agents/lex/stock_request.py` implementing `run_stock_request_triage()` with `AgentTracer.span(..., task_type="stock_request_triage")` and `< 0.85` confidence / missing-qty / unknown-or-ambiguous-SKU escalation guardrails.
+  - Exposed `LexAgent.triage_stock_request()`, updated `LexAgent.draft_email()` subject handling when `po_number` is empty, and added `stock_request_triage` execution in `LexEvalExecutor`.
+- **Orchestrator Stock-Request Workflow & Mailroom Validation (`backend/orchestrator/stock_request_workflow.py`, `backend/orchestrator/workflows.py`, `backend/orchestrator/routes/mailroom.py`):**
+  - Created `backend/orchestrator/stock_request_workflow.py` handling Making-team inbound email & `MINIMUM_QTY_CONFIRMATION` triage, deterministic `PartSnapshot` + active open PO + primary/backup supplier + ROP impact analysis, `StockRequest` lifecycle, Scenarios S1–S5 alerts and `DRAFT_PENDING_APPROVAL` clarification drafts with zero premature stock deduction, and Manager CTAs (`approve_stock_withdrawal`, `issue_partial_stock`, `ask_making_minimum`, `reject_stock_request`).
+  - Added `400 Bad Request` enforcement in `POST /api/mailroom/send` (`backend/orchestrator/routes/mailroom.py`) when `from_persona == "making"` sends to `"inventory_manager"` without `"lex"` in To/CC.
+  - Wired thin delegations in `backend/orchestrator/workflows.py` (`send_mailroom_email`, `approve_lex_draft`, `execute_alert_cta`) preserving all Phase 1 signatures.
+- **Evals & Tests (`backend/evals/lex.yaml`, `tests/orchestrator/test_stock_request_workflow.py`, `tests/observability/test_eval_runner_and_phoenix.py`, `tests/orchestrator/test_observability_routes.py`):**
+  - Added 4 Making stock-request eval cases (`stock_request_clear_single_sku`, `stock_request_minimum_qty_confirmation`, `stock_request_low_confidence_guardrail`, `stock_request_unknown_sku_guardrail`) to `backend/evals/lex.yaml` (20 total cases, 100% offline pass rate).
+  - Created `tests/orchestrator/test_stock_request_workflow.py` verifying HTTP `400` CC `lex` rule, Scenarios S1–S5, `< 0.85` / unknown SKU zero-mutation guardrails, and delayed stock deduction strictly upon Manager CTA approval.
+- **Verification:**
+  - `uv run pytest -v` (`75 passed, 1 skipped`) and `uv run ruff check backend tests` (`All checks passed!`).
+
 ---
 
 ## Next Slice Options
-- **Backend Stock-Request Track (`Slice P2-4`):** Making-team stock request triage, deterministic stock/PO analysis, and Manager approval CTAs.
-  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §4.3`, `docs/phase2/DESIGN_P2.md §4.2`, `docs/phase2/SLICES_P2.md` (`Slice P2-4`).
-  - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`, `backend/po/matching.py`, `backend/orchestrator/sla_watcher.py`.
+- **Frontend Stock-Request & 7-Persona Mailroom Track (`Slice P2-5`):** 7-persona Mailroom UI, remove `Withdraw` from `InventoryPage.tsx`, and render Stock-Request alerts/CTAs in `AlertsPage.tsx`.
+  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §4`, `docs/phase2/SLICES_P2.md` (`Slice P2-5`).
+  - **Leave Untouched:** `backend/`, `POTrackerPage.tsx`, `SuppliersPlanningPage.tsx`, `AIHealthPage.tsx`.
 - **Backend PO Logistics Track (`Slice P2-6`):** PO logistics triage, 2-day deferred SLA, mandatory Lex action alerts, and Procurement escalation.
   - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §5`, `docs/phase2/DESIGN_P2.md §4.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-6`).
   - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`.
@@ -88,3 +103,4 @@
 | Slice | Original Plan Reference | Discrepancy / Proof | Resolution Implemented |
 |---|---|---|---|
 | P2-3 | `SLICES_P2.md` (`Slice P2-3` existing files) | `tests/orchestrator/test_workflows_and_sla.py:464` asserted `len(autonomy_resp.json()) == 8` (hardcoded Phase 1 `EmailCategory` count), failing once 5 new `EmailCategory` values were added (`13 == 8`). | Replaced hardcoded `8` with `len(EmailCategory)` (matching `tests/seed/test_seed_and_clock.py:117`). |
+| P2-4 | `SLICES_P2.md` (`Slice P2-4` existing files) | `tests/observability/test_eval_runner_and_phoenix.py` and `tests/orchestrator/test_observability_routes.py` hardcoded Phase 1 `lex.yaml` count (`16`) and task-type set, failing once 4 `stock_request_triage` eval cases were added (`20 == 16`). | Updated both test files to assert dynamically against `len(suite.cases)` (`>= 20`) and include `stock_request_triage` in expected task types. |
