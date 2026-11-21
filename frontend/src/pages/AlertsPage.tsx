@@ -162,23 +162,23 @@ export function AlertsPage({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Actionable Alerts</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Actionable Alerts</h1>
+          <p className="text-sm text-[#6E6E73]">
             Urgency-ranked exceptions, Lex draft approvals, and 1-click operational CTAs.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+        <div className="flex items-center gap-2.5">
+          <div className="inline-flex rounded-full border border-black/[0.08] bg-white/90 p-1 shadow-2xs">
             {(['OPEN', 'RESOLVED', 'DISMISSED', 'ALL'] as const).map((tab) => (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setFilter(tab)}
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+                className={`apple-press rounded-full px-3.5 py-1 text-xs font-semibold ${
                   filter === tab
-                    ? 'bg-slate-900 text-white'
-                    : 'text-slate-600 hover:bg-slate-100'
+                    ? 'bg-[#0066CC] text-white shadow-2xs'
+                    : 'text-[#6E6E73] hover:bg-black/[0.04] hover:text-[#1D1D1F]'
                 }`}
               >
                 {tab}
@@ -189,25 +189,25 @@ export function AlertsPage({
           <button
             type="button"
             onClick={() => void loadAlerts()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            className="apple-press inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD] shadow-2xs"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 text-[#6E6E73] ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
       </div>
 
       {loading && alerts.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+        <div className="apple-card rounded-2xl p-8 text-center text-sm text-[#6E6E73]">
           Loading alerts...
         </div>
       ) : alerts.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
-          <Check className="mx-auto h-8 w-8 text-emerald-500" />
-          <h2 className="mt-2 text-sm font-semibold text-slate-900">
+        <div className="apple-card rounded-2xl border-dashed p-10 text-center">
+          <Check className="mx-auto h-8 w-8 text-[#1B6B43]" />
+          <h2 className="mt-2 text-sm font-semibold text-[#1D1D1F]">
             No {filter.toLowerCase()} alerts
           </h2>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-[#6E6E73]">
             Advance the simulated clock, withdraw stock, or trigger a supplier email to see alerts here.
           </p>
         </div>
@@ -254,13 +254,13 @@ export function AlertsPage({
             return (
               <article
                 key={item.id}
-                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300"
+                className="apple-card rounded-2xl p-5 transition-all duration-200 hover:border-black/[0.14] hover:shadow-[0_4px_18px_rgba(0,0,0,0.05)]"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-bold ${severityBadgeClass(
+                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${severityBadgeClass(
                           item.severity,
                         )}`}
                       >
@@ -271,44 +271,46 @@ export function AlertsPage({
                         )}
                         {item.severity}
                       </span>
-                      <span className="inline-flex items-center rounded-md bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white tabular-nums">
+                      <span className="inline-flex items-center rounded-full bg-[#1D1D1F] px-2.5 py-0.5 text-[11px] font-semibold text-white tabular-nums">
                         Urgency {item.urgency_score}
                       </span>
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                      <span className="rounded-full bg-black/[0.05] px-2.5 py-0.5 text-[11px] font-medium text-[#6E6E73]">
                         {item.type}
                       </span>
                       {item.status !== 'OPEN' && (
-                        <span className="rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                        <span className="rounded-full bg-[#1F7A4D]/10 border border-[#1F7A4D]/22 px-2.5 py-0.5 text-[11px] font-semibold text-[#1B6B43]">
                           {item.status}
                         </span>
                       )}
                     </div>
 
-                    <h2 className="text-base font-semibold text-slate-900">{item.title}</h2>
-                    <p className="text-sm text-slate-700 leading-relaxed">{item.summary}</p>
+                    <h2 className="text-base font-semibold tracking-tight text-[#1D1D1F]">
+                      {item.title}
+                    </h2>
+                    <p className="text-sm text-[#6E6E73] leading-relaxed">{item.summary}</p>
                   </div>
 
-                  <div className="flex flex-col items-end gap-1.5 text-xs text-slate-500">
-                    <span>{formatSimDateTime(item.created_at)}</span>
+                  <div className="flex flex-col items-end gap-1.5 text-xs text-[#86868B]">
+                    <span className="tabular-nums">{formatSimDateTime(item.created_at)}</span>
                     <div className="flex items-center gap-2">
                       {item.po_id && (
                         <button
                           type="button"
                           onClick={() => onNavigatePo(item.po_id!)}
-                          className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          className="apple-press inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-[#FBFBFD] px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-black/[0.04]"
                         >
                           PO #{item.po_id}
-                          <ExternalLink className="h-3 w-3" />
+                          <ExternalLink className="h-3 w-3 text-[#6E6E73]" />
                         </button>
                       )}
                       {item.part_id && (
                         <button
                           type="button"
                           onClick={() => onNavigatePart(item.part_id!)}
-                          className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          className="apple-press inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-[#FBFBFD] px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-black/[0.04]"
                         >
                           Part #{item.part_id}
-                          <ExternalLink className="h-3 w-3" />
+                          <ExternalLink className="h-3 w-3 text-[#6E6E73]" />
                         </button>
                       )}
                     </div>
@@ -316,36 +318,36 @@ export function AlertsPage({
                 </div>
 
                 {hasImpactMetrics && (
-                  <div className="mt-3 flex flex-wrap gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                  <div className="mt-3.5 flex flex-wrap gap-2 rounded-xl border border-black/[0.06] bg-[#FBFBFD] p-3 text-xs tabular-nums">
                     {daysOfSupply !== null && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Projected Supply:</span>{' '}
-                        <span className="font-semibold text-slate-900">
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Projected Supply:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">
                           {daysOfSupply.toFixed(1)}d
                         </span>
                         {stockoutDate && (
-                          <span className="text-rose-700 font-medium ml-1">
+                          <span className="text-[#B82923] font-medium ml-1">
                             (Stockout {stockoutDate})
                           </span>
                         )}
                       </div>
                     )}
                     {daysToNewEta !== null && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Days to New ETA:</span>{' '}
-                        <span className="font-semibold text-slate-900">
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Days to New ETA:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">
                           {daysToNewEta.toFixed(1)}d
                         </span>
                       </div>
                     )}
                     {proposedPrice !== null && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Proposed Price:</span>{' '}
-                        <span className="font-semibold text-slate-900">
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Proposed Price:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">
                           {formatInr(proposedPrice)}
                         </span>
                         {priceVarInr !== null && (
-                          <span className="ml-1 font-medium text-amber-700">
+                          <span className="ml-1 font-medium text-[#945600]">
                             ({priceVarInr >= 0 ? '+' : ''}
                             {formatInr(priceVarInr)}
                             {priceVarPct !== null ? ` / ${priceVarPct.toFixed(1)}%` : ''})
@@ -354,37 +356,37 @@ export function AlertsPage({
                       </div>
                     )}
                     {totalCostImpact !== null && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Total Cost Impact:</span>{' '}
-                        <span className="font-semibold text-rose-700">
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Total Cost Impact:</span>{' '}
+                        <span className="font-semibold text-[#B82923]">
                           {formatInr(totalCostImpact)}
                         </span>
                       </div>
                     )}
                     {proposedQty !== null && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Proposed Qty:</span>{' '}
-                        <span className="font-semibold text-slate-900">{proposedQty}</span>
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Proposed Qty:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">{proposedQty}</span>
                       </div>
                     )}
                     {proposedEta && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Proposed ETA:</span>{' '}
-                        <span className="font-semibold text-slate-900">{proposedEta}</span>
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Proposed ETA:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">{proposedEta}</span>
                       </div>
                     )}
                     {backupName && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Backup Option:</span>{' '}
-                        <span className="font-semibold text-slate-900">{backupName}</span>
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Backup Option:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">{backupName}</span>
                         {backupPrice !== null && ` @ ${formatInr(backupPrice)}`}
                         {backupLt !== null && ` (${backupLt}d LT)`}
                       </div>
                     )}
                     {recRop !== null && recS !== null && (
-                      <div className="rounded bg-white px-2.5 py-1 border border-slate-200">
-                        <span className="text-slate-500">Recommended ROP / S:</span>{' '}
-                        <span className="font-semibold text-indigo-700">
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Recommended ROP / S:</span>{' '}
+                        <span className="font-semibold text-[#0066CC]">
                           {recRop} / {recS}
                         </span>
                       </div>
@@ -393,26 +395,26 @@ export function AlertsPage({
                 )}
 
                 {draft && (
-                  <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4 space-y-2.5">
+                  <div className="mt-4 rounded-xl border border-[#5E5CE6]/22 bg-[#5E5CE6]/[0.04] p-4 space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                       <div className="flex items-center gap-2">
-                        <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
-                        <span className="font-semibold text-indigo-950">
+                        <Sparkles className="h-3.5 w-3.5 text-[#5E5CE6]" />
+                        <span className="font-semibold text-[#1D1D1F]">
                           Lex Draft Preview
                         </span>
-                        <span className="rounded bg-indigo-100 px-2 py-0.5 font-medium text-indigo-800">
+                        <span className="rounded-full bg-[#5E5CE6]/12 px-2.5 py-0.5 text-[11px] font-semibold text-[#4B48C4]">
                           {draft.category}
                         </span>
-                        <span className="rounded bg-white px-2 py-0.5 border border-indigo-200 text-slate-700">
+                        <span className="rounded-full bg-white px-2.5 py-0.5 border border-[#5E5CE6]/20 text-[11px] text-[#6E6E73]">
                           {draft.status}
                         </span>
                         {draftModified && (
-                          <span className="rounded bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+                          <span className="rounded-full bg-[#B46900]/12 px-2.5 py-0.5 text-[11px] font-semibold text-[#945600]">
                             Edited
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5 text-slate-600">
+                      <div className="flex items-center gap-1.5 text-[#6E6E73]">
                         <Mail className="h-3.5 w-3.5" />
                         <span>
                           To: {draft.to_personas.map(personaLabel).join(', ')}
@@ -435,7 +437,7 @@ export function AlertsPage({
                             }))
                           }
                           aria-label="Draft subject"
-                          className="w-full rounded-md border border-indigo-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:outline-none"
+                          className="w-full rounded-xl border border-[#5E5CE6]/25 bg-white px-3 py-1.5 text-sm font-medium text-[#1D1D1F] focus:border-[#5E5CE6] focus:outline-none"
                         />
                         <textarea
                           rows={4}
@@ -447,20 +449,20 @@ export function AlertsPage({
                             }))
                           }
                           aria-label="Draft body"
-                          className="w-full rounded-md border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800 focus:border-indigo-500 focus:outline-none"
+                          className="w-full rounded-xl border border-[#5E5CE6]/25 bg-white px-3 py-2 text-sm text-[#1D1D1F] focus:border-[#5E5CE6] focus:outline-none"
                         />
                       </div>
                     ) : (
-                      <div className="rounded-md border border-indigo-100 bg-white p-3 text-xs space-y-1">
-                        <p className="font-semibold text-slate-900">{draft.subject}</p>
-                        <p className="whitespace-pre-wrap text-slate-700">{draft.body}</p>
+                      <div className="rounded-xl border border-[#5E5CE6]/15 bg-white p-3 text-xs space-y-1">
+                        <p className="font-semibold text-[#1D1D1F]">{draft.subject}</p>
+                        <p className="whitespace-pre-wrap text-[#6E6E73]">{draft.body}</p>
                       </div>
                     )}
                   </div>
                 )}
 
                 {item.status === 'OPEN' && (
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-black/[0.06]">
                     <div className="flex flex-wrap items-center gap-2 flex-1">
                       {hasAddNoteCta && (
                         <input
@@ -473,7 +475,7 @@ export function AlertsPage({
                               [item.id]: e.target.value,
                             }))
                           }
-                          className="min-w-56 flex-1 max-w-sm rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-800 focus:border-slate-400 focus:outline-none"
+                          className="min-w-56 flex-1 max-w-sm rounded-xl border border-black/[0.10] bg-[#FBFBFD] px-3 py-1.5 text-xs text-[#1D1D1F] focus:border-[#0066CC] focus:bg-white focus:outline-none"
                         />
                       )}
 
@@ -487,12 +489,12 @@ export function AlertsPage({
                         const isSwitch = cta.action === 'switch_backup_supplier';
 
                         const btnClass = isApprove
-                          ? 'bg-slate-900 text-white hover:bg-slate-800 border-slate-900'
+                          ? 'bg-[#0066CC] text-white hover:bg-[#0071E3] border-[#0066CC] shadow-2xs'
                           : isSwitch
-                            ? 'bg-amber-600 text-white hover:bg-amber-700 border-amber-600'
+                            ? 'bg-[#B46900] text-white hover:bg-[#945600] border-[#B46900]'
                             : isRejectOrCancel
-                              ? 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50'
-                              : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-50';
+                              ? 'bg-white text-[#B82923] border-[#C9342D]/25 hover:bg-[#C9342D]/[0.07]'
+                              : 'bg-white text-[#1D1D1F] border-black/[0.10] hover:bg-[#FBFBFD]';
 
                         return (
                           <button
@@ -500,7 +502,7 @@ export function AlertsPage({
                             type="button"
                             disabled={isBusy}
                             onClick={() => void handleExecuteCta(item, cta.action, cta.label)}
-                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${btnClass}`}
+                            className={`apple-press inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-1.5 text-xs font-semibold disabled:opacity-45 ${btnClass}`}
                           >
                             {cta.label}
                           </button>
@@ -512,7 +514,7 @@ export function AlertsPage({
                       type="button"
                       disabled={isBusy}
                       onClick={() => void handleDismiss(item)}
-                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                      className="apple-press inline-flex items-center gap-1 rounded-xl border border-black/[0.08] px-3 py-1.5 text-xs font-medium text-[#6E6E73] hover:bg-black/[0.04] hover:text-[#1D1D1F] disabled:opacity-45"
                     >
                       <X className="h-3.5 w-3.5" />
                       Dismiss

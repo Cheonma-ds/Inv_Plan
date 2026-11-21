@@ -210,27 +210,27 @@ export function InventoryPage({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Inventory &amp; Parts</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Inventory &amp; Parts</h1>
+          <p className="text-sm text-[#6E6E73]">
             15-SKU live stock ledger, inventory position (On-Hand + On-Order + Quarantined), ROP/S, and supplier terms.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5">
-            <span className="text-slate-500">Below ROP:</span>{' '}
-            <span className="font-bold text-rose-600">{belowRopCount}</span>
+        <div className="flex items-center gap-2 text-xs tabular-nums">
+          <div className="rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 shadow-2xs">
+            <span className="text-[#6E6E73]">Below ROP:</span>{' '}
+            <span className="font-bold text-[#B82923]">{belowRopCount}</span>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-white px-3 py-1.5">
-            <span className="text-slate-500">Quarantined Units:</span>{' '}
-            <span className="font-bold text-amber-700">{totalQuarantined}</span>
+          <div className="rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 shadow-2xs">
+            <span className="text-[#6E6E73]">Quarantined Units:</span>{' '}
+            <span className="font-bold text-[#945600]">{totalQuarantined}</span>
           </div>
           <button
             type="button"
             onClick={() => void loadParts()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50"
+            className="apple-press inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 font-medium text-[#1D1D1F] hover:bg-[#FBFBFD] shadow-2xs"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 text-[#6E6E73] ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
@@ -238,7 +238,7 @@ export function InventoryPage({
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="relative flex-1 min-w-64 max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3.5 top-2.5 h-4 w-4 text-[#86868B]" />
           <input
             type="text"
             placeholder="Search SKU, part name, or supplier..."
@@ -247,20 +247,20 @@ export function InventoryPage({
               setSearch(e.target.value);
               if (focusPartId) onClearFocus();
             }}
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-800 focus:border-slate-400 focus:outline-none"
+            className="w-full rounded-xl border border-black/[0.08] bg-white py-2 pl-9 pr-3 text-sm text-[#1D1D1F] placeholder:text-[#86868B] shadow-2xs focus:border-[#0066CC] focus:outline-none"
           />
         </div>
 
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+        <div className="inline-flex rounded-full border border-black/[0.08] bg-white/90 p-1 shadow-2xs">
           {(['ALL', 'CRITICAL', 'STANDARD', 'LOW'] as const).map((lvl) => (
             <button
               key={lvl}
               type="button"
               onClick={() => setCriticality(lvl)}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
+              className={`apple-press rounded-full px-3.5 py-1 text-xs font-semibold ${
                 criticality === lvl
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:bg-slate-100'
+                  ? 'bg-[#0066CC] text-white shadow-2xs'
+                  : 'text-[#6E6E73] hover:bg-black/[0.04] hover:text-[#1D1D1F]'
               }`}
             >
               {lvl}
@@ -269,9 +269,9 @@ export function InventoryPage({
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-          <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider">
+      <div className="apple-card overflow-x-auto rounded-2xl">
+        <table className="min-w-full divide-y divide-black/[0.06] text-left text-xs">
+          <thead className="bg-[#FBFBFD] text-[#6E6E73] font-semibold uppercase tracking-wider">
             <tr>
               <th className="px-4 py-3">Part</th>
               <th className="px-3 py-3 text-right">On-Hand</th>
@@ -284,7 +284,7 @@ export function InventoryPage({
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-black/[0.05]">
             {filteredParts.map((part) => {
               const primary = part.suppliers.find((s) => s.supplier_rank === 1);
               const backup = part.suppliers.find((s) => s.supplier_rank === 2);
@@ -294,94 +294,94 @@ export function InventoryPage({
               return (
                 <tr
                   key={part.part_id}
-                  className={
+                  className={`transition-colors ${
                     isFocused
-                      ? 'bg-sky-50/80'
+                      ? 'bg-[#0066CC]/[0.07]'
                       : isBelowRop
-                        ? 'bg-rose-50/30 hover:bg-rose-50/60'
-                        : 'hover:bg-slate-50'
-                  }
+                        ? 'bg-[#C9342D]/[0.03] hover:bg-[#C9342D]/[0.06]'
+                        : 'hover:bg-black/[0.02]'
+                  }`}
                 >
                   <td className="px-4 py-3 align-top">
                     <div className="flex items-center gap-2">
-                      <Package className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                      <span className="font-mono font-semibold text-slate-900">
+                      <Package className="h-3.5 w-3.5 text-[#86868B] shrink-0" />
+                      <span className="font-mono font-semibold text-[#1D1D1F]">
                         {part.sku}
                       </span>
                       <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${criticalityBadgeClass(
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${criticalityBadgeClass(
                           part.criticality,
                         )}`}
                       >
                         {part.criticality}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-slate-600 font-medium">{part.name}</div>
+                    <div className="mt-0.5 text-[#6E6E73] font-medium">{part.name}</div>
                   </td>
 
-                  <td className="px-3 py-3 text-right align-top font-semibold tabular-nums text-slate-900">
+                  <td className="px-3 py-3 text-right align-top font-semibold tabular-nums text-[#1D1D1F]">
                     {part.on_hand_stock}
                   </td>
 
                   <td className="px-3 py-3 text-right align-top tabular-nums">
                     {part.quarantined_stock > 0 ? (
-                      <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 font-semibold text-amber-800">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-[#B46900]/10 border border-[#B46900]/24 px-2 py-0.5 font-semibold text-[#945600]">
                         <AlertTriangle className="h-3 w-3" />
                         {part.quarantined_stock}
                       </span>
                     ) : (
-                      <span className="text-slate-400">0</span>
+                      <span className="text-[#86868B]">0</span>
                     )}
                   </td>
 
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-slate-700 font-medium">
+                  <td className="px-3 py-3 text-right align-top tabular-nums text-[#6E6E73] font-medium">
                     {part.on_order_stock}
                   </td>
 
                   <td className="px-3 py-3 text-right align-top tabular-nums">
                     <span
                       className={`font-bold ${
-                        isBelowRop ? 'text-rose-700' : 'text-slate-900'
+                        isBelowRop ? 'text-[#B82923]' : 'text-[#1D1D1F]'
                       }`}
                     >
                       {part.inventory_position}
                     </span>
                   </td>
 
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-slate-800">
+                  <td className="px-3 py-3 text-right align-top tabular-nums text-[#1D1D1F]">
                     <span className="font-semibold">{part.rop}</span>
-                    <span className="text-slate-400"> / </span>
+                    <span className="text-[#86868B]"> / </span>
                     <span>{part.replenishment_point}</span>
-                    <div className="text-[10px] text-slate-400">
+                    <div className="text-[10px] text-[#86868B]">
                       {part.target_coverage_days}d cov
                     </div>
                   </td>
 
                   <td className="px-3 py-3 text-right align-top tabular-nums">
                     {part.manual_demand_override !== null ? (
-                      <span className="rounded bg-indigo-100 px-1.5 py-0.5 font-semibold text-indigo-800">
+                      <span className="rounded-full bg-[#0066CC]/10 border border-[#0066CC]/22 px-2 py-0.5 font-semibold text-[#0058B3]">
                         {part.manual_demand_override}/d
                       </span>
                     ) : (
-                      <span className="text-slate-400">Auto</span>
+                      <span className="text-[#86868B]">Auto</span>
                     )}
                   </td>
 
-                  <td className="px-4 py-3 align-top space-y-1">
+                  <td className="px-4 py-3 align-top space-y-1 tabular-nums">
                     {primary ? (
-                      <div className="text-slate-800">
+                      <div className="text-[#1D1D1F]">
                         <span className="font-semibold">1° {primary.supplier_name}</span>{' '}
-                        <span className="text-slate-500">
+                        <span className="text-[#6E6E73]">
                           · {formatInr(primary.agreed_unit_price)} ·{' '}
                           {primary.effective_lead_time_days.toFixed(1)}d eff LT (q
                           {primary.quoted_lead_time_days}d) · MOQ {primary.moq}
                         </span>
                       </div>
                     ) : (
-                      <div className="text-slate-400">No primary supplier</div>
+                      <div className="text-[#86868B]">No primary supplier</div>
                     )}
                     {backup && (
-                      <div className="text-slate-500">
+                      <div className="text-[#6E6E73]">
                         <span>2° {backup.supplier_name}</span> ·{' '}
                         {formatInr(backup.agreed_unit_price)} ·{' '}
                         {backup.quoted_lead_time_days}d LT · MOQ {backup.moq}
@@ -394,7 +394,7 @@ export function InventoryPage({
                       <button
                         type="button"
                         onClick={() => openModal({ kind: 'consume', part })}
-                        className="inline-flex items-center gap-1 rounded-md bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-800"
+                        className="apple-press inline-flex items-center gap-1 rounded-lg bg-[#0066CC] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0071E3] shadow-2xs"
                       >
                         <ArrowDownCircle className="h-3 w-3" />
                         Withdraw
@@ -402,19 +402,19 @@ export function InventoryPage({
                       <button
                         type="button"
                         onClick={() => openModal({ kind: 'rop', part })}
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
                         title="Edit ROP and S"
                       >
-                        <Edit3 className="h-3 w-3" />
+                        <Edit3 className="h-3 w-3 text-[#6E6E73]" />
                         ROP/S
                       </button>
                       <button
                         type="button"
                         onClick={() => openModal({ kind: 'demand', part })}
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
                         title="Manual daily demand override"
                       >
-                        <Sliders className="h-3 w-3" />
+                        <Sliders className="h-3 w-3 text-[#6E6E73]" />
                         Demand
                       </button>
                     </div>
@@ -427,23 +427,23 @@ export function InventoryPage({
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+        <div className="anim-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/30 backdrop-blur-xs p-4">
+          <div className="anim-modal-pop w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_18px_48px_rgba(0,0,0,0.14)]">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h2 className="text-base font-bold text-slate-900">
+                <h2 className="text-base font-bold tracking-tight text-[#1D1D1F]">
                   {modal.kind === 'consume'
                     ? `Withdraw Stock — ${modal.part.sku}`
                     : modal.kind === 'rop'
                       ? `Edit ROP / S — ${modal.part.sku}`
                       : `Demand Override — ${modal.part.sku}`}
                 </h2>
-                <p className="text-xs text-slate-500 mt-0.5">{modal.part.name}</p>
+                <p className="text-xs text-[#6E6E73] mt-0.5">{modal.part.name}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setModal(null)}
-                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="apple-press rounded-full p-1.5 text-[#86868B] hover:bg-black/[0.05] hover:text-[#1D1D1F]"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -451,14 +451,14 @@ export function InventoryPage({
 
             {modal.kind === 'consume' && (
               <form onSubmit={handleSubmitConsume} className="mt-4 space-y-3">
-                <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-700 flex justify-between">
-                  <span>Available On-Hand: <strong>{modal.part.on_hand_stock}</strong></span>
-                  <span>Inv. Position: <strong>{modal.part.inventory_position}</strong></span>
-                  <span>ROP: <strong>{modal.part.rop}</strong></span>
+                <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] p-3 text-xs text-[#6E6E73] flex justify-between tabular-nums">
+                  <span>Available On-Hand: <strong className="text-[#1D1D1F]">{modal.part.on_hand_stock}</strong></span>
+                  <span>Inv. Position: <strong className="text-[#1D1D1F]">{modal.part.inventory_position}</strong></span>
+                  <span>ROP: <strong className="text-[#1D1D1F]">{modal.part.rop}</strong></span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
                     Quantity to Withdraw
                   </label>
                   <input
@@ -468,12 +468,12 @@ export function InventoryPage({
                     value={withdrawQty}
                     onChange={(e) => setWithdrawQty(e.target.value)}
                     required
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                    className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
                     Note (optional)
                   </label>
                   <input
@@ -481,7 +481,7 @@ export function InventoryPage({
                     placeholder="e.g. Line 2 assembly draw"
                     value={withdrawNote}
                     onChange={(e) => setWithdrawNote(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                    className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
                   />
                 </div>
 
@@ -489,14 +489,14 @@ export function InventoryPage({
                   <button
                     type="button"
                     onClick={() => setModal(null)}
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                    className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                   >
                     {submitting ? 'Withdrawing...' : 'Confirm Withdrawal'}
                   </button>
@@ -508,7 +508,7 @@ export function InventoryPage({
               <form onSubmit={handleSubmitRop} className="mt-4 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
                       Reorder Point (ROP)
                     </label>
                     <input
@@ -517,11 +517,11 @@ export function InventoryPage({
                       value={ropInput}
                       onChange={(e) => setRopInput(e.target.value)}
                       required
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                      className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
                       Order-Up-To (S)
                     </label>
                     <input
@@ -530,7 +530,7 @@ export function InventoryPage({
                       value={sInput}
                       onChange={(e) => setSInput(e.target.value)}
                       required
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                      className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
                     />
                   </div>
                 </div>
@@ -539,14 +539,14 @@ export function InventoryPage({
                   <button
                     type="button"
                     onClick={() => setModal(null)}
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                    className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                   >
                     {submitting ? 'Saving...' : 'Save ROP / S'}
                   </button>
@@ -556,11 +556,11 @@ export function InventoryPage({
 
             {modal.kind === 'demand' && (
               <form onSubmit={handleSubmitDemand} className="mt-4 space-y-3">
-                <p className="text-xs text-slate-600">
+                <p className="text-xs text-[#6E6E73]">
                   Set an additive/override daily demand rate (units/day) for planning calculations, or leave blank to revert to EWMA forecast.
                 </p>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
                     Manual Daily Demand (units/day)
                   </label>
                   <input
@@ -570,7 +570,7 @@ export function InventoryPage({
                     placeholder="Blank = auto EWMA"
                     value={demandInput}
                     onChange={(e) => setDemandInput(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                    className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
                   />
                 </div>
 
@@ -579,7 +579,7 @@ export function InventoryPage({
                     type="button"
                     disabled={submitting}
                     onClick={() => setDemandInput('')}
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    className="apple-press rounded-xl border border-black/[0.10] px-3 py-2 text-xs font-medium text-[#6E6E73] hover:bg-[#FBFBFD]"
                   >
                     Clear Override
                   </button>
@@ -587,14 +587,14 @@ export function InventoryPage({
                     <button
                       type="button"
                       onClick={() => setModal(null)}
-                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={submitting}
-                      className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                      className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                     >
                       {submitting ? 'Saving...' : 'Save Override'}
                     </button>

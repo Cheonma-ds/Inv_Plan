@@ -35,13 +35,13 @@ function formatInrMicro(value: number): string {
 function taskBadgeClass(taskType: string): string {
   switch (taskType) {
     case 'email_triage':
-      return 'bg-sky-100 text-sky-800 border-sky-200';
+      return 'bg-[#0066CC]/10 text-[#0058B3] border-[#0066CC]/22';
     case 'invoice_extraction':
-      return 'bg-violet-100 text-violet-800 border-violet-200';
+      return 'bg-[#5E5CE6]/10 text-[#4B48C4] border-[#5E5CE6]/22';
     case 'email_draft':
-      return 'bg-amber-100 text-amber-800 border-amber-200';
+      return 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/24';
     default:
-      return 'bg-slate-100 text-slate-700 border-slate-200';
+      return 'bg-black/[0.05] text-[#6E6E73] border-black/[0.10]';
   }
 }
 
@@ -191,18 +191,18 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
     if (mode === 'active') {
       return {
         label: 'Phoenix OTel: Active',
-        cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+        cls: 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22',
       };
     }
     if (mode === 'fallback_sqlite') {
       return {
         label: 'Phoenix: Fallback (SQLite)',
-        cls: 'bg-amber-50 text-amber-800 border-amber-200',
+        cls: 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/24',
       };
     }
     return {
       label: 'Phoenix: Off (SQLite Traces)',
-      cls: 'bg-slate-100 text-slate-600 border-slate-200',
+      cls: 'bg-black/[0.05] text-[#6E6E73] border-black/[0.10]',
     };
   }, [statusInfo]);
 
@@ -211,18 +211,18 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Activity className="h-5 w-5 text-indigo-600" />
+          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F] flex items-center gap-2">
+            <Activity className="h-5 w-5 text-[#5E5CE6]" />
             AI Activity &amp; Health
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-[#6E6E73] mt-0.5">
             Agent traces, Lex draft trust metrics, and declarative YAML evaluation scorecard
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <span
-            className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${phoenixBadge.cls}`}
+            className={`inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-semibold ${phoenixBadge.cls}`}
           >
             {phoenixBadge.label}
           </span>
@@ -231,7 +231,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
             aria-label="Filter by agent"
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
-            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700"
+            className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-xs font-medium text-[#1D1D1F] shadow-2xs focus:border-[#0066CC] focus:outline-none"
           >
             <option value="ALL">All Agents</option>
             {agentOptions.map((name) => (
@@ -245,64 +245,64 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
             type="button"
             onClick={() => void loadData()}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            className="apple-press inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD] shadow-2xs disabled:opacity-45"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 text-[#6E6E73] ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
       </div>
 
       {/* KPI Strip */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 tabular-nums">
+        <div className="apple-card rounded-2xl p-4">
+          <div className="flex items-center justify-between text-xs text-[#6E6E73]">
             <span>Agent Traces</span>
-            <Cpu className="h-4 w-4 text-indigo-500" />
+            <Cpu className="h-4 w-4 text-[#5E5CE6]" />
           </div>
-          <div className="mt-1.5 text-2xl font-bold text-slate-900">{traces.length}</div>
-          <div className="mt-1 text-[11px] text-slate-500">
-            Avg latency: <span className="font-semibold text-slate-700">{kpis.avgLatency} ms</span>
+          <div className="mt-1.5 text-2xl font-bold tracking-tight text-[#1D1D1F]">{traces.length}</div>
+          <div className="mt-1 text-[11px] text-[#6E6E73]">
+            Avg latency: <span className="font-semibold text-[#1D1D1F]">{kpis.avgLatency} ms</span>
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500">
+        <div className="apple-card rounded-2xl p-4">
+          <div className="flex items-center justify-between text-xs text-[#6E6E73]">
             <span>LLM Spend (INR)</span>
-            <Coins className="h-4 w-4 text-amber-500" />
+            <Coins className="h-4 w-4 text-[#B46900]" />
           </div>
-          <div className="mt-1.5 text-2xl font-bold text-slate-900">
+          <div className="mt-1.5 text-2xl font-bold tracking-tight text-[#1D1D1F]">
             {formatInrMicro(kpis.totalCost)}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-[#6E6E73]">
             {kpis.totalInTokens.toLocaleString()} in · {kpis.totalOutTokens.toLocaleString()} out
             tokens
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500">
+        <div className="apple-card rounded-2xl p-4">
+          <div className="flex items-center justify-between text-xs text-[#6E6E73]">
             <span>Draft Edit-Free Rate</span>
-            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            <ShieldCheck className="h-4 w-4 text-[#1B6B43]" />
           </div>
-          <div className="mt-1.5 text-2xl font-bold text-slate-900">
+          <div className="mt-1.5 text-2xl font-bold tracking-tight text-[#1D1D1F]">
             {kpis.editFreeRate !== null ? `${kpis.editFreeRate}%` : '—'}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-[#6E6E73]">
             {kpis.totalDecisions} decision(s) ({kpis.totalAsIs} as-is · {kpis.totalEdited} edited ·{' '}
             {kpis.totalRejected} rejected)
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between text-xs text-slate-500">
+        <div className="apple-card rounded-2xl p-4">
+          <div className="flex items-center justify-between text-xs text-[#6E6E73]">
             <span>Latest Eval Pass Rate</span>
-            <FlaskConical className="h-4 w-4 text-violet-600" />
+            <FlaskConical className="h-4 w-4 text-[#5E5CE6]" />
           </div>
-          <div className="mt-1.5 text-2xl font-bold text-slate-900">
+          <div className="mt-1.5 text-2xl font-bold tracking-tight text-[#1D1D1F]">
             {activeRun ? `${activeRun.pass_rate}%` : 'Not Run'}
           </div>
-          <div className="mt-1 text-[11px] text-slate-500">
+          <div className="mt-1 text-[11px] text-[#6E6E73]">
             {activeRun
               ? `${activeRun.passed_cases}/${activeRun.total_cases} cases passed (${activeRun.mode})`
               : `${evalSuite?.total_cases ?? 0} YAML cases ready`}
@@ -311,29 +311,29 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
       </div>
 
       {/* Section 1: Lex Draft Trust Metrics (Autonomy Policies) */}
-      <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <section className="apple-card rounded-2xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-black/[0.06] flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">
+            <h2 className="text-sm font-bold text-[#1D1D1F]">
               Lex Draft Trust Metrics (Autonomy Policies)
             </h2>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-[#6E6E73]">
               Tracks Inventory Manager draft reviews per email category (all MVP drafts require
               human approval)
             </p>
           </div>
           {kpis.totalDecisions > 0 && (
-            <div className="flex items-center gap-3 text-[11px] font-semibold">
-              <span className="text-emerald-700">As-Is: {kpis.totalAsIs}</span>
-              <span className="text-amber-700">Edited: {kpis.totalEdited}</span>
-              <span className="text-red-700">Rejected: {kpis.totalRejected}</span>
+            <div className="flex items-center gap-3 text-[11px] font-semibold tabular-nums">
+              <span className="text-[#1B6B43]">As-Is: {kpis.totalAsIs}</span>
+              <span className="text-[#945600]">Edited: {kpis.totalEdited}</span>
+              <span className="text-[#B82923]">Rejected: {kpis.totalRejected}</span>
             </div>
           )}
         </div>
 
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-semibold">
+          <table className="min-w-full divide-y divide-black/[0.06] text-xs">
+            <thead className="bg-[#FBFBFD] text-[#6E6E73] font-semibold">
               <tr>
                 <th className="px-4 py-2.5 text-left">Category</th>
                 <th className="px-4 py-2.5 text-left">Policy Mode</th>
@@ -344,10 +344,10 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                 <th className="px-4 py-2.5 text-left w-44">Trust Distribution</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-black/[0.05] tabular-nums">
               {policies.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-6 text-center text-[#6E6E73]">
                     No autonomy policy rows found.
                   </td>
                 </tr>
@@ -358,57 +358,57 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                   const editPct = total > 0 ? (p.approved_edited_count / total) * 100 : 0;
                   const rejPct = total > 0 ? (p.rejected_count / total) * 100 : 0;
                   return (
-                    <tr key={p.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-2.5 font-semibold text-slate-900">
+                    <tr key={p.id} className="hover:bg-black/[0.02] transition-colors">
+                      <td className="px-4 py-2.5 font-semibold text-[#1D1D1F]">
                         {p.action_category}
                       </td>
                       <td className="px-4 py-2.5">
                         <span
-                          className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
                             p.mode === 'AUTO_SEND'
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                              : 'bg-slate-100 text-slate-700 border-slate-200'
+                              ? 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22'
+                              : 'bg-black/[0.04] text-[#6E6E73] border-black/[0.08]'
                           }`}
                         >
                           {p.mode}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-emerald-700">
+                      <td className="px-4 py-2.5 text-right font-semibold text-[#1B6B43]">
                         {p.approved_as_is_count}
                       </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-amber-700">
+                      <td className="px-4 py-2.5 text-right font-semibold text-[#945600]">
                         {p.approved_edited_count}
                       </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-red-700">
+                      <td className="px-4 py-2.5 text-right font-semibold text-[#B82923]">
                         {p.rejected_count}
                       </td>
-                      <td className="px-4 py-2.5 text-right font-bold text-slate-900">
+                      <td className="px-4 py-2.5 text-right font-bold text-[#1D1D1F]">
                         {p.edit_free_approval_rate !== null
                           ? `${p.edit_free_approval_rate}%`
                           : '—'}
                       </td>
                       <td className="px-4 py-2.5">
                         {total === 0 ? (
-                          <div className="h-2 w-full rounded-full bg-slate-100" />
+                          <div className="h-2 w-full rounded-full bg-black/[0.06]" />
                         ) : (
-                          <div className="flex h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div className="flex h-2 w-full overflow-hidden rounded-full bg-black/[0.06]">
                             {asIsPct > 0 && (
                               <div
-                                className="bg-emerald-500"
+                                className="bg-[#1F7A4D]"
                                 style={{ width: `${asIsPct}%` }}
                                 title={`As-is: ${p.approved_as_is_count}`}
                               />
                             )}
                             {editPct > 0 && (
                               <div
-                                className="bg-amber-400"
+                                className="bg-[#D97706]"
                                 style={{ width: `${editPct}%` }}
                                 title={`Edited: ${p.approved_edited_count}`}
                               />
                             )}
                             {rejPct > 0 && (
                               <div
-                                className="bg-red-500"
+                                className="bg-[#C9342D]"
                                 style={{ width: `${rejPct}%` }}
                                 title={`Rejected: ${p.rejected_count}`}
                               />
@@ -426,20 +426,20 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
       </section>
 
       {/* Section 2: 1-Click YAML Eval Runner & Scorecard */}
-      <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <section className="apple-card rounded-2xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-black/[0.06] flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-              <FlaskConical className="h-4 w-4 text-violet-600" />
+            <h2 className="text-sm font-bold text-[#1D1D1F] flex items-center gap-2">
+              <FlaskConical className="h-4 w-4 text-[#5E5CE6]" />
               YAML Eval Suite &amp; Scorecard
               {evalSuite && (
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                <span className="rounded-full bg-black/[0.05] px-2.5 py-0.5 text-[11px] font-semibold text-[#6E6E73] tabular-nums">
                   {evalSuite.suite_name} · {evalSuite.total_cases} cases
                 </span>
               )}
             </h2>
             {evalSuite?.description && (
-              <p className="text-xs text-slate-500 mt-0.5">{evalSuite.description}</p>
+              <p className="text-xs text-[#6E6E73] mt-0.5">{evalSuite.description}</p>
             )}
           </div>
 
@@ -449,7 +449,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                 aria-label="Select eval run history"
                 value={activeRun?.id ?? ''}
                 onChange={(e) => setSelectedRunId(Number(e.target.value))}
-                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-700"
+                className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-xs text-[#1D1D1F] shadow-2xs focus:border-[#5E5CE6] focus:outline-none"
               >
                 {evalRuns.map((r) => (
                   <option key={r.id ?? r.timestamp} value={r.id ?? ''}>
@@ -463,7 +463,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
               aria-label="Eval execution mode"
               value={evalMode}
               onChange={(e) => setEvalMode(e.target.value as 'offline' | 'live')}
-              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700"
+              className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-xs font-medium text-[#1D1D1F] shadow-2xs focus:border-[#5E5CE6] focus:outline-none"
             >
               <option value="offline">Offline (Deterministic Guardrails)</option>
               <option value="live">Live Gemini (gemini-3.5-flash-lite)</option>
@@ -473,7 +473,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
               type="button"
               onClick={() => void handleRunEvals()}
               disabled={runningEvals}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+              className="apple-press inline-flex items-center gap-1.5 rounded-full bg-[#5E5CE6] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#4B48C4] shadow-2xs disabled:opacity-45"
             >
               <Play className="h-3.5 w-3.5" />
               {runningEvals ? 'Running Evals…' : 'Run Evals'}
@@ -482,33 +482,33 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
         </div>
 
         {activeRun ? (
-          <div className="p-4 space-y-3">
+          <div className="p-5 space-y-3">
             <div
-              className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3.5 py-2.5 text-xs ${
+              className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border px-4 py-2.5 text-xs tabular-nums ${
                 activeRun.passed_cases === activeRun.total_cases
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                  : 'border-amber-200 bg-amber-50 text-amber-900'
+                  ? 'border-[#1F7A4D]/22 bg-[#1F7A4D]/[0.07] text-[#1B6B43]'
+                  : 'border-[#B46900]/24 bg-[#B46900]/[0.07] text-[#945600]'
               }`}
             >
               <div className="flex items-center gap-2 font-semibold">
                 {activeRun.passed_cases === activeRun.total_cases ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  <CheckCircle2 className="h-4 w-4 text-[#1B6B43]" />
                 ) : (
-                  <XCircle className="h-4 w-4 text-red-600" />
+                  <XCircle className="h-4 w-4 text-[#B82923]" />
                 )}
                 <span>
                   Score: {activeRun.passed_cases}/{activeRun.total_cases} passed (
                   {activeRun.pass_rate}%)
                 </span>
               </div>
-              <div className="text-[11px] opacity-80">
+              <div className="text-[11px] opacity-85">
                 Model: <span className="font-semibold">{activeRun.model_name}</span> · Mode:{' '}
                 <span className="font-semibold">{activeRun.mode}</span> ·{' '}
                 {formatSimDateTime(activeRun.timestamp)}
               </div>
             </div>
 
-            <div className="divide-y divide-slate-200 rounded-lg border border-slate-200">
+            <div className="divide-y divide-black/[0.06] rounded-xl border border-black/[0.08] overflow-hidden">
               {activeRun.results.map((c) => {
                 const isOpen = !!expandedEvalCases[c.id];
                 return (
@@ -516,26 +516,26 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                     <button
                       type="button"
                       onClick={() => toggleEvalCase(c.id)}
-                      className="w-full px-3.5 py-2.5 flex items-start justify-between gap-3 text-left hover:bg-slate-50"
+                      className="w-full px-4 py-2.5 flex items-start justify-between gap-3 text-left hover:bg-[#FBFBFD] transition-colors"
                     >
                       <div className="flex items-start gap-2.5 min-w-0">
                         <span
                           className={`mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${
                             c.passed
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-red-100 text-red-800'
+                              ? 'bg-[#1F7A4D]/12 text-[#1B6B43]'
+                              : 'bg-[#C9342D]/12 text-[#B82923]'
                           }`}
                         >
                           {c.passed ? 'PASS' : 'FAIL'}
                         </span>
                         <div className="min-w-0">
-                          <div className="text-xs font-semibold text-slate-900 flex flex-wrap items-center gap-2">
+                          <div className="text-xs font-semibold text-[#1D1D1F] flex flex-wrap items-center gap-2">
                             <span>{c.name}</span>
-                            <span className="font-mono text-[10px] text-slate-400">{c.id}</span>
+                            <span className="font-mono text-[10px] text-[#86868B]">{c.id}</span>
                           </div>
                           <div
                             className={`text-[11px] mt-0.5 ${
-                              c.passed ? 'text-slate-600' : 'text-red-700 font-medium'
+                              c.passed ? 'text-[#6E6E73]' : 'text-[#B82923] font-medium'
                             }`}
                           >
                             {c.reason}
@@ -543,7 +543,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0 text-[11px] text-slate-500">
+                      <div className="flex items-center gap-2 shrink-0 text-[11px] text-[#6E6E73] tabular-nums">
                         <span
                           className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${taskBadgeClass(
                             c.task,
@@ -553,25 +553,25 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                         </span>
                         <span>{c.latency_ms} ms</span>
                         {isOpen ? (
-                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                          <ChevronDown className="h-4 w-4 text-[#86868B]" />
                         ) : (
-                          <ChevronRight className="h-4 w-4 text-slate-400" />
+                          <ChevronRight className="h-4 w-4 text-[#86868B]" />
                         )}
                       </div>
                     </button>
 
                     {isOpen && (
-                      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-2 text-[11px]">
+                      <div className="anim-page-enter border-t border-black/[0.06] bg-[#FBFBFD] px-4 py-3 space-y-2 text-[11px]">
                         {c.assertions.length > 0 && (
                           <div className="space-y-1">
-                            <div className="font-semibold text-slate-700">Assertions</div>
+                            <div className="font-semibold text-[#1D1D1F]">Assertions</div>
                             {c.assertions.map((a, idx) => (
                               <div
                                 key={`${c.id}-${a.field}-${idx}`}
-                                className={`flex items-center justify-between gap-2 rounded border px-2.5 py-1 ${
+                                className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1 ${
                                   a.passed
-                                    ? 'border-emerald-200 bg-white text-emerald-800'
-                                    : 'border-red-200 bg-red-50 text-red-800'
+                                    ? 'border-[#1F7A4D]/22 bg-white text-[#1B6B43]'
+                                    : 'border-[#C9342D]/22 bg-[#C9342D]/[0.05] text-[#B82923]'
                                 }`}
                               >
                                 <span className="font-mono">{a.message}</span>
@@ -581,8 +581,8 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                           </div>
                         )}
                         <div>
-                          <div className="font-semibold text-slate-700 mb-1">Agent Output</div>
-                          <pre className="overflow-x-auto rounded border border-slate-200 bg-white p-2 text-[10px] text-slate-700">
+                          <div className="font-semibold text-[#1D1D1F] mb-1">Agent Output</div>
+                          <pre className="overflow-x-auto rounded-xl border border-black/[0.08] bg-white p-2.5 text-[10px] text-[#1D1D1F]">
                             {JSON.stringify(c.output, null, 2)}
                           </pre>
                         </div>
@@ -594,29 +594,29 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
             </div>
           </div>
         ) : (
-          <div className="p-4 space-y-2">
-            <p className="text-xs text-slate-600">
-              No eval run recorded yet. Click <span className="font-semibold">Run Evals</span> to
+          <div className="p-5 space-y-2">
+            <p className="text-xs text-[#6E6E73]">
+              No eval run recorded yet. Click <span className="font-semibold text-[#1D1D1F]">Run Evals</span> to
               execute all {evalSuite?.total_cases ?? 0} YAML cases and persist a scorecard.
             </p>
             {evalSuite && (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-1">
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1">
                 {evalSuite.cases.map((c) => (
                   <div
                     key={c.id}
-                    className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs"
+                    className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] px-3 py-2.5 text-xs"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-[10px] text-slate-500">{c.id}</span>
+                      <span className="font-mono text-[10px] text-[#86868B]">{c.id}</span>
                       <span
-                        className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${taskBadgeClass(
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${taskBadgeClass(
                           c.task,
                         )}`}
                       >
                         {c.task}
                       </span>
                     </div>
-                    <div className="mt-1 font-medium text-slate-800">{c.name}</div>
+                    <div className="mt-1 font-medium text-[#1D1D1F]">{c.name}</div>
                   </div>
                 ))}
               </div>
@@ -626,11 +626,11 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
       </section>
 
       {/* Section 3: Recent Agent Traces Feed */}
-      <section className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <section className="apple-card rounded-2xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-black/[0.06] flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">Recent Agent Activity Feed</h2>
-            <p className="text-xs text-slate-500">
+            <h2 className="text-sm font-bold text-[#1D1D1F]">Recent Agent Activity Feed</h2>
+            <p className="text-xs text-[#6E6E73]">
               Plain-English execution log with latency, token usage, INR cost, and raw
               prompt/output inspection
             </p>
@@ -640,7 +640,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
             aria-label="Filter traces by task type"
             value={taskFilter}
             onChange={(e) => setTaskFilter(e.target.value)}
-            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700"
+            className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-xs font-medium text-[#1D1D1F] shadow-2xs focus:border-[#0066CC] focus:outline-none"
           >
             <option value="ALL">All Task Types</option>
             <option value="email_triage">email_triage</option>
@@ -649,22 +649,22 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
           </select>
         </div>
 
-        <div className="divide-y divide-slate-200">
+        <div className="divide-y divide-black/[0.05]">
           {traces.length === 0 ? (
-            <div className="p-8 text-center text-xs text-slate-500">
+            <div className="p-8 text-center text-xs text-[#6E6E73]">
               No agent traces recorded yet. Trigger an email triage, PDF invoice upload, PO draft,
-              or click <span className="font-semibold">Run Evals</span> above.
+              or click <span className="font-semibold text-[#1D1D1F]">Run Evals</span> above.
             </div>
           ) : (
             traces.map((t) => {
               const expanded = !!expandedTraceIds[t.id];
               const lowConf = t.confidence !== null && t.confidence < 0.85;
               return (
-                <div key={t.id} className="p-4 hover:bg-slate-50/70 transition">
+                <div key={t.id} className="p-4 hover:bg-black/[0.015] transition-colors">
                   <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                     <div className="space-y-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="rounded bg-slate-900 px-1.5 py-0.5 text-[10px] font-bold uppercase text-white">
+                        <span className="rounded-full bg-[#5E5CE6] px-2 py-0.5 text-[10px] font-bold uppercase text-white">
                           {t.agent_name}
                         </span>
                         <span
@@ -676,44 +676,44 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                         </span>
                         {t.confidence !== null && (
                           <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tabular-nums ${
                               lowConf
-                                ? 'bg-amber-100 text-amber-800 border-amber-200'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                ? 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/24'
+                                : 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22'
                             }`}
                           >
                             Conf: {t.confidence.toFixed(2)}
                             {lowConf ? ' (<0.85 Escalated)' : ''}
                           </span>
                         )}
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-[11px] text-[#86868B] tabular-nums">
                           {formatSimDateTime(t.timestamp)}
                         </span>
                       </div>
 
-                      <div className="text-xs font-semibold text-slate-900">
+                      <div className="text-xs font-semibold text-[#1D1D1F]">
                         {t.trigger_summary}
                       </div>
                       {t.output_summary && (
-                        <div className="text-xs text-slate-700">{t.output_summary}</div>
+                        <div className="text-xs text-[#6E6E73]">{t.output_summary}</div>
                       )}
                       {t.input_summary && (
-                        <div className="text-[11px] text-slate-500">{t.input_summary}</div>
+                        <div className="text-[11px] text-[#86868B]">{t.input_summary}</div>
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-3 shrink-0 text-[11px] text-slate-600">
+                    <div className="flex flex-wrap items-center gap-3 shrink-0 text-[11px] text-[#6E6E73] tabular-nums">
                       <span>{t.latency_ms} ms</span>
                       <span>
                         {t.input_tokens}/{t.output_tokens} tok
                       </span>
-                      <span className="font-semibold text-slate-900">
+                      <span className="font-semibold text-[#1D1D1F]">
                         {formatInrMicro(t.cost_inr)}
                       </span>
                       <button
                         type="button"
                         onClick={() => toggleTrace(t.id)}
-                        className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                        className="apple-press inline-flex items-center gap-1 rounded-full border border-black/[0.10] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#1D1D1F] hover:bg-[#FBFBFD]"
                       >
                         {expanded ? (
                           <>
@@ -729,16 +729,16 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                   </div>
 
                   {expanded && (
-                    <div className="mt-3 grid md:grid-cols-2 gap-3 text-[11px]">
+                    <div className="anim-page-enter mt-3 grid md:grid-cols-2 gap-3 text-[11px]">
                       <div>
-                        <div className="font-semibold text-slate-700 mb-1">Raw Prompt</div>
-                        <pre className="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[10px] text-slate-700 whitespace-pre-wrap">
+                        <div className="font-semibold text-[#1D1D1F] mb-1">Raw Prompt</div>
+                        <pre className="max-h-64 overflow-auto rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-[10px] text-[#1D1D1F] whitespace-pre-wrap">
                           {t.raw_prompt || '—'}
                         </pre>
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-700 mb-1">Raw Response</div>
-                        <pre className="max-h-64 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-2.5 text-[10px] text-slate-700 whitespace-pre-wrap">
+                        <div className="font-semibold text-[#1D1D1F] mb-1">Raw Response</div>
+                        <pre className="max-h-64 overflow-auto rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-[10px] text-[#1D1D1F] whitespace-pre-wrap">
                           {t.raw_response || '—'}
                         </pre>
                       </div>

@@ -215,30 +215,30 @@ export function POTrackerPage({
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Purchase Order Tracker</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Purchase Order Tracker</h1>
+          <p className="text-sm text-[#6E6E73]">
             Track open &amp; historical POs, log goods receipts (GRN), inspect 3-way invoice matches, and switch suppliers.
           </p>
         </div>
         <button
           type="button"
           onClick={() => void loadPos()}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          className="apple-press inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD] shadow-2xs"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 text-[#6E6E73] ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </button>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-60 max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3.5 top-2.5 h-4 w-4 text-[#86868B]" />
           <input
             type="text"
             placeholder="Search PO#, SKU, or supplier..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-800 focus:border-slate-400 focus:outline-none"
+            className="w-full rounded-xl border border-black/[0.08] bg-white py-2 pl-9 pr-3 text-sm text-[#1D1D1F] placeholder:text-[#86868B] shadow-2xs focus:border-[#0066CC] focus:outline-none"
           />
         </div>
 
@@ -246,7 +246,7 @@ export function POTrackerPage({
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           aria-label="Filter PO status"
-          className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-slate-400 focus:outline-none"
+          className="rounded-xl border border-black/[0.08] bg-white px-3.5 py-2 text-xs font-semibold text-[#1D1D1F] shadow-2xs focus:border-[#0066CC] focus:outline-none"
         >
           {statusOptions.map((st) => (
             <option key={st} value={st}>
@@ -256,9 +256,9 @@ export function POTrackerPage({
         </select>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-          <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider">
+      <div className="apple-card overflow-x-auto rounded-2xl">
+        <table className="min-w-full divide-y divide-black/[0.06] text-left text-xs">
+          <thead className="bg-[#FBFBFD] text-[#6E6E73] font-semibold uppercase tracking-wider">
             <tr>
               <th className="px-4 py-3">PO #</th>
               <th className="px-4 py-3">Part</th>
@@ -270,36 +270,36 @@ export function POTrackerPage({
               <th className="px-4 py-3">Promised / Revised ETA</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-black/[0.05]">
             {filteredPos.map((po) => {
               const isSelected = selectedPoId === po.id;
               return (
                 <tr
                   key={po.id}
                   onClick={() => setSelectedPoId(po.id)}
-                  className={`cursor-pointer transition ${
-                    isSelected ? 'bg-sky-50' : 'hover:bg-slate-50'
+                  className={`cursor-pointer transition-colors ${
+                    isSelected ? 'bg-[#0066CC]/[0.07]' : 'hover:bg-black/[0.02]'
                   }`}
                 >
-                  <td className="px-4 py-3 font-mono font-bold text-slate-900">
+                  <td className="px-4 py-3 font-mono font-bold text-[#1D1D1F]">
                     {po.po_number}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="font-mono font-semibold text-slate-800">
+                    <div className="font-mono font-semibold text-[#1D1D1F]">
                       {po.part_sku ?? `Part #${po.part_id}`}
                     </div>
-                    <div className="text-slate-500">{po.part_name}</div>
+                    <div className="text-[#6E6E73]">{po.part_name}</div>
                   </td>
-                  <td className="px-4 py-3 font-medium text-slate-800">
+                  <td className="px-4 py-3 font-medium text-[#1D1D1F]">
                     {po.supplier_name ?? `Supplier #${po.supplier_id}`}
                   </td>
-                  <td className="px-3 py-3 text-right font-semibold tabular-nums">
+                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-[#1D1D1F]">
                     {po.qty}
                   </td>
-                  <td className="px-3 py-3 text-right tabular-nums">
+                  <td className="px-3 py-3 text-right tabular-nums text-[#6E6E73]">
                     {formatInr(po.unit_price)}
                   </td>
-                  <td className="px-3 py-3 text-right font-semibold tabular-nums">
+                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-[#1D1D1F]">
                     {formatInr(po.total_amount)}
                   </td>
                   <td className="px-4 py-3">
@@ -311,10 +311,10 @@ export function POTrackerPage({
                       {po.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-600 tabular-nums">
+                  <td className="px-4 py-3 text-[#6E6E73] tabular-nums">
                     <div>{formatSimDate(po.promised_eta)}</div>
                     {po.revised_eta && (
-                      <div className="text-amber-700 font-medium">
+                      <div className="text-[#945600] font-medium">
                         Rev: {formatSimDate(po.revised_eta)}
                       </div>
                     )}
@@ -324,7 +324,7 @@ export function POTrackerPage({
             })}
             {filteredPos.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={8} className="px-4 py-8 text-center text-[#6E6E73]">
                   No purchase orders match this filter.
                 </td>
               </tr>
@@ -335,15 +335,15 @@ export function POTrackerPage({
 
       {/* Slide-over detail drawer */}
       {selectedPoId !== null && (
-        <div className="fixed inset-0 z-40 flex justify-end bg-slate-900/35">
-          <div className="h-full w-full max-w-2xl overflow-y-auto bg-white shadow-2xl border-l border-slate-200 flex flex-col">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
+        <div className="anim-backdrop fixed inset-0 z-40 flex justify-end bg-black/28 backdrop-blur-xs">
+          <div className="anim-drawer-slide h-full w-full max-w-2xl overflow-y-auto bg-white shadow-[var(--shadow-drawer)] border-l border-black/[0.08] flex flex-col">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/[0.08] bg-white/88 backdrop-blur-xl px-6 py-4">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">
+                <h2 className="text-lg font-bold tracking-tight text-[#1D1D1F]">
                   {poDetail ? poDetail.po_number : `PO #${selectedPoId}`}
                 </h2>
                 {poDetail && (
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-[#6E6E73]">
                     {poDetail.part_sku} · {poDetail.part_name} · {poDetail.supplier_name}
                   </p>
                 )}
@@ -351,23 +351,23 @@ export function POTrackerPage({
               <button
                 type="button"
                 onClick={() => setSelectedPoId(null)}
-                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                className="apple-press rounded-full p-1.5 text-[#86868B] hover:bg-black/[0.05] hover:text-[#1D1D1F]"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {detailLoading || !poDetail ? (
-              <div className="p-6 text-sm text-slate-500">Loading PO details...</div>
+              <div className="p-6 text-sm text-[#6E6E73]">Loading PO details...</div>
             ) : (
               <div className="p-6 space-y-6">
                 {/* Summary KPIs */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <div className="text-slate-500">Status</div>
-                    <div className="mt-1">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
+                    <div className="text-[#86868B]">Status</div>
+                    <div className="mt-1.5">
                       <span
-                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold ${poStatusBadgeClass(
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${poStatusBadgeClass(
                           poDetail.status,
                         )}`}
                       >
@@ -375,21 +375,21 @@ export function POTrackerPage({
                       </span>
                     </div>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <div className="text-slate-500">Order Qty</div>
-                    <div className="mt-1 text-sm font-bold text-slate-900">
+                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
+                    <div className="text-[#86868B]">Order Qty</div>
+                    <div className="mt-1 text-sm font-bold text-[#1D1D1F]">
                       {poDetail.qty} units
                     </div>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <div className="text-slate-500">Unit Price</div>
-                    <div className="mt-1 text-sm font-bold text-slate-900">
+                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
+                    <div className="text-[#86868B]">Unit Price</div>
+                    <div className="mt-1 text-sm font-bold text-[#1D1D1F]">
                       {formatInr(poDetail.unit_price)}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <div className="text-slate-500">Total Value</div>
-                    <div className="mt-1 text-sm font-bold text-slate-900">
+                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
+                    <div className="text-[#86868B]">Total Value</div>
+                    <div className="mt-1 text-sm font-bold text-[#1D1D1F]">
                       {formatInr(poDetail.total_amount)}
                     </div>
                   </div>
@@ -397,43 +397,43 @@ export function POTrackerPage({
 
                 {/* State Timeline */}
                 <section className="space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B]">
                     Lifecycle Timeline
                   </h3>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 grid grid-cols-2 gap-3 text-xs">
+                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3.5 grid grid-cols-2 gap-3 text-xs tabular-nums">
                     <div>
-                      <span className="text-slate-500">Created:</span>{' '}
-                      <span className="font-medium text-slate-800">
+                      <span className="text-[#6E6E73]">Created:</span>{' '}
+                      <span className="font-medium text-[#1D1D1F]">
                         {formatSimDateTime(poDetail.created_at)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Dispatched:</span>{' '}
-                      <span className="font-medium text-slate-800">
+                      <span className="text-[#6E6E73]">Dispatched:</span>{' '}
+                      <span className="font-medium text-[#1D1D1F]">
                         {formatSimDateTime(poDetail.sent_at)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Promised ETA:</span>{' '}
-                      <span className="font-medium text-slate-800">
+                      <span className="text-[#6E6E73]">Promised ETA:</span>{' '}
+                      <span className="font-medium text-[#1D1D1F]">
                         {formatSimDate(poDetail.promised_eta)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Revised ETA:</span>{' '}
-                      <span className="font-medium text-amber-700">
+                      <span className="text-[#6E6E73]">Revised ETA:</span>{' '}
+                      <span className="font-medium text-[#945600]">
                         {formatSimDate(poDetail.revised_eta)}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Follow-ups Sent:</span>{' '}
-                      <span className="font-semibold text-slate-900">
+                      <span className="text-[#6E6E73]">Follow-ups Sent:</span>{' '}
+                      <span className="font-semibold text-[#1D1D1F]">
                         {poDetail.follow_up_count}
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Pre-ETA Check:</span>{' '}
-                      <span className="font-semibold text-slate-900">
+                      <span className="text-[#6E6E73]">Pre-ETA Check:</span>{' '}
+                      <span className="font-semibold text-[#1D1D1F]">
                         {poDetail.pre_eta_checked ? 'Done' : 'Pending'}
                       </span>
                     </div>
@@ -442,10 +442,10 @@ export function POTrackerPage({
 
                 {/* Log GRN + Switch Backup */}
                 {!TERMINAL_STATUSES.has(poDetail.status) && (
-                  <section className="rounded-xl border border-slate-200 p-4 space-y-4">
+                  <section className="rounded-2xl border border-black/[0.08] bg-white p-4 space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                        <PackageCheck className="h-4 w-4 text-emerald-600" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#1D1D1F] flex items-center gap-1.5">
+                        <PackageCheck className="h-4 w-4 text-[#1B6B43]" />
                         Warehouse Goods Receipt (GRN)
                       </h3>
 
@@ -453,7 +453,7 @@ export function POTrackerPage({
                         type="button"
                         disabled={busyAction}
                         onClick={() => void handleSwitchBackup()}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                        className="apple-press inline-flex items-center gap-1.5 rounded-xl border border-[#B46900]/25 bg-[#B46900]/[0.08] px-3 py-1.5 text-xs font-semibold text-[#945600] hover:bg-[#B46900]/[0.14] disabled:opacity-45"
                       >
                         <ArrowRightLeft className="h-3.5 w-3.5" />
                         Switch to Backup Supplier
@@ -461,15 +461,15 @@ export function POTrackerPage({
                     </div>
 
                     {!GRN_ALLOWED_STATUSES.has(poDetail.status) ? (
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-[#6E6E73]">
                         GRN logging is unavailable while PO is in{' '}
-                        <span className="font-semibold">{poDetail.status}</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">{poDetail.status}</span>{' '}
                         (requires ACKNOWLEDGED, DELAYED_CRITICAL, or OVERDUE).
                       </p>
                     ) : (
                       <form onSubmit={handleRecordGrn} className="flex flex-wrap items-end gap-3">
                         <div>
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          <label className="block text-[11px] font-semibold text-[#6E6E73] mb-1">
                             Received Qty
                           </label>
                           <input
@@ -478,17 +478,17 @@ export function POTrackerPage({
                             value={grnQty}
                             onChange={(e) => setGrnQty(e.target.value)}
                             required
-                            className="w-28 rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+                            className="w-28 rounded-xl border border-black/[0.12] px-3 py-1.5 text-xs text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          <label className="block text-[11px] font-semibold text-[#6E6E73] mb-1">
                             Condition
                           </label>
                           <select
                             value={grnCondition}
                             onChange={(e) => setGrnCondition(e.target.value)}
-                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+                            className="rounded-xl border border-black/[0.12] px-3 py-1.5 text-xs text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
                           >
                             <option value="GOOD">GOOD</option>
                             <option value="DAMAGED">DAMAGED</option>
@@ -497,7 +497,7 @@ export function POTrackerPage({
                         <button
                           type="submit"
                           disabled={busyAction}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                          className="apple-press inline-flex items-center gap-1.5 rounded-xl bg-[#1F7A4D] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#1B6B43] disabled:opacity-45"
                         >
                           <ClipboardCheck className="h-3.5 w-3.5" />
                           Log GRN
@@ -510,32 +510,32 @@ export function POTrackerPage({
                 {/* Goods Receipts */}
                 {poDetail.goods_receipts.length > 0 && (
                   <section className="space-y-2">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B]">
                       Goods Receipts
                     </h3>
                     <div className="space-y-2">
                       {poDetail.goods_receipts.map((g) => (
                         <div
                           key={g.id}
-                          className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-xs"
+                          className="flex items-center justify-between rounded-xl border border-black/[0.08] bg-white px-3.5 py-2.5 text-xs tabular-nums"
                         >
                           <div>
-                            <span className="font-semibold text-slate-900">
+                            <span className="font-semibold text-[#1D1D1F]">
                               GRN #{g.id}: {g.received_qty} units
                             </span>{' '}
-                            <span className="text-slate-500">({g.condition})</span>
+                            <span className="text-[#6E6E73]">({g.condition})</span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span
-                              className={`rounded px-2 py-0.5 font-semibold ${
+                              className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
                                 g.status === 'RELEASED'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-amber-100 text-amber-800'
+                                  ? 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22'
+                                  : 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/24'
                               }`}
                             >
                               {g.status}
                             </span>
-                            <span className="text-slate-500">
+                            <span className="text-[#86868B]">
                               {formatSimDateTime(g.received_at)}
                             </span>
                           </div>
@@ -547,12 +547,12 @@ export function POTrackerPage({
 
                 {/* Invoices & 3-Way Match Breakdown */}
                 <section className="space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B] flex items-center gap-1.5">
                     <FileText className="h-3.5 w-3.5" />
                     Invoice &amp; 3-Way Match Breakdown ({poDetail.invoices.length})
                   </h3>
                   {poDetail.invoices.length === 0 ? (
-                    <p className="text-xs text-slate-500">No invoices submitted yet.</p>
+                    <p className="text-xs text-[#6E6E73]">No invoices submitted yet.</p>
                   ) : (
                     <div className="space-y-2">
                       {poDetail.invoices.map((inv) => {
@@ -560,47 +560,47 @@ export function POTrackerPage({
                         return (
                           <div
                             key={inv.id}
-                            className={`rounded-lg border p-3 text-xs space-y-1.5 ${
+                            className={`rounded-xl border p-3.5 text-xs space-y-1.5 tabular-nums ${
                               isMatched
-                                ? 'border-emerald-200 bg-emerald-50/40'
+                                ? 'border-[#1F7A4D]/25 bg-[#1F7A4D]/[0.05]'
                                 : inv.match_status === 'PENDING_GRN'
-                                  ? 'border-sky-200 bg-sky-50/40'
-                                  : 'border-red-200 bg-red-50/50'
+                                  ? 'border-[#0066CC]/22 bg-[#0066CC]/[0.04]'
+                                  : 'border-[#C9342D]/25 bg-[#C9342D]/[0.05]'
                             }`}
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                              <div className="font-semibold text-[#1D1D1F] flex items-center gap-1.5">
                                 {isMatched && (
-                                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                  <CheckCircle2 className="h-3.5 w-3.5 text-[#1B6B43]" />
                                 )}
                                 <span>
                                   {inv.invoice_number} (v{inv.version})
                                 </span>
                               </div>
-                              <span className="rounded bg-white px-2 py-0.5 font-bold border border-slate-200">
+                              <span className="rounded-full bg-white px-2.5 py-0.5 text-[11px] font-bold border border-black/[0.08] text-[#1D1D1F]">
                                 {inv.match_status}
                               </span>
                             </div>
-                            <div className="flex flex-wrap gap-4 text-slate-700">
+                            <div className="flex flex-wrap gap-4 text-[#6E6E73]">
                               <span>
-                                Extracted Qty: <strong>{inv.extracted_qty}</strong> (PO:{' '}
+                                Extracted Qty: <strong className="text-[#1D1D1F]">{inv.extracted_qty}</strong> (PO:{' '}
                                 {poDetail.qty})
                               </span>
                               <span>
                                 Unit Price:{' '}
-                                <strong>{formatInr(inv.extracted_unit_price)}</strong> (PO:{' '}
+                                <strong className="text-[#1D1D1F]">{formatInr(inv.extracted_unit_price)}</strong> (PO:{' '}
                                 {formatInr(poDetail.unit_price)})
                               </span>
                               <span>
-                                Total: <strong>{formatInr(inv.extracted_total)}</strong>
+                                Total: <strong className="text-[#1D1D1F]">{formatInr(inv.extracted_total)}</strong>
                               </span>
                             </div>
                             {inv.discrepancy_summary && (
-                              <p className="text-red-800 font-medium">
+                              <p className="text-[#B82923] font-medium">
                                 {inv.discrepancy_summary}
                               </p>
                             )}
-                            <div className="text-[11px] text-slate-500">
+                            <div className="text-[11px] text-[#86868B]">
                               PDF: {inv.pdf_path} · Received {formatSimDateTime(inv.received_at)}
                             </div>
                           </div>
@@ -612,11 +612,11 @@ export function POTrackerPage({
 
                 {/* Notes */}
                 <section className="space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B]">
                     PO Notes
                   </h3>
                   {poDetail.notes && (
-                    <pre className="whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 font-sans">
+                    <pre className="whitespace-pre-wrap rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3 text-xs text-[#1D1D1F] font-sans">
                       {poDetail.notes}
                     </pre>
                   )}
@@ -627,12 +627,12 @@ export function POTrackerPage({
                         placeholder="Add operational note to PO..."
                         value={noteInput}
                         onChange={(e) => setNoteInput(e.target.value)}
-                        className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs focus:border-slate-400 focus:outline-none"
+                        className="flex-1 rounded-xl border border-black/[0.10] bg-[#FBFBFD] px-3 py-1.5 text-xs text-[#1D1D1F] focus:border-[#0066CC] focus:bg-white focus:outline-none"
                       />
                       <button
                         type="submit"
                         disabled={busyAction || !noteInput.trim()}
-                        className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                        className="apple-press rounded-xl bg-[#0066CC] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                       >
                         Add Note
                       </button>
@@ -642,41 +642,41 @@ export function POTrackerPage({
 
                 {/* Linked Email Thread */}
                 <section className="space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B] flex items-center gap-1.5">
                     <Mail className="h-3.5 w-3.5" />
                     Linked Email Thread ({poDetail.communications.length})
                   </h3>
                   {poDetail.communications.length === 0 ? (
-                    <p className="text-xs text-slate-500">No communications linked yet.</p>
+                    <p className="text-xs text-[#6E6E73]">No communications linked yet.</p>
                   ) : (
                     <div className="space-y-2.5">
                       {poDetail.communications.map((c) => (
                         <div
                           key={c.id}
-                          className="rounded-lg border border-slate-200 bg-white p-3 text-xs space-y-1.5"
+                          className="rounded-xl border border-black/[0.08] bg-white p-3.5 text-xs space-y-1.5"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="font-semibold text-slate-900">
+                            <div className="font-semibold text-[#1D1D1F]">
                               {personaLabel(c.from_persona)} →{' '}
                               {c.to_personas.map(personaLabel).join(', ')}
                             </div>
                             <div className="flex items-center gap-1.5">
                               {c.ai_classification && (
-                                <span className="rounded bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-800">
+                                <span className="rounded-full bg-[#5E5CE6]/10 border border-[#5E5CE6]/22 px-2 py-0.5 text-[11px] font-semibold text-[#4B48C4]">
                                   Lex: {c.ai_classification}
                                   {c.ai_confidence !== null
                                     ? ` (${Math.round(c.ai_confidence * 100)}%)`
                                     : ''}
                                 </span>
                               )}
-                              <span className="rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-700">
+                              <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[11px] font-medium text-[#6E6E73]">
                                 {c.status}
                               </span>
                             </div>
                           </div>
-                          <div className="font-semibold text-slate-800">{c.subject}</div>
-                          <p className="whitespace-pre-wrap text-slate-600">{c.body}</p>
-                          <div className="text-[11px] text-slate-400">
+                          <div className="font-semibold text-[#1D1D1F]">{c.subject}</div>
+                          <p className="whitespace-pre-wrap text-[#6E6E73]">{c.body}</p>
+                          <div className="text-[11px] text-[#86868B] tabular-nums">
                             {formatSimDateTime(c.timestamp)}
                             {c.attachment_path ? ` · Attachment: ${c.attachment_path}` : ''}
                           </div>

@@ -252,8 +252,8 @@ export function MailroomPage({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">5-Persona Mailroom</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">5-Persona Mailroom</h1>
+          <p className="text-sm text-[#6E6E73]">
             Switch personas to simulate supplier correspondence, attach PDF invoices, and approve Lex email drafts.
           </p>
         </div>
@@ -263,7 +263,7 @@ export function MailroomPage({
             type="button"
             disabled={isLex}
             onClick={() => openCompose()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+            className="apple-press inline-flex items-center gap-1.5 rounded-full bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] shadow-2xs disabled:cursor-not-allowed disabled:opacity-40"
           >
             <PenSquare className="h-3.5 w-3.5" />
             Compose
@@ -271,16 +271,16 @@ export function MailroomPage({
           <button
             type="button"
             onClick={() => void loadFolder()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            className="apple-press inline-flex items-center gap-1.5 rounded-full border border-black/[0.08] bg-white px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD] shadow-2xs"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-3.5 w-3.5 text-[#6E6E73] ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
         </div>
       </div>
 
       {/* Persona Switcher */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-2.5">
+      <div className="apple-card flex flex-wrap items-center justify-between gap-3 rounded-2xl p-2.5">
         <div className="flex flex-wrap items-center gap-1.5">
           {PERSONAS.map((p) => {
             const active = persona === p;
@@ -292,10 +292,12 @@ export function MailroomPage({
                   setPersona(p);
                   setSelectedEmail(null);
                 }}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                className={`apple-press inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold ${
                   active
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                    ? p === 'lex'
+                      ? 'bg-[#5E5CE6] text-white shadow-2xs'
+                      : 'bg-[#0066CC] text-white shadow-2xs'
+                    : 'bg-[#FBFBFD] text-[#6E6E73] border border-black/[0.06] hover:bg-black/[0.04] hover:text-[#1D1D1F]'
                 }`}
               >
                 {p === 'lex' && <Lock className="h-3 w-3" />}
@@ -305,7 +307,7 @@ export function MailroomPage({
           })}
         </div>
 
-        <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+        <div className="inline-flex rounded-full border border-black/[0.08] bg-[#F5F5F7] p-0.5">
           {(['inbox', 'sent', 'drafts'] as const).map((f) => (
             <button
               key={f}
@@ -314,10 +316,10 @@ export function MailroomPage({
                 setFolder(f);
                 setSelectedEmail(null);
               }}
-              className={`rounded-md px-3 py-1 text-xs font-semibold capitalize transition ${
+              className={`apple-press rounded-full px-3.5 py-1 text-xs font-semibold capitalize ${
                 folder === f
-                  ? 'bg-white text-slate-900 shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
+                  ? 'bg-white text-[#1D1D1F] shadow-2xs'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F]'
               }`}
             >
               {f}
@@ -327,8 +329,8 @@ export function MailroomPage({
       </div>
 
       {isLex && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-900">
-          <Lock className="h-4 w-4 shrink-0 text-amber-700" />
+        <div className="flex items-center gap-2 rounded-xl border border-[#B46900]/24 bg-[#B46900]/[0.08] px-4 py-2.5 text-xs font-medium text-[#945600]">
+          <Lock className="h-4 w-4 shrink-0 text-[#945600]" />
           Lex inbox is read-only. Manual send from Lex is disabled; switch to Inventory Manager or a supplier to send messages.
         </div>
       )}
@@ -336,18 +338,18 @@ export function MailroomPage({
       {/* Split Mail List & Thread Pane */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[540px]">
         {/* Email List */}
-        <div className="lg:col-span-5 rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col">
-          <div className="border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+        <div className="apple-card lg:col-span-5 rounded-2xl overflow-hidden flex flex-col">
+          <div className="border-b border-black/[0.06] bg-[#FBFBFD] px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-[#86868B] flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               <Inbox className="h-3.5 w-3.5" />
               {personaLabel(persona)} · {folder}
             </span>
-            <span>{emails.length}</span>
+            <span className="tabular-nums">{emails.length}</span>
           </div>
 
-          <div className="divide-y divide-slate-100 overflow-y-auto max-h-[600px]">
+          <div className="divide-y divide-black/[0.05] overflow-y-auto max-h-[600px]">
             {emails.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
+              <div className="p-8 text-center text-xs text-[#6E6E73]">
                 No emails in {folder}.
               </div>
             ) : (
@@ -358,26 +360,26 @@ export function MailroomPage({
                     key={email.id}
                     type="button"
                     onClick={() => setSelectedEmail(email)}
-                    className={`w-full text-left px-4 py-3 transition ${
-                      isSelected ? 'bg-sky-50' : 'hover:bg-slate-50'
+                    className={`w-full text-left px-4 py-3 transition-colors ${
+                      isSelected ? 'bg-[#0066CC]/[0.07]' : 'hover:bg-black/[0.02]'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2 text-xs">
-                      <span className="font-semibold text-slate-900 truncate">
+                      <span className="font-semibold text-[#1D1D1F] truncate">
                         {folder === 'sent' || folder === 'drafts'
                           ? `To: ${email.to_personas.map(personaLabel).join(', ')}`
                           : personaLabel(email.from_persona)}
                       </span>
-                      <span className="text-[11px] text-slate-400 shrink-0">
+                      <span className="text-[11px] text-[#86868B] shrink-0 tabular-nums">
                         {formatSimDateTime(email.timestamp)}
                       </span>
                     </div>
-                    <div className="mt-1 text-xs font-semibold text-slate-800 truncate">
+                    <div className="mt-1 text-xs font-semibold text-[#1D1D1F] truncate">
                       {email.subject}
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       {email.ai_classification && (
-                        <span className="inline-flex items-center gap-1 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-800">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[#5E5CE6]/10 border border-[#5E5CE6]/22 px-2 py-0.5 text-[10px] font-semibold text-[#4B48C4]">
                           <Sparkles className="h-2.5 w-2.5" />
                           {email.ai_classification}
                           {email.ai_confidence !== null &&
@@ -385,18 +387,18 @@ export function MailroomPage({
                         </span>
                       )}
                       {email.status === 'DRAFT_PENDING_APPROVAL' && (
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-800">
+                        <span className="rounded-full bg-[#B46900]/10 border border-[#B46900]/24 px-2 py-0.5 text-[10px] font-semibold text-[#945600]">
                           PENDING APPROVAL
                         </span>
                       )}
                       {email.attachment_path && (
-                        <span className="inline-flex items-center gap-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+                        <span className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-medium text-[#6E6E73]">
                           <Paperclip className="h-2.5 w-2.5" />
                           PDF
                         </span>
                       )}
                       {email.po_id && (
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                        <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-medium text-[#6E6E73] tabular-nums">
                           PO #{email.po_id}
                         </span>
                       )}
@@ -409,35 +411,35 @@ export function MailroomPage({
         </div>
 
         {/* Reading & Thread Pane */}
-        <div className="lg:col-span-7 rounded-xl border border-slate-200 bg-white p-5 flex flex-col space-y-4">
+        <div className="apple-card lg:col-span-7 rounded-2xl p-5 flex flex-col space-y-4">
           {!selectedEmail ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-16">
+            <div className="flex-1 flex flex-col items-center justify-center text-[#86868B] py-16">
               <Mail className="h-8 w-8 mb-2" />
               <p className="text-sm">Select a message to read its thread</p>
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-4">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-black/[0.06] pb-4">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">
+                  <h2 className="text-base font-bold tracking-tight text-[#1D1D1F]">
                     {selectedEmail.subject}
                   </h2>
-                  <div className="mt-1 text-xs text-slate-600 space-y-0.5">
+                  <div className="mt-1 text-xs text-[#6E6E73] space-y-0.5">
                     <div>
-                      <strong>From:</strong> {personaLabel(selectedEmail.from_persona)}
+                      <strong className="text-[#1D1D1F]">From:</strong> {personaLabel(selectedEmail.from_persona)}
                     </div>
                     <div>
-                      <strong>To:</strong>{' '}
+                      <strong className="text-[#1D1D1F]">To:</strong>{' '}
                       {selectedEmail.to_personas.map(personaLabel).join(', ')}
                       {selectedEmail.cc_personas.length > 0 && (
                         <>
                           {' · '}
-                          <strong>CC:</strong>{' '}
+                          <strong className="text-[#1D1D1F]">CC:</strong>{' '}
                           {selectedEmail.cc_personas.map(personaLabel).join(', ')}
                         </>
                       )}
                     </div>
-                    <div className="text-slate-400">
+                    <div className="text-[#86868B] tabular-nums">
                       Thread: {selectedEmail.thread_id}
                       {selectedEmail.po_id ? ` · Linked PO #${selectedEmail.po_id}` : ''}
                     </div>
@@ -448,9 +450,9 @@ export function MailroomPage({
                   <button
                     type="button"
                     onClick={() => openCompose(selectedEmail)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                    className="apple-press inline-flex items-center gap-1.5 rounded-full border border-black/[0.10] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#1D1D1F] hover:bg-[#FBFBFD] shadow-2xs"
                   >
-                    <Reply className="h-3.5 w-3.5" />
+                    <Reply className="h-3.5 w-3.5 text-[#6E6E73]" />
                     Reply
                   </button>
                 )}
@@ -458,10 +460,10 @@ export function MailroomPage({
 
               {/* Draft approval controls if selected message is pending approval */}
               {selectedEmail.status === 'DRAFT_PENDING_APPROVAL' && (
-                <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+                <div className="rounded-xl border border-[#5E5CE6]/22 bg-[#5E5CE6]/[0.04] p-4 space-y-3">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-indigo-950 flex items-center gap-1.5">
-                      <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                    <span className="font-bold text-[#1D1D1F] flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-[#5E5CE6]" />
                       Lex Draft Pending Manager Approval ({selectedEmail.category})
                     </span>
                   </div>
@@ -469,20 +471,20 @@ export function MailroomPage({
                     type="text"
                     value={draftSubject}
                     onChange={(e) => setDraftSubject(e.target.value)}
-                    className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 focus:border-indigo-500 focus:outline-none"
+                    className="w-full rounded-xl border border-[#5E5CE6]/25 bg-white px-3 py-1.5 text-xs font-semibold text-[#1D1D1F] focus:border-[#5E5CE6] focus:outline-none"
                   />
                   <textarea
                     rows={5}
                     value={draftBody}
                     onChange={(e) => setDraftBody(e.target.value)}
-                    className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs text-slate-800 focus:border-indigo-500 focus:outline-none"
+                    className="w-full rounded-xl border border-[#5E5CE6]/25 bg-white px-3 py-2 text-xs text-[#1D1D1F] focus:border-[#5E5CE6] focus:outline-none"
                   />
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
                       disabled={busyDraftId === selectedEmail.id}
                       onClick={() => void handleApproveDraft(selectedEmail)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                      className="apple-press inline-flex items-center gap-1.5 rounded-xl bg-[#0066CC] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                     >
                       <Check className="h-3.5 w-3.5" />
                       Approve &amp; Send
@@ -491,7 +493,7 @@ export function MailroomPage({
                       type="button"
                       disabled={busyDraftId === selectedEmail.id}
                       onClick={() => void handleRejectDraft(selectedEmail)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                      className="apple-press inline-flex items-center gap-1.5 rounded-xl border border-[#C9342D]/25 bg-white px-3 py-1.5 text-xs font-semibold text-[#B82923] hover:bg-[#C9342D]/[0.07] disabled:opacity-45"
                     >
                       <X className="h-3.5 w-3.5" />
                       Reject
@@ -505,40 +507,40 @@ export function MailroomPage({
                 {(threadEmails.length > 0 ? threadEmails : [selectedEmail]).map((msg) => (
                   <div
                     key={msg.id}
-                    className={`rounded-lg border p-3.5 text-xs space-y-2 ${
+                    className={`rounded-xl border p-3.5 text-xs space-y-2 ${
                       msg.id === selectedEmail.id
-                        ? 'border-sky-200 bg-sky-50/30'
-                        : 'border-slate-200 bg-white'
+                        ? 'border-[#0066CC]/22 bg-[#0066CC]/[0.03]'
+                        : 'border-black/[0.08] bg-white'
                     }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-semibold text-slate-900">
+                      <span className="font-semibold text-[#1D1D1F]">
                         {personaLabel(msg.from_persona)} →{' '}
                         {msg.to_personas.map(personaLabel).join(', ')}
                       </span>
                       <div className="flex flex-wrap items-center gap-1.5">
                         {msg.ai_classification && (
-                          <span className="rounded bg-indigo-100 px-2 py-0.5 text-[11px] font-semibold text-indigo-800">
+                          <span className="rounded-full bg-[#5E5CE6]/10 border border-[#5E5CE6]/22 px-2 py-0.5 text-[11px] font-semibold text-[#4B48C4]">
                             Lex: {msg.ai_classification}
                             {msg.ai_confidence !== null &&
                               ` (${Math.round(msg.ai_confidence * 100)}%)`}
                           </span>
                         )}
-                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                        <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[11px] font-medium text-[#6E6E73]">
                           {msg.status}
                         </span>
-                        <span className="text-[11px] text-slate-400">
+                        <span className="text-[11px] text-[#86868B] tabular-nums">
                           {formatSimDateTime(msg.timestamp)}
                         </span>
                       </div>
                     </div>
 
-                    <p className="whitespace-pre-wrap text-slate-800 leading-relaxed">
+                    <p className="whitespace-pre-wrap text-[#1D1D1F] leading-relaxed">
                       {msg.body}
                     </p>
 
                     {msg.attachment_path && (
-                      <div className="inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700">
+                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-black/[0.08] bg-[#FBFBFD] px-2.5 py-1 text-[11px] font-medium text-[#6E6E73]">
                         <Paperclip className="h-3 w-3" />
                         {msg.attachment_path}
                       </div>
@@ -546,11 +548,11 @@ export function MailroomPage({
 
                     {msg.ai_extracted_json &&
                       Object.keys(msg.ai_extracted_json).length > 0 && (
-                        <details className="rounded border border-indigo-100 bg-indigo-50/40 p-2">
-                          <summary className="cursor-pointer font-semibold text-indigo-900">
+                        <details className="rounded-xl border border-[#5E5CE6]/18 bg-[#5E5CE6]/[0.04] p-2.5">
+                          <summary className="cursor-pointer font-semibold text-[#4B48C4]">
                             Lex Triage Extraction
                           </summary>
-                          <pre className="mt-1.5 overflow-x-auto text-[11px] text-slate-700">
+                          <pre className="mt-1.5 overflow-x-auto text-[11px] text-[#1D1D1F]">
                             {JSON.stringify(msg.ai_extracted_json, null, 2)}
                           </pre>
                         </details>
@@ -565,16 +567,16 @@ export function MailroomPage({
 
       {/* Compose / Reply Modal */}
       {composeOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <h2 className="text-base font-bold text-slate-900">
+        <div className="anim-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/30 backdrop-blur-xs p-4">
+          <div className="anim-modal-pop w-full max-w-xl rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_18px_48px_rgba(0,0,0,0.14)]">
+            <div className="flex items-center justify-between border-b border-black/[0.06] pb-3">
+              <h2 className="text-base font-bold tracking-tight text-[#1D1D1F]">
                 New Email from {personaLabel(persona)}
               </h2>
               <button
                 type="button"
                 onClick={() => setComposeOpen(false)}
-                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="apple-press rounded-full p-1.5 text-[#86868B] hover:bg-black/[0.05] hover:text-[#1D1D1F]"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -582,7 +584,7 @@ export function MailroomPage({
 
             <form onSubmit={handleSendEmail} className="mt-4 space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">To</label>
+                <label className="block font-semibold text-[#1D1D1F] mb-1">To</label>
                 <div className="flex flex-wrap gap-1.5">
                   {PERSONAS.filter((p) => p !== persona).map((p) => {
                     const checked = toPersonas.includes(p);
@@ -591,10 +593,10 @@ export function MailroomPage({
                         key={p}
                         type="button"
                         onClick={() => toggleRecipient(toPersonas, setToPersonas, p)}
-                        className={`rounded-full border px-2.5 py-1 font-semibold transition ${
+                        className={`apple-press rounded-full border px-3 py-1 font-semibold ${
                           checked
-                            ? 'border-slate-900 bg-slate-900 text-white'
-                            : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'
+                            ? 'border-[#0066CC] bg-[#0066CC] text-white'
+                            : 'border-black/[0.08] bg-[#FBFBFD] text-[#6E6E73] hover:bg-black/[0.04] hover:text-[#1D1D1F]'
                         }`}
                       >
                         {personaLabel(p)}
@@ -605,7 +607,7 @@ export function MailroomPage({
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
+                <label className="block font-semibold text-[#1D1D1F] mb-1">
                   CC (optional)
                 </label>
                 <div className="flex flex-wrap gap-1.5">
@@ -616,10 +618,12 @@ export function MailroomPage({
                         key={p}
                         type="button"
                         onClick={() => toggleRecipient(ccPersonas, setCcPersonas, p)}
-                        className={`rounded-full border px-2.5 py-1 font-medium transition ${
+                        className={`apple-press rounded-full border px-3 py-1 font-medium ${
                           checked
-                            ? 'border-indigo-700 bg-indigo-700 text-white'
-                            : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                            ? p === 'lex'
+                              ? 'border-[#5E5CE6] bg-[#5E5CE6] text-white'
+                              : 'border-[#0066CC] bg-[#0066CC] text-white'
+                            : 'border-black/[0.08] bg-white text-[#6E6E73] hover:bg-[#FBFBFD] hover:text-[#1D1D1F]'
                         }`}
                       >
                         {personaLabel(p)}
@@ -631,13 +635,13 @@ export function MailroomPage({
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
+                  <label className="block font-semibold text-[#1D1D1F] mb-1">
                     Linked PO (optional)
                   </label>
                   <select
                     value={composePoId}
                     onChange={(e) => setComposePoId(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+                    className="w-full rounded-xl border border-black/[0.12] px-2.5 py-1.5 text-xs text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
                   >
                     <option value="">Auto-detect / None</option>
                     {pos.map((po) => (
@@ -649,39 +653,39 @@ export function MailroomPage({
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
+                  <label className="block font-semibold text-[#1D1D1F] mb-1">
                     PDF Attachment (optional)
                   </label>
                   <input
                     type="file"
                     accept=".pdf,application/pdf"
                     onChange={(e) => setComposeFile(e.target.files?.[0] ?? null)}
-                    className="w-full text-xs text-slate-600 file:mr-2 file:rounded-md file:border-0 file:bg-slate-100 file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+                    className="w-full text-xs text-[#6E6E73] file:mr-2 file:rounded-full file:border-0 file:bg-black/[0.06] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#1D1D1F] hover:file:bg-black/[0.10]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Subject</label>
+                <label className="block font-semibold text-[#1D1D1F] mb-1">Subject</label>
                 <input
                   type="text"
                   required
                   value={composeSubject}
                   onChange={(e) => setComposeSubject(e.target.value)}
                   placeholder="Subject line..."
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                  className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
                 />
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Body</label>
+                <label className="block font-semibold text-[#1D1D1F] mb-1">Body</label>
                 <textarea
                   rows={5}
                   required
                   value={composeBody}
                   onChange={(e) => setComposeBody(e.target.value)}
                   placeholder="Write message..."
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none"
+                  className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
                 />
               </div>
 
@@ -689,14 +693,14 @@ export function MailroomPage({
                 <button
                   type="button"
                   onClick={() => setComposeOpen(false)}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={sending}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                  className="apple-press inline-flex items-center gap-1.5 rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                 >
                   <Send className="h-3.5 w-3.5" />
                   {sending ? 'Sending...' : 'Send Email'}

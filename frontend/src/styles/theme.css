@@ -1,0 +1,169 @@
+/* Apple HIG-inspired calm design tokens, surfaces, and spring micro-animations */
+
+:root {
+  /* Canvas & Surfaces */
+  --bg-canvas: #F5F5F7;
+  --surface-card: #FFFFFF;
+  --surface-subtle: #FBFBFD;
+  --surface-muted: #F2F2F7;
+  --surface-glass: rgba(255, 255, 255, 0.86);
+  --surface-glass-strong: rgba(255, 255, 255, 0.94);
+
+  /* Hairline Borders */
+  --border-hairline: rgba(0, 0, 0, 0.08);
+  --border-subtle: rgba(0, 0, 0, 0.05);
+  --border-strong: rgba(0, 0, 0, 0.14);
+
+  /* 3-Tier Ink Hierarchy */
+  --ink-primary: #1D1D1F;
+  --ink-secondary: #6E6E73;
+  --ink-tertiary: #86868B;
+
+  /* Calm Interactive Accent */
+  --accent: #0066CC;
+  --accent-hover: #0071E3;
+  --accent-soft: rgba(0, 102, 204, 0.09);
+  --accent-border: rgba(0, 102, 204, 0.22);
+
+  /* Soft Semantic Status Tokens */
+  --semantic-success-bg: rgba(31, 122, 77, 0.09);
+  --semantic-success-border: rgba(31, 122, 77, 0.22);
+  --semantic-success-ink: #1B6B43;
+
+  --semantic-warning-bg: rgba(180, 105, 0, 0.09);
+  --semantic-warning-border: rgba(180, 105, 0, 0.24);
+  --semantic-warning-ink: #945600;
+
+  --semantic-danger-bg: rgba(201, 52, 45, 0.09);
+  --semantic-danger-border: rgba(201, 52, 45, 0.22);
+  --semantic-danger-ink: #B82923;
+
+  --semantic-info-bg: rgba(0, 102, 204, 0.09);
+  --semantic-info-border: rgba(0, 102, 204, 0.22);
+  --semantic-info-ink: #0058B3;
+
+  /* Lex AI Exclusive Soft Violet-Indigo */
+  --semantic-ai-bg: rgba(94, 92, 230, 0.09);
+  --semantic-ai-border: rgba(94, 92, 230, 0.22);
+  --semantic-ai-ink: #4B48C4;
+
+  /* Diffused Elevation Shadows */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.03);
+  --shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.10), 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.12);
+
+  /* Spring Motion Curves */
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 180ms;
+  --duration-base: 220ms;
+  --duration-slow: 260ms;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes modalPop {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes drawerSlide {
+  from {
+    opacity: 0.4;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes backdropFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.apple-glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.apple-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-hairline);
+  box-shadow: var(--shadow-card);
+}
+
+.anim-page-enter {
+  animation: fadeSlideUp var(--duration-base) var(--ease-spring) both;
+}
+
+.anim-modal-pop {
+  animation: modalPop var(--duration-base) var(--ease-spring) both;
+}
+
+.anim-drawer-slide {
+  animation: drawerSlide var(--duration-slow) var(--ease-spring) both;
+}
+
+.anim-backdrop {
+  animation: backdropFade var(--duration-fast) var(--ease-spring) both;
+}
+
+.anim-toast-in {
+  animation: toastSlideIn var(--duration-base) var(--ease-spring) both;
+}
+
+.apple-press {
+  transition:
+    transform var(--duration-fast) var(--ease-spring),
+    background-color var(--duration-fast) var(--ease-spring),
+    border-color var(--duration-fast) var(--ease-spring),
+    color var(--duration-fast) var(--ease-spring),
+    box-shadow var(--duration-fast) var(--ease-spring);
+}
+
+.apple-press:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

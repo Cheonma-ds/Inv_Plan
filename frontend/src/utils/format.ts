@@ -42,52 +42,52 @@ export function formatPct(ratio: number | null | undefined): string {
 export function severityBadgeClass(severity: string): string {
   switch (severity) {
     case 'CRITICAL':
-      return 'bg-red-100 text-red-800 border-red-200';
+      return 'bg-[#C9342D]/10 text-[#B82923] border-[#C9342D]/25';
     case 'HIGH':
-      return 'bg-orange-100 text-orange-800 border-orange-200';
+      return 'bg-[#D96B00]/10 text-[#A84E00] border-[#D96B00]/25';
     case 'MEDIUM':
-      return 'bg-amber-100 text-amber-800 border-amber-200';
+      return 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/25';
     case 'INFO':
     default:
-      return 'bg-sky-100 text-sky-800 border-sky-200';
+      return 'bg-[#0066CC]/10 text-[#0058B3] border-[#0066CC]/22';
   }
 }
 
 export function poStatusBadgeClass(status: string): string {
   switch (status) {
     case 'PENDING_DISPATCH_APPROVAL':
-      return 'bg-amber-100 text-amber-800 border-amber-200';
+      return 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/25';
     case 'SENT_AWAITING_ACK':
-      return 'bg-sky-100 text-sky-800 border-sky-200';
+      return 'bg-[#0066CC]/10 text-[#0058B3] border-[#0066CC]/22';
     case 'ACKNOWLEDGED':
-      return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+      return 'bg-[#5E5CE6]/10 text-[#4B48C4] border-[#5E5CE6]/22';
     case 'EXCEPTION_REVIEW':
     case 'UNRESPONSIVE_ESCALATED':
     case 'DELAYED_CRITICAL':
     case 'OVERDUE':
-      return 'bg-orange-100 text-orange-800 border-orange-200';
+      return 'bg-[#D96B00]/10 text-[#A84E00] border-[#D96B00]/25';
     case 'QUARANTINED_INVOICE_MISMATCH':
-      return 'bg-red-100 text-red-800 border-red-200';
+      return 'bg-[#C9342D]/10 text-[#B82923] border-[#C9342D]/25';
     case 'RECEIVED_PENDING_INVOICE':
-      return 'bg-teal-100 text-teal-800 border-teal-200';
+      return 'bg-[#0D8478]/10 text-[#0B6B61] border-[#0D8478]/22';
     case 'CLOSED':
-      return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+      return 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22';
     case 'CANCELLED':
-      return 'bg-slate-200 text-slate-600 border-slate-300';
+      return 'bg-black/[0.06] text-[#6E6E73] border-black/[0.12]';
     default:
-      return 'bg-slate-100 text-slate-700 border-slate-200';
+      return 'bg-black/[0.04] text-[#6E6E73] border-black/[0.08]';
   }
 }
 
 export function criticalityBadgeClass(criticality: string): string {
   switch (criticality) {
     case 'CRITICAL':
-      return 'bg-rose-100 text-rose-800 border-rose-200';
+      return 'bg-[#C9342D]/10 text-[#B82923] border-[#C9342D]/22';
     case 'STANDARD':
-      return 'bg-blue-100 text-blue-800 border-blue-200';
+      return 'bg-[#0066CC]/10 text-[#0058B3] border-[#0066CC]/22';
     case 'LOW':
     default:
-      return 'bg-slate-100 text-slate-700 border-slate-200';
+      return 'bg-black/[0.05] text-[#6E6E73] border-black/[0.10]';
   }
 }
 

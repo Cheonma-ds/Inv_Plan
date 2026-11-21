@@ -127,7 +127,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
+    <div className="min-h-screen bg-[#F5F5F7] text-[#1D1D1F] flex flex-col">
       <ClockBar
         simNow={simNow}
         openAlertsCount={openAlertsCount}
@@ -137,13 +137,13 @@ export default function App() {
         onGoToAlerts={() => setActiveTab('alerts')}
       />
 
-      <div className="flex flex-1 flex-col md:flex-row">
-        <aside className="w-full md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-slate-200 bg-white">
-          <div className="px-4 py-4 border-b border-slate-100">
-            <div className="text-base font-extrabold tracking-tight text-slate-900">
+      <div className="flex flex-1 flex-col md:flex-row min-w-0">
+        <aside className="w-full md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-black/[0.08] bg-white/80 backdrop-blur-xl">
+          <div className="px-4 py-4 border-b border-black/[0.06]">
+            <div className="text-base font-bold tracking-tight text-[#1D1D1F]">
               InvPlan
             </div>
-            <div className="text-[11px] text-slate-500">
+            <div className="text-[11px] font-medium text-[#86868B]">
               Demand-to-Delivery Operations
             </div>
           </div>
@@ -157,22 +157,22 @@ export default function App() {
                   key={item.id}
                   type="button"
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs font-semibold whitespace-nowrap transition ${
+                  className={`apple-press flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-xs font-semibold whitespace-nowrap ${
                     isActive
-                      ? 'bg-slate-900 text-white'
-                      : 'text-slate-700 hover:bg-slate-100'
+                      ? 'bg-[#0066CC] text-white shadow-[0_1px_3px_rgba(0,102,204,0.28)]'
+                      : 'text-[#6E6E73] hover:bg-black/[0.04] hover:text-[#1D1D1F]'
                   }`}
                 >
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-2.5">
                     <Icon className="h-4 w-4 shrink-0" />
                     {item.label}
                   </span>
                   {item.id === 'alerts' && openAlertsCount > 0 && (
                     <span
-                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
                         isActive
-                          ? 'bg-red-500 text-white'
-                          : 'bg-red-100 text-red-700'
+                          ? 'bg-white/20 text-white'
+                          : 'bg-[#C9342D]/12 text-[#B82923]'
                       }`}
                     >
                       {openAlertsCount}
@@ -184,66 +184,68 @@ export default function App() {
           </nav>
         </aside>
 
-        <main className="flex-1 p-5 md:p-6 max-w-7xl w-full mx-auto">
-          {activeTab === 'alerts' && (
-            <AlertsPage
-              refreshNonce={refreshNonce}
-              onMutated={bumpRefresh}
-              onNotify={notify}
-              onNavigatePo={(poId) => {
-                setFocusPoId(poId);
-                setActiveTab('pos');
-              }}
-              onNavigatePart={(partId) => {
-                setFocusPartId(partId);
-                setActiveTab('inventory');
-              }}
-            />
-          )}
+        <main className="flex-1 min-w-0 px-5 md:px-7 py-5 max-w-[1640px] w-full mx-auto">
+          <div key={activeTab} className="anim-page-enter">
+            {activeTab === 'alerts' && (
+              <AlertsPage
+                refreshNonce={refreshNonce}
+                onMutated={bumpRefresh}
+                onNotify={notify}
+                onNavigatePo={(poId) => {
+                  setFocusPoId(poId);
+                  setActiveTab('pos');
+                }}
+                onNavigatePart={(partId) => {
+                  setFocusPartId(partId);
+                  setActiveTab('inventory');
+                }}
+              />
+            )}
 
-          {activeTab === 'inventory' && (
-            <InventoryPage
-              refreshNonce={refreshNonce}
-              focusPartId={focusPartId}
-              onClearFocus={() => setFocusPartId(null)}
-              onMutated={bumpRefresh}
-              onNotify={notify}
-            />
-          )}
+            {activeTab === 'inventory' && (
+              <InventoryPage
+                refreshNonce={refreshNonce}
+                focusPartId={focusPartId}
+                onClearFocus={() => setFocusPartId(null)}
+                onMutated={bumpRefresh}
+                onNotify={notify}
+              />
+            )}
 
-          {activeTab === 'pos' && (
-            <POTrackerPage
-              refreshNonce={refreshNonce}
-              focusPoId={focusPoId}
-              onClearFocus={() => setFocusPoId(null)}
-              onMutated={bumpRefresh}
-              onNotify={notify}
-            />
-          )}
+            {activeTab === 'pos' && (
+              <POTrackerPage
+                refreshNonce={refreshNonce}
+                focusPoId={focusPoId}
+                onClearFocus={() => setFocusPoId(null)}
+                onMutated={bumpRefresh}
+                onNotify={notify}
+              />
+            )}
 
-          {activeTab === 'mailroom' && (
-            <MailroomPage
-              refreshNonce={refreshNonce}
-              onMutated={bumpRefresh}
-              onNotify={notify}
-            />
-          )}
+            {activeTab === 'mailroom' && (
+              <MailroomPage
+                refreshNonce={refreshNonce}
+                onMutated={bumpRefresh}
+                onNotify={notify}
+              />
+            )}
 
-          {activeTab === 'planning' && (
-            <SuppliersPlanningPage
-              refreshNonce={refreshNonce}
-              onMutated={bumpRefresh}
-              onNotify={notify}
-            />
-          )}
+            {activeTab === 'planning' && (
+              <SuppliersPlanningPage
+                refreshNonce={refreshNonce}
+                onMutated={bumpRefresh}
+                onNotify={notify}
+              />
+            )}
 
-          {activeTab === 'ai_health' && (
-            <AIHealthPage
-              refreshNonce={refreshNonce}
-              onMutated={bumpRefresh}
-              onNotify={notify}
-            />
-          )}
+            {activeTab === 'ai_health' && (
+              <AIHealthPage
+                refreshNonce={refreshNonce}
+                onMutated={bumpRefresh}
+                onNotify={notify}
+              />
+            )}
+          </div>
         </main>
       </div>
 
