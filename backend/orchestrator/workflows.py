@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,14 @@ from backend.mailroom import (
 )
 from backend.mailroom.transport import SUPPLIER_PERSONAS
 from backend.observability import record_approval_outcome
+from backend.orchestrator.escalation_workflow import escalate_po_to_procurement_workflow
+from backend.orchestrator.logistics_workflow import (
+    create_supplier_memory_alert,
+    handle_followup_logistics_update,
+    handle_po_acknowledgment_logistics,
+    has_logistics_payload,
+    parse_iso_date_utc,
+)
 from backend.orchestrator.sla_watcher import SLAEvent, auto_resolve_po_alerts, run_sla_watcher
 from backend.orchestrator.stock_request_workflow import (
     STOCK_REQUEST_CTA_ACTIONS,
@@ -97,19 +105,7 @@ EXCEPTION_INTENTS = {
 
 
 def _parse_iso_date_utc(date_str: str | None) -> datetime | None:
-    if not date_str:
-        return None
-    try:
-        cleaned = date_str.strip()
-        if len(cleaned) == 10:
-            dt = datetime.fromisoformat(f"{cleaned}T17:00:00+00:00")
-        else:
-            dt = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except ValueError:
-        return None
+    return parse_iso_date_utc(date_str)
 
 
 def _supplier_memory_texts(session: Session, supplier_id: int) -> list[str]:
@@ -154,24 +150,26 @@ def _backup_supplier_info(
     }
 
 
-def _save_learned_memory_note(session: Session, supplier_id: int, note_text: str | None) -> None:
+def _save_learned_memory_note(
+    session: Session, supplier_id: int, note_text: str | None
+) -> SupplierMemoryNote | None:
     if not note_text or not note_text.strip():
-        return
+        return None
     cleaned = note_text.strip()
     existing = _supplier_memory_texts(session, supplier_id)
     if any(n.strip().lower() == cleaned.lower() for n in existing):
-        return
+        return None
     sim_now = clock.now(session)
-    session.add(
-        SupplierMemoryNote(
-            supplier_id=supplier_id,
-            note=cleaned,
-            source=SupplierMemorySource.LEX_LEARNED.value,
-            created_at=sim_now,
-            updated_at=sim_now,
-        )
+    note_row = SupplierMemoryNote(
+        supplier_id=supplier_id,
+        note=cleaned,
+        source=SupplierMemorySource.LEX_LEARNED.value,
+        created_at=sim_now,
+        updated_at=sim_now,
     )
+    session.add(note_row)
     session.flush()
+    return note_row
 
 
 class WorkflowEngine:
@@ -394,6 +392,19 @@ class WorkflowEngine:
                     quoted_lead_time_days=quoted_lt,
                     promised_eta=promised,
                     revised_eta=revised,
+                    promised_dispatch_date=(
+                        clock.ensure_utc(po.promised_dispatch_date).date().isoformat()
+                        if po.promised_dispatch_date
+                        else None
+                    ),
+                    actual_dispatch_date=(
+                        clock.ensure_utc(po.actual_dispatch_date).date().isoformat()
+                        if po.actual_dispatch_date
+                        else None
+                    ),
+                    carrier_name=po.carrier_name,
+                    tracking_number=po.tracking_number,
+                    dispatch_details_status=po.dispatch_details_status,
                 )
             )
 
@@ -440,7 +451,17 @@ class WorkflowEngine:
             po_id=matched_po.id if matched_po else email.po_id,
         )
 
-        _save_learned_memory_note(session, supplier.id, triage_result.new_memory_note)
+        learned_note = _save_learned_memory_note(
+            session, supplier.id, triage_result.new_memory_note
+        )
+        if learned_note is not None:
+            create_supplier_memory_alert(
+                session,
+                supplier=supplier,
+                note=learned_note,
+                po=matched_po,
+                comm_id=email.id,
+            )
 
         created_alert: ActionItem | None = None
         created_draft: StoredEmail | None = None
@@ -521,6 +542,28 @@ class WorkflowEngine:
                     matched_po.id,
                     ("ACK_REMINDER_DRAFT", "UNRESPONSIVE_SUPPLIER"),
                 )
+                ack_res = handle_po_acknowledgment_logistics(
+                    session,
+                    self,
+                    po=matched_po,
+                    part=part,
+                    supplier=supplier,
+                    email=email,
+                    triage_result=triage_result,
+                )
+                created_alert = ack_res["alert"]
+                created_draft = ack_res["draft"]
+            else:
+                follow_res = handle_followup_logistics_update(
+                    session,
+                    po=matched_po,
+                    part=part,
+                    supplier=supplier,
+                    email=email,
+                    triage_result=triage_result,
+                    create_plain_message_fallback=True,
+                )
+                created_alert = follow_res["alert"]
 
         elif triage_result.intent in EXCEPTION_INTENTS:
             if matched_po.status in (
@@ -830,18 +873,28 @@ class WorkflowEngine:
                     },
                 )
 
+            if has_logistics_payload(triage_result):
+                handle_followup_logistics_update(
+                    session,
+                    po=matched_po,
+                    part=part,
+                    supplier=supplier,
+                    email=email,
+                    triage_result=triage_result,
+                    create_plain_message_fallback=False,
+                )
+
         elif triage_result.intent == EmailIntent.GENERAL_REPLY:
-            created_alert = create_action_item(
+            follow_res = handle_followup_logistics_update(
                 session,
-                type="SUPPLIER_MESSAGE",
-                severity=AlertSeverity.INFO,
-                title=f"Supplier update on {matched_po.po_number}",
-                summary=triage_result.summary_for_manager,
-                po_id=matched_po.id,
-                part_id=part.id,
-                suggested_actions=[],
-                cta_payload={"po_id": matched_po.id, "comm_id": email.id},
+                po=matched_po,
+                part=part,
+                supplier=supplier,
+                email=email,
+                triage_result=triage_result,
+                create_plain_message_fallback=True,
             )
+            created_alert = follow_res["alert"]
 
         session.flush()
         return {
@@ -1257,7 +1310,17 @@ class WorkflowEngine:
             received_qty=received_qty,
             condition=condition,
         )
-        auto_resolve_po_alerts(session, po_id, ("OVERDUE_PO", "PRE_ETA_CHECKIN_DRAFT"))
+        auto_resolve_po_alerts(
+            session,
+            po_id,
+            (
+                "OVERDUE_PO",
+                "PRE_ETA_CHECKIN_DRAFT",
+                "MISSING_DISPATCH_DETAILS",
+                "MISSING_DISPATCH_DETAILS_DUE",
+                "DISPATCH_DETAILS_DEFERRED",
+            ),
+        )
 
         alert_id: int | None = None
         draft_comm_id: int | None = None
@@ -1643,6 +1706,16 @@ class WorkflowEngine:
             "alert_id": alert.id,
             "quarantined_cleared_qty": cleared_qty,
         }
+
+    def escalate_to_procurement(
+        self,
+        session: Session,
+        po_id: int,
+        *,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Escalate an open PO to Procurement via internal email and alert."""
+        return escalate_po_to_procurement_workflow(session, po_id=po_id, reason=reason)
 
     def set_clock_and_watch(
         self,

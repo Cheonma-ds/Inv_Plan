@@ -17,12 +17,26 @@ Rules you MUST follow:
      and now reports a shipment delay or revised later ETA.
    - INVOICE_SUBMISSION: Supplier is sending an invoice (e.g. has_pdf_attachment is true
      or mentions attaching a new/corrected invoice).
-   - GENERAL_REPLY: Non-actionable courtesy note or question that does not alter PO terms.
+   - GENERAL_REPLY: Non-actionable courtesy note, question, or pure shipment/tracking/carrier
+     update on an already-acknowledged PO that does not alter PO price, quantity, or ETA.
    - AMBIGUOUS: Unclear, contradictory, missing PO reference, or mixed intent needing review.
-3. Extract numbers carefully:
+3. Extract commercial numbers and shipment logistics fields carefully:
    - `proposed_unit_price`: numeric unit price in INR if supplier proposed a new price.
    - `proposed_qty`: integer quantity if supplier proposed a partial/changed quantity.
-   - `proposed_eta_date`: ISO date `YYYY-MM-DD` relative to `current_date` if date/delay mentioned.
+   - `proposed_eta_date`: ISO date `YYYY-MM-DD` relative to `current_date` if delivery/ETA
+     date is mentioned.
+   - `promised_dispatch_date`: ISO date `YYYY-MM-DD` if supplier states when they plan to
+     dispatch/ship from their facility (distinct from arrival/ETA date), else null.
+   - `actual_dispatch_date`: ISO date `YYYY-MM-DD` if supplier states the order has already
+     shipped/dispatched, else null.
+   - `carrier_name`: courier or logistics provider name (e.g. "BlueDart", "Delhivery",
+     "DTDC", "DHL", "SafeExpress") if mentioned, else null.
+   - `tracking_number`: courier tracking ID / AWB / docket number if mentioned, else null.
+   - `details_promised_later`: true ONLY when the supplier explicitly says they will send missing
+     dispatch date, carrier, or tracking details later (e.g. "will share tracking in 2 days",
+     "dispatch details to follow tomorrow"); otherwise false.
+   - `details_promised_by_date`: ISO date `YYYY-MM-DD` relative to `current_date` if the
+     supplier states when they will share those details, else null.
 4. `summary_for_manager` must be 1-2 plain-English sentences for a non-technical manager.
 5. `suggested_action` must state the recommended next step concisely.
 6. `new_memory_note`: ONLY populate if the email reveals a durable supplier habit or operational
@@ -56,6 +70,13 @@ Rules you MUST follow:
      partial stock or defer. Never promise immediate stock release before Manager approval.
    - For `STOCK_REQUEST_RESPONSE`: clearly communicate the factual status or decision from
      `context_facts` without inventing stock quantities or delivery dates.
+   - For `DISPATCH_DETAILS_REQUEST`: confirm PO progress politely and ask the supplier to provide
+     the specific missing shipment details listed in `context_facts.missing_fields` (promised
+     dispatch date, delivery service/carrier name, and/or tracking number) so receiving can be
+     scheduled cleanly.
+   - For `DISPATCH_DETAILS_NUDGE`: send a polite follow-up referencing the supplier's earlier
+     promise to share dispatch details (citing `context_facts.due_date` if present) and request
+     the still-missing fields in `context_facts.missing_fields` promptly.
 """
 
 

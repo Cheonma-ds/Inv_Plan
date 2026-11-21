@@ -28,6 +28,11 @@ class OpenPOContext(BaseModel):
     quoted_lead_time_days: int
     promised_eta: str | None = None
     revised_eta: str | None = None
+    promised_dispatch_date: str | None = None
+    actual_dispatch_date: str | None = None
+    carrier_name: str | None = None
+    tracking_number: str | None = None
+    dispatch_details_status: str | None = None
 
 
 class ThreadMessageContext(BaseModel):
@@ -56,6 +61,12 @@ class EmailTriageResult(BaseModel):
     proposed_unit_price: float | None = None
     proposed_qty: int | None = None
     proposed_eta_date: str | None = None
+    promised_dispatch_date: str | None = None
+    actual_dispatch_date: str | None = None
+    carrier_name: str | None = None
+    tracking_number: str | None = None
+    details_promised_later: bool = False
+    details_promised_by_date: str | None = None
     delay_reason: str | None = None
     summary_for_manager: str
     suggested_action: str

@@ -1,6 +1,6 @@
 # STATUS_P2.md — Phase 2 Live Session Baton
 
-**Current Stage:** Slices P2-1 through P2-5 Complete (Ready for **Slice P2-6**)  
+**Current Stage:** Slice P2-6 Complete (Ready for **Slice P2-7**)  
 **Last Updated:** 2026-11-21  
 **Baseline Reference:** Phase 1 MVP Complete (Slices 1–5 in [`STATUS.md`](../../STATUS.md))  
 **Planning Docs:** [`PRD_P2.md`](PRD_P2.md) · [`DESIGN_P2.md`](DESIGN_P2.md) · [`SLICES_P2.md`](SLICES_P2.md)
@@ -14,7 +14,7 @@
 - [x] **Slice P2-3:** Backend Core Schema, Idempotent SQLite Migrations, 7 Personas (`making`, `procurement`) & PO Logistics Fields + Seed Fix
 - [x] **Slice P2-4:** Backend Making-Team Stock Request Pipeline & Lex Analysis
 - [x] **Slice P2-5:** Frontend Mailroom (7 Personas), Remove `Withdraw` from Inventory & Stock-Request Alerts
-- [ ] **Slice P2-6:** Backend PO Logistics Triage, 2-Day Deferred SLA, Mandatory Lex Action Alerts & Procurement Escalation
+- [x] **Slice P2-6:** Backend PO Logistics Triage, 2-Day Deferred SLA, Mandatory Lex Action Alerts & Procurement Escalation
 - [ ] **Slice P2-7:** Frontend Horizontal Order Tracking Stepper, Logistics Card & `Escalate to Procurement` UI
 
 ---
@@ -101,13 +101,33 @@
   - `uv run pytest` (`75 passed, 3 skipped`) and `uv run ruff check backend tests` (`All checks passed!`) confirmed zero backend regressions.
   - Headless Chromium Playwright E2E suite (against isolated temp SQLite + Vite dev server + deterministic offline fake LLM) verified: `"Mailroom"` sidebar & heading naming, 0 `Withdraw` buttons on `InventoryPage`, all 7 personas + `Procurement` compose/sent, `Making Team` Compose & Reply locking `Lex` in `CC`, zero premature stock deduction, Scenario S2 (`Approve Issue & Trigger PO`), Scenario S3 (`STOCK_SHORTAGE` metrics + inline-edited `ask_making_minimum` inquiry), Scenario S4 (`MINIMUM_QTY_CONFIRMATION` approval), Scenario S1 (`Reject Request`), `issue_partial_stock`, and 0 console/page errors.
 
+### Slice P2-6 — Backend PO Logistics Triage, 2-Day Deferred SLA, Mandatory Lex Action Alerts & Procurement Escalation
+- **Lex Schemas & Prompts (`backend/agents/lex/schemas.py`, `backend/agents/lex/prompts.py`):**
+  - Extended `EmailTriageResult` (and `OpenPOContext`) with flat JSON-schema-safe logistics fields (`promised_dispatch_date`, `actual_dispatch_date`, `carrier_name`, `tracking_number`, `details_promised_later`, `details_promised_by_date`).
+  - Updated `TRIAGE_SYSTEM_PROMPT` to extract dispatch commitments, courier/tracking IDs, and deferred-detail promises, and updated `DRAFT_SYSTEM_PROMPT` with drafting guidance for `DISPATCH_DETAILS_REQUEST` and `DISPATCH_DETAILS_NUDGE`.
+- **PO Service (`backend/po/service.py`, `backend/po/__init__.py`):**
+  - Added `escalate_po_to_procurement()` recording `escalated_to_procurement_at`, `procurement_escalation_note`, and PO audit note on non-terminal POs while preserving AST domain boundaries (`tests/test_architecture.py` passes).
+- **Logistics & Escalation Workflows (`backend/orchestrator/logistics_workflow.py`, `backend/orchestrator/escalation_workflow.py`, `backend/orchestrator/workflows.py`, `backend/orchestrator/sla_watcher.py`, `backend/orchestrator/routes/pos.py`):**
+  - Implemented supplier ack logistics branching (`COMPLETE` → `PO_ACKNOWLEDGED_COMPLETE` INFO alert; `DEFERRED_2D` → 2-day `dispatch_details_due_at` timer + `DISPATCH_DETAILS_DEFERRED` INFO alert; `AWAITING_IMMEDIATE` → `DISPATCH_DETAILS_REQUEST` draft + `MISSING_DISPATCH_DETAILS` MEDIUM alert).
+  - Updated `sla_watcher.py` to expire `DEFERRED_2D` (`dispatch_details_due_at <= sim_now`) across `ACKNOWLEDGED`, `DELAYED_CRITICAL`, and `OVERDUE` POs without GRN, transitioning to `TIMED_OUT` and creating `DISPATCH_DETAILS_NUDGE` draft + `MISSING_DISPATCH_DETAILS_DUE` HIGH alert.
+  - Added follow-up logistics update handling (`handle_followup_logistics_update()`) applying newly supplied dispatch/carrier/tracking fields, resolving open missing-detail alerts upon `COMPLETE`, guarding against infinite `DEFERRED_2D` re-loops, and emitting `PO_LOGISTICS_UPDATED` INFO alerts.
+  - Enforced mandatory Manager `ActionItem` alerts for every autonomous Lex PO action (including `SUPPLIER_MEMORY_LEARNED` when Lex stores a new `SupplierMemoryNote`), and protected `PROTECTED_NOTIFICATION_ALERT_TYPES` from unintended resolution in `auto_resolve_po_alerts()`.
+  - Added `POST /api/pos/{po_id}/escalate-procurement` (delivering immediate internal email from `inventory_manager` to `procurement` CC `lex` + `HIGH` `PROCUREMENT_ESCALATION` alert) and serialized all logistics, escalation, and `closed_at` fields in `GET /api/pos` and `GET /api/pos/{po_id}`.
+- **Evals & Tests (`backend/evals/lex.yaml`, `tests/orchestrator/test_logistics_and_escalation.py`):**
+  - Added 6 logistics eval cases (`triage_ack_with_full_logistics`, `triage_ack_missing_logistics_immediate`, `triage_ack_deferred_logistics_2d`, `triage_followup_tracking_update`, `draft_dispatch_details_request_compliance`, `draft_dispatch_details_nudge_compliance`) bringing `lex.yaml` to 26 cases (100% offline pass rate; 6/6 live `gemini-3.5-flash-lite` pass rate).
+  - Created `tests/orchestrator/test_logistics_and_escalation.py` (6 integration tests covering `COMPLETE`, `DEFERRED_2D` + `+2d` nudge + follow-up resolution, `AWAITING_IMMEDIATE` + repeated-deferral guard, mandatory memory-note alert & `auto_resolve_po_alerts()` preservation, `OVERDUE` `DEFERRED_2D` expiry, and HTTP `POST /api/pos/{po_id}/escalate-procurement` + PO serialization).
+- **Verification:**
+  - `uv run pytest -v`: **81 passed, 3 skipped** offline; `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/`: **8 passed**; live `gemini-3.5-flash-lite` logistics evals: **6/6 PASS**.
+  - `uv run ruff check backend tests`: **All checks passed!**
+
 ---
 
 ## Next Slice Options
-- **Backend PO Logistics Track (`Slice P2-6`):** PO logistics triage, 2-day deferred SLA, mandatory Lex action alerts, and Procurement escalation.
-  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §5`, `docs/phase2/DESIGN_P2.md §4.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-6`).
-  - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`.
-- **Frontend PO Tracker Stepper & Escalation Track (`Slice P2-7`, depends on `P2-6`):** Horizontal Order Tracking Stepper, Shipment & Logistics Details card, and `Escalate to Procurement` modal in `POTrackerPage.tsx`.
+- **Frontend PO Tracker Stepper & Escalation Track (`Slice P2-7`, Final Phase 2 Slice):** Horizontal Order Tracking Stepper, Shipment & Logistics Details card, and `Escalate to Procurement` modal in `POTrackerPage.tsx`.
+  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §5.1–§5.4 & §6`, `docs/phase2/DESIGN_P2.md §3.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-7`), `frontend/src/api/types.ts`, `frontend/src/api/client.ts`, `frontend/src/pages/POTrackerPage.tsx`.
+  - **Leave Untouched:** `backend/`, `tests/`, `frontend/src/pages/InventoryPage.tsx`, `frontend/src/pages/MailroomPage.tsx`, `frontend/src/pages/AIHealthPage.tsx`.
+  - **Next-Session Handoff Prompt:**
+    > Implement Slice P2-7 (Frontend Horizontal Order Tracking Stepper, Logistics Details & `Escalate to Procurement` UI) for InvPlan. Read `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md` (§5.1–§5.4, §6), `docs/phase2/DESIGN_P2.md` (§3.1), `docs/phase2/SLICES_P2.md` (Slice P2-7), `frontend/src/api/types.ts`, `frontend/src/api/client.ts`, and `frontend/src/pages/POTrackerPage.tsx`. Leave `backend/`, `tests/`, `InventoryPage.tsx`, `MailroomPage.tsx`, and `AIHealthPage.tsx` untouched. Update `types.ts` and `client.ts` for the new PO logistics/stepper/escalation fields and `escalatePoToProcurement(poId, reason)`; create `frontend/src/components/OrderTrackingStepper.tsx` and `frontend/src/components/ProcurementEscalationModal.tsx`; and update `POTrackerPage.tsx` to replace the flat Lifecycle Timeline box with `<OrderTrackingStepper />`, a Shipment & Logistics Details card, and an `Escalate to Procurement` button + modal for non-terminal POs (plus optional Carrier/Tracking/Dispatch summary columns in the PO `<DataTable>`). Verify with `cd frontend && npm run build`, `uv run pytest`, `uv run ruff check backend tests`, and Playwright/headless browser verification covering `PRD_P2.md §6`; update `docs/phase2/STATUS_P2.md` and commit as `feat(slice-p2-7): frontend order tracking stepper and procurement escalation`.
 
 ---
 
@@ -118,3 +138,4 @@
 |---|---|---|---|
 | P2-3 | `SLICES_P2.md` (`Slice P2-3` existing files) | `tests/orchestrator/test_workflows_and_sla.py:464` asserted `len(autonomy_resp.json()) == 8` (hardcoded Phase 1 `EmailCategory` count), failing once 5 new `EmailCategory` values were added (`13 == 8`). | Replaced hardcoded `8` with `len(EmailCategory)` (matching `tests/seed/test_seed_and_clock.py:117`). |
 | P2-4 | `SLICES_P2.md` (`Slice P2-4` existing files) | `tests/observability/test_eval_runner_and_phoenix.py` and `tests/orchestrator/test_observability_routes.py` hardcoded Phase 1 `lex.yaml` count (`16`) and task-type set, failing once 4 `stock_request_triage` eval cases were added (`20 == 16`). | Updated both test files to assert dynamically against `len(suite.cases)` (`>= 20`) and include `stock_request_triage` in expected task types. |
+| P2-6 | `DESIGN_P2.md §4.1` & `backend/orchestrator/sla_watcher.py` | Phase 1 `sla_watcher.py` `active_statuses` excluded `POStatus.OVERDUE`, which would skip `DEFERRED_2D` 2-day dispatch-details expiry on `OVERDUE` POs required by `DESIGN_P2.md §4.1` and `PRD_P2.md §5.3`. | Included `POStatus.OVERDUE` in `active_statuses` for `DEFERRED_2D` evaluation while keeping Overdue/Pre-ETA checks scoped strictly to `ACKNOWLEDGED` / `DELAYED_CRITICAL`. |

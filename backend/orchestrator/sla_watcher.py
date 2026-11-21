@@ -10,6 +10,7 @@ from backend.core.enums import (
     ActionItemStatus,
     AlertSeverity,
     Criticality,
+    DispatchDetailsStatus,
     EmailCategory,
     PersonaKey,
     POStatus,
@@ -27,7 +28,18 @@ from backend.core.models import (
 )
 from backend.mailroom import OutboundMessage, save_draft
 from backend.planning import compute_demand_forecast, refresh_supplier_metrics
-from backend.po import create_action_item, transition_po
+from backend.po import compute_missing_dispatch_fields, create_action_item, transition_po
+
+PROTECTED_NOTIFICATION_ALERT_TYPES: tuple[str, ...] = (
+    "PO_ACKNOWLEDGED_COMPLETE",
+    "DISPATCH_DETAILS_DEFERRED",
+    "PO_LOGISTICS_UPDATED",
+    "SUPPLIER_MEMORY_LEARNED",
+    "MINOR_DELAY_ACCEPTED",
+    "INVOICE_MATCHED_CLOSED",
+    "SUPPLIER_MESSAGE",
+    "PROCUREMENT_ESCALATION",
+)
 
 
 @dataclass
@@ -131,6 +143,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
         POStatus.SENT_AWAITING_ACK.value,
         POStatus.ACKNOWLEDGED.value,
         POStatus.DELAYED_CRITICAL.value,
+        POStatus.OVERDUE.value,
         POStatus.QUARANTINED_INVOICE_MISMATCH.value,
     )
     pos = session.scalars(
@@ -262,19 +275,101 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                     )
             continue
 
-        # 2 & 3. Pre-ETA Check-in & Overdue Detection (ACKNOWLEDGED / DELAYED_CRITICAL)
-        if po.status in (POStatus.ACKNOWLEDGED.value, POStatus.DELAYED_CRITICAL.value):
-            effective_eta_raw = po.revised_eta or po.promised_eta
-            if effective_eta_raw is None:
-                continue
-            effective_eta = clock.ensure_utc(effective_eta_raw)
-
+        # 2 & 3. Deferred Dispatch Details SLA, Pre-ETA Check-in & Overdue Detection
+        if po.status in (
+            POStatus.ACKNOWLEDGED.value,
+            POStatus.DELAYED_CRITICAL.value,
+            POStatus.OVERDUE.value,
+        ):
             grn_count = (
                 session.scalar(
                     select(func.count(GoodsReceipt.id)).where(GoodsReceipt.po_id == po.id)
                 )
                 or 0
             )
+
+            # 2-Day Deferred Dispatch Details Expiry -> TIMED_OUT + DISPATCH_DETAILS_NUDGE
+            if (
+                grn_count == 0
+                and po.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
+                and po.dispatch_details_due_at is not None
+                and sim_now >= clock.ensure_utc(po.dispatch_details_due_at)
+            ):
+                missing_fields = list(
+                    po.missing_dispatch_fields_json or compute_missing_dispatch_fields(po)
+                )
+                if not missing_fields:
+                    po.dispatch_details_status = DispatchDetailsStatus.COMPLETE.value
+                    po.dispatch_details_due_at = None
+                else:
+                    due_date_str = clock.ensure_utc(po.dispatch_details_due_at).date().isoformat()
+                    po.dispatch_details_status = DispatchDetailsStatus.TIMED_OUT.value
+                    draft = _draft_lex_email_for_po(
+                        session,
+                        lex_agent,
+                        po=po,
+                        part=part,
+                        supplier=supplier,
+                        category=EmailCategory.DISPATCH_DETAILS_NUDGE,
+                        context_facts={
+                            "missing_fields": missing_fields,
+                            "due_date": due_date_str,
+                            "promised_dispatch_date": (
+                                clock.ensure_utc(po.promised_dispatch_date).date().isoformat()
+                                if po.promised_dispatch_date
+                                else None
+                            ),
+                            "carrier_name": po.carrier_name,
+                            "tracking_number": po.tracking_number,
+                        },
+                    )
+                    alert = create_action_item(
+                        session,
+                        type="MISSING_DISPATCH_DETAILS_DUE",
+                        severity=AlertSeverity.HIGH,
+                        part_criticality=part.criticality,
+                        days_to_stockout=days_of_supply,
+                        title=(
+                            f"Dispatch details overdue (2-day wait expired): "
+                            f"{po.po_number} ({supplier.name})"
+                        ),
+                        summary=(
+                            f"The 2-day wait window for {supplier.name} to share missing "
+                            f"dispatch details ({', '.join(missing_fields)}) on {po.po_number} "
+                            f"expired on {due_date_str}. Lex drafted a follow-up nudge email."
+                        ),
+                        po_id=po.id,
+                        part_id=part.id,
+                        draft_comm_id=draft.id,
+                        suggested_actions=[
+                            {"action": "approve_draft", "label": "Approve & Send Nudge"},
+                            {"action": "reject_draft", "label": "Reject Draft"},
+                        ],
+                        cta_payload={
+                            "draft_comm_id": draft.id,
+                            "po_id": po.id,
+                            "missing_fields": missing_fields,
+                            "due_date": due_date_str,
+                        },
+                    )
+                    events.append(
+                        SLAEvent(
+                            po_id=po.id,
+                            po_number=po.po_number,
+                            event_type="DISPATCH_DETAILS_NUDGE_DRAFTED",
+                            summary=alert.title,
+                            draft_comm_id=draft.id,
+                            action_item_id=alert.id,
+                        )
+                    )
+
+            if po.status not in (POStatus.ACKNOWLEDGED.value, POStatus.DELAYED_CRITICAL.value):
+                continue
+
+            effective_eta_raw = po.revised_eta or po.promised_eta
+            if effective_eta_raw is None:
+                continue
+            effective_eta = clock.ensure_utc(effective_eta_raw)
 
             # Overdue Detection: sim_now >= effective_eta + 1 day with no GRN
             if grn_count == 0 and sim_now >= effective_eta + timedelta(days=1):
@@ -524,9 +619,13 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
 
 
 def auto_resolve_po_alerts(
-    session: Session, po_id: int, alert_types: tuple[str, ...] | None = None
+    session: Session,
+    po_id: int,
+    alert_types: tuple[str, ...] | None = None,
+    *,
+    include_notifications: bool = False,
 ) -> int:
-    """Auto-resolve open alerts (of specified types, or all if None) for a PO."""
+    """Auto-resolve open actionable alerts for a PO while protecting Lex notifications."""
     sim_now = clock.now(session)
     stmt = select(ActionItem).where(
         ActionItem.po_id == po_id,
@@ -534,6 +633,8 @@ def auto_resolve_po_alerts(
     )
     if alert_types is not None:
         stmt = stmt.where(ActionItem.type.in_(alert_types))
+    elif not include_notifications:
+        stmt = stmt.where(ActionItem.type.notin_(PROTECTED_NOTIFICATION_ALERT_TYPES))
     rows = session.scalars(stmt).all()
     for row in rows:
         row.status = ActionItemStatus.RESOLVED.value

@@ -695,3 +695,223 @@ cases:
       reasoning: "Making Team cited SKU-999."
     expect:
       intent: AMBIGUOUS
+
+  # ---------------------------------------------------------------------------
+  # 5. PO Logistics Triage & Missing Dispatch Details Cases (Slice P2-6)
+  # ---------------------------------------------------------------------------
+  - id: triage_ack_with_full_logistics
+    name: "Supplier ack provides promised dispatch date, carrier, and tracking number"
+    task: email_triage
+    tags: [triage, logistics, complete]
+    input:
+      sender_persona: sup1
+      sender_name: Apex Precision Works
+      subject: "Re: PO-1037 — Confirmed with BlueDart Tracking"
+      body: "PO-1037 is confirmed for 15 units at Rs 780/unit (ETA 2026-12-03). Dispatched on 2026-11-22 via BlueDart, tracking number BD-882104."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: ACKNOWLEDGED
+      confidence: 0.97
+      proposed_eta_date: "2026-12-03"
+      promised_dispatch_date: "2026-11-22"
+      carrier_name: "BlueDart"
+      tracking_number: "BD-882104"
+      details_promised_later: false
+      summary_for_manager: "Apex Precision Works confirmed PO-1037 with dispatch on 2026-11-22 via BlueDart (BD-882104)."
+      suggested_action: "Mark dispatch details complete and track delivery."
+      reasoning: "Supplier confirmed PO-1037 and provided dispatch date, carrier, and tracking number."
+    expect:
+      intent: ACKNOWLEDGED
+      matched_po_number: PO-1037
+      carrier_name: "BlueDart"
+      tracking_number: "BD-882104"
+      details_promised_later: false
+      min_confidence: 0.85
+
+  - id: triage_ack_missing_logistics_immediate
+    name: "Supplier ack omits dispatch date, carrier, and tracking without promising later"
+    task: email_triage
+    tags: [triage, logistics, missing]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 — Confirmed"
+      body: "We confirm PO-1037 for 15 units at Rs 780/unit, delivery ETA 2026-12-03."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: ACKNOWLEDGED
+      confidence: 0.96
+      proposed_eta_date: "2026-12-03"
+      details_promised_later: false
+      summary_for_manager: "Deccan Electro-Spares confirmed PO-1037 for 2026-12-03 without providing dispatch date, carrier, or tracking details."
+      suggested_action: "Request missing dispatch date, carrier, and tracking number."
+      reasoning: "Supplier confirmed PO-1037 but omitted dispatch commitment, carrier, and tracking without deferring."
+    expect:
+      intent: ACKNOWLEDGED
+      matched_po_number: PO-1037
+      details_promised_later: false
+      min_confidence: 0.85
+
+  - id: triage_ack_deferred_logistics_2d
+    name: "Supplier ack promises missing tracking details in 2 days"
+    task: email_triage
+    tags: [triage, logistics, deferred]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 — Order Confirmed"
+      body: "Confirmed PO-1037 for 15 units at Rs 780/unit, ETA 2026-12-03. We will share BlueDart tracking and dispatch details in 2 days (by 2026-11-22)."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1037
+      intent: ACKNOWLEDGED
+      confidence: 0.95
+      proposed_eta_date: "2026-12-03"
+      carrier_name: "BlueDart"
+      details_promised_later: true
+      details_promised_by_date: "2026-11-22"
+      summary_for_manager: "Deccan Electro-Spares confirmed PO-1037 and promised BlueDart tracking details by 2026-11-22."
+      suggested_action: "Schedule a 2-day deferred check for dispatch details."
+      reasoning: "Supplier explicitly confirmed PO-1037 and promised to share tracking details in 2 days."
+    expect:
+      intent: ACKNOWLEDGED
+      matched_po_number: PO-1037
+      details_promised_later: true
+      min_confidence: 0.85
+
+  - id: triage_followup_tracking_update
+    name: "Supplier follow-up reply supplies carrier, tracking number, and actual dispatch date"
+    task: email_triage
+    tags: [triage, logistics, followup]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 — Dispatch Update"
+      body: "Update on PO-1037: the shipment actually dispatched today (2026-11-22) via BlueDart, tracking number BD-8821."
+      has_pdf_attachment: false
+      current_date: "2026-11-22"
+      open_pos:
+        - po_number: PO-1037
+          part_sku: SKU-010
+          part_name: Industrial Proximity Sensor
+          qty: 15
+          unit_price: 780.0
+          status: ACKNOWLEDGED
+          quoted_lead_time_days: 14
+          promised_eta: "2026-12-03"
+          dispatch_details_status: DEFERRED_2D
+    mock_response:
+      matched_po_number: PO-1037
+      intent: GENERAL_REPLY
+      confidence: 0.96
+      actual_dispatch_date: "2026-11-22"
+      carrier_name: "BlueDart"
+      tracking_number: "BD-8821"
+      details_promised_later: false
+      summary_for_manager: "Deccan Electro-Spares dispatched PO-1037 on 2026-11-22 via BlueDart (BD-8821)."
+      suggested_action: "Update PO-1037 logistics fields and notify Inventory Manager."
+      reasoning: "Follow-up message on acknowledged PO-1037 provides actual dispatch date, carrier, and tracking number."
+    expect:
+      matched_po_number: PO-1037
+      actual_dispatch_date: "2026-11-22"
+      carrier_name: "BlueDart"
+      tracking_number: "BD-8821"
+      min_confidence: 0.85
+
+  - id: draft_dispatch_details_request_compliance
+    name: "Dispatch details request draft includes PO# and asks for missing carrier/tracking"
+    task: email_draft
+    tags: [draft, compliance, logistics]
+    input:
+      category: DISPATCH_DETAILS_REQUEST
+      po_number: "PO-1037"
+      part_sku: "SKU-010"
+      part_name: "Industrial Proximity Sensor"
+      qty: 15
+      unit_price: 780.0
+      recipient_persona: sup3
+      recipient_name: "Deccan Electro-Spares"
+      current_date: "2026-11-20"
+      context_facts:
+        promised_eta: "2026-12-03"
+        missing_fields: ["promised_dispatch_date", "carrier_name", "tracking_number"]
+    mock_response:
+      to_personas: [sup3]
+      cc_personas: [inventory_manager]
+      subject: "[PO-1037] Dispatch Date, Carrier & Tracking Details Needed"
+      body: "Dear Deccan Electro-Spares, thank you for acknowledging PO-1037 (15 units of SKU-010). Please share your promised dispatch date, delivery carrier name, and tracking number so our receiving team can plan intake."
+    expect:
+      to_personas:
+        contains: sup3
+      cc_personas:
+        contains: inventory_manager
+      subject:
+        contains: PO-1037
+      body:
+        not_null: true
+        min_len: 30
+        contains_any_ci: ["dispatch", "carrier", "tracking"]
+
+  - id: draft_dispatch_details_nudge_compliance
+    name: "2-day deferred dispatch details nudge draft references PO# and missing fields"
+    task: email_draft
+    tags: [draft, compliance, logistics, nudge]
+    input:
+      category: DISPATCH_DETAILS_NUDGE
+      po_number: "PO-1037"
+      part_sku: "SKU-010"
+      part_name: "Industrial Proximity Sensor"
+      qty: 15
+      unit_price: 780.0
+      recipient_persona: sup3
+      recipient_name: "Deccan Electro-Spares"
+      current_date: "2026-11-22"
+      context_facts:
+        due_date: "2026-11-22"
+        missing_fields: ["tracking_number"]
+        carrier_name: "BlueDart"
+    mock_response:
+      to_personas: [sup3]
+      cc_personas: [inventory_manager]
+      subject: "[PO-1037] Follow-Up: BlueDart Tracking Number"
+      body: "Dear Deccan Electro-Spares, following up on your 2026-11-22 commitment for PO-1037, could you please share the BlueDart tracking number so we can monitor shipment delivery?"
+    expect:
+      to_personas:
+        contains: sup3
+      cc_personas:
+        contains: inventory_manager
+      subject:
+        contains: PO-1037
+      body:
+        not_null: true
+        min_len: 30
+        contains_any_ci: ["tracking", "dispatch"]

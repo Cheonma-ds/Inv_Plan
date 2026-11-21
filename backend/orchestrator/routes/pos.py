@@ -42,6 +42,14 @@ class SwitchSupplierRequest(BaseModel):
     backup_supplier_id: int | None = None
 
 
+class EscalateProcurementRequest(BaseModel):
+    reason: str = ""
+
+
+def _iso_or_none(dt: datetime | None) -> str | None:
+    return clock.ensure_utc(dt).isoformat() if dt else None
+
+
 def _serialize_po(
     po: PurchaseOrder,
     part: Part | None,
@@ -62,11 +70,20 @@ def _serialize_po(
         "total_amount": round(po.qty * po.unit_price, 2),
         "status": po.status,
         "created_at": clock.ensure_utc(po.created_at).isoformat(),
-        "sent_at": clock.ensure_utc(po.sent_at).isoformat() if po.sent_at else None,
-        "promised_eta": (
-            clock.ensure_utc(po.promised_eta).isoformat() if po.promised_eta else None
-        ),
-        "revised_eta": clock.ensure_utc(po.revised_eta).isoformat() if po.revised_eta else None,
+        "sent_at": _iso_or_none(po.sent_at),
+        "acknowledged_at": _iso_or_none(po.acknowledged_at),
+        "promised_dispatch_date": _iso_or_none(po.promised_dispatch_date),
+        "actual_dispatch_date": _iso_or_none(po.actual_dispatch_date),
+        "carrier_name": po.carrier_name,
+        "tracking_number": po.tracking_number,
+        "dispatch_details_status": po.dispatch_details_status,
+        "dispatch_details_due_at": _iso_or_none(po.dispatch_details_due_at),
+        "missing_dispatch_fields": list(po.missing_dispatch_fields_json or []),
+        "escalated_to_procurement_at": _iso_or_none(po.escalated_to_procurement_at),
+        "procurement_escalation_note": po.procurement_escalation_note,
+        "closed_at": _iso_or_none(po.closed_at),
+        "promised_eta": _iso_or_none(po.promised_eta),
+        "revised_eta": _iso_or_none(po.revised_eta),
         "follow_up_count": po.follow_up_count,
         "pre_eta_checked": po.pre_eta_checked,
         "notes": po.notes,
@@ -253,4 +270,33 @@ def post_switch_supplier(
         "draft_comm_id": outcome["draft_comm_id"],
         "alert_id": outcome["alert_id"],
         "quarantined_cleared_qty": outcome["quarantined_cleared_qty"],
+    }
+
+
+@router.post("/{po_id}/escalate-procurement")
+def post_escalate_procurement(
+    po_id: int,
+    payload: EscalateProcurementRequest | None = None,
+    session: Session = Depends(get_session),
+    engine: WorkflowEngine = Depends(get_workflow_engine),
+) -> dict:
+    try:
+        outcome = engine.escalate_to_procurement(
+            session,
+            po_id,
+            reason=payload.reason if payload else "",
+        )
+    except PONotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    session.commit()
+    po = outcome["po"]
+    part = session.get(Part, po.part_id)
+    supplier = session.get(Supplier, po.supplier_id)
+    return {
+        "po": _serialize_po(po, part, supplier),
+        "comm_id": outcome["email"].id,
+        "alert_id": outcome["alert"].id,
     }

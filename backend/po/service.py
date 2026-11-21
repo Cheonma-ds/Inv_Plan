@@ -367,3 +367,23 @@ def switch_po_to_backup_supplier(
         initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
     )
     return original, replacement
+
+
+def escalate_po_to_procurement(
+    session: Session,
+    po_id: int,
+    *,
+    note: str = "",
+) -> PurchaseOrder:
+    """Record a Procurement escalation timestamp and audit note on an active PO."""
+    po = _get_po_or_raise(session, po_id)
+    if po.status in (POStatus.CLOSED.value, POStatus.CANCELLED.value):
+        raise ValueError(f"Cannot escalate {po.status} PO {po.po_number} to Procurement")
+
+    sim_now = clock.now(session)
+    cleaned_note = note.strip() or f"Escalated {po.po_number} to Procurement for follow-up."
+    po.escalated_to_procurement_at = sim_now
+    po.procurement_escalation_note = cleaned_note
+    append_po_note(session, po, f"Escalated to Procurement: {cleaned_note}")
+    session.flush()
+    return po
