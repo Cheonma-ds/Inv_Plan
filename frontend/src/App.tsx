@@ -26,7 +26,7 @@ const NAV_ITEMS: Array<{
   { id: 'alerts', label: 'Actionable Alerts', icon: Bell },
   { id: 'inventory', label: 'Inventory & Parts', icon: Package },
   { id: 'pos', label: 'PO Tracker', icon: ClipboardList },
-  { id: 'mailroom', label: '5-Persona Mailroom', icon: Mail },
+  { id: 'mailroom', label: 'Mailroom', icon: Mail },
   { id: 'planning', label: 'Suppliers & Planning', icon: Award },
   { id: 'ai_health', label: 'AI Activity & Health', icon: Activity },
 ];

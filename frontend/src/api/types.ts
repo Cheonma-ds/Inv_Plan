@@ -1,5 +1,7 @@
 export type PersonaKey =
   | 'inventory_manager'
+  | 'making'
+  | 'procurement'
   | 'sup1'
   | 'sup2'
   | 'sup3'

@@ -1,6 +1,6 @@
 # STATUS_P2.md — Phase 2 Live Session Baton
 
-**Current Stage:** Slices P2-1, P2-2, P2-3 & P2-4 Complete (Ready for **Slice P2-5** or **Slice P2-6**)  
+**Current Stage:** Slices P2-1 through P2-5 Complete (Ready for **Slice P2-6**)  
 **Last Updated:** 2026-11-21  
 **Baseline Reference:** Phase 1 MVP Complete (Slices 1–5 in [`STATUS.md`](../../STATUS.md))  
 **Planning Docs:** [`PRD_P2.md`](PRD_P2.md) · [`DESIGN_P2.md`](DESIGN_P2.md) · [`SLICES_P2.md`](SLICES_P2.md)
@@ -13,7 +13,7 @@
 - [x] **Slice P2-2:** Universal `DataTable` (Dual-Axis Scroll, Frozen Title Case Headers, Zero-Icon Hover Tooltips, Resizable Columns)
 - [x] **Slice P2-3:** Backend Core Schema, Idempotent SQLite Migrations, 7 Personas (`making`, `procurement`) & PO Logistics Fields + Seed Fix
 - [x] **Slice P2-4:** Backend Making-Team Stock Request Pipeline & Lex Analysis
-- [ ] **Slice P2-5:** Frontend 7-Persona Mailroom, Remove `Withdraw` from Inventory & Stock-Request Alerts
+- [x] **Slice P2-5:** Frontend Mailroom (7 Personas), Remove `Withdraw` from Inventory & Stock-Request Alerts
 - [ ] **Slice P2-6:** Backend PO Logistics Triage, 2-Day Deferred SLA, Mandatory Lex Action Alerts & Procurement Escalation
 - [ ] **Slice P2-7:** Frontend Horizontal Order Tracking Stepper, Logistics Card & `Escalate to Procurement` UI
 
@@ -86,15 +86,28 @@
   - `uv run pytest -v` (`75 passed, 1 skipped` offline; `RUN_LIVE_GEMINI=1 uv run pytest -v` **78 passed, 0 skipped** including `tests/agents/test_live_gemini_pdf.py` and `tests/agents/test_live_gemini_stock_request.py`) and `uv run ruff check backend tests` (`All checks passed!`).
   - Live `gemini-3.5-flash-lite` YAML eval suite: 4/4 `stock_request_triage` cases passed (`19/20` overall; the single Phase 1 `triage_unmatched_po_guardrail` miss occurred because Gemini itself returned `AMBIGUOUS` directly rather than needing post-LLM guardrail override).
 
+### Slice P2-5 — Frontend Mailroom (7 Personas), Remove `Withdraw` from Inventory & Stock-Request Alerts
+- **7-Persona Mailroom & Naming (`frontend/src/api/types.ts`, `frontend/src/utils/format.ts`, `frontend/src/App.tsx`, `frontend/src/pages/MailroomPage.tsx`):**
+  - Expanded `PersonaKey` and `personaLabel()` with `'making'` (`Making Team`) and `'procurement'` (`Procurement`).
+  - Renamed `"5-Persona Mailroom"` → `"Mailroom"` in `App.tsx` sidebar navigation and `MailroomPage.tsx` header. *(UI Naming Rule: keep the in-app label strictly `"Mailroom"`, never `"5-Persona Mailroom"` or `"7-Persona Mailroom"`.)*
+  - Added `making` and `procurement` to `PERSONAS` switcher and To/CC recipient pills; auto-selects and locks `lex` in `CC` (with lock icon and explanatory note) whenever `making` composes or replies to `inventory_manager`, and surfaces stock-request alert counts in the send toast.
+- **Remove Direct `Withdraw` (`frontend/src/pages/InventoryPage.tsx`):**
+  - Removed the `Withdraw` action button, `consume` modal state, `withdrawQty`/`withdrawNote` fields, and `handleSubmitConsume`; updated the `Actions` tooltip and page subtitle to note that stock withdrawals arrive via Making Team Mailroom requests & Manager alert approvals.
+- **Stock-Request Metrics & CTAs (`frontend/src/pages/AlertsPage.tsx`):**
+  - Rendered Making-team stock request metrics from `cta_payload` (`Requested`, `On-Hand`, `Quarantined`, `Shortfall`, `Post-Issue` projection / `Inv. Position / ROP / S`, `Projected PO` & Primary Supplier terms, and clickable `Active POs` links) without mislabeling current `rop`/`replenishment_point` as `Recommended ROP / S`.
+  - Styled and wired all 4 stock-request CTAs (`approve_stock_withdrawal`, `issue_partial_stock`, `ask_making_minimum`, `reject_stock_request`), forwarding inline edited `edited_subject` / `edited_body` on `ask_making_minimum` and reporting issued qty / new on-hand / created PO# in the execution toast.
+- **Verification:**
+  - `cd frontend && npm run build` (`tsc -b && vite build`) passed with 0 errors.
+  - `uv run pytest` (`75 passed, 3 skipped`) and `uv run ruff check backend tests` (`All checks passed!`) confirmed zero backend regressions.
+  - Headless Chromium Playwright E2E suite (against isolated temp SQLite + Vite dev server + deterministic offline fake LLM) verified: `"Mailroom"` sidebar & heading naming, 0 `Withdraw` buttons on `InventoryPage`, all 7 personas + `Procurement` compose/sent, `Making Team` Compose & Reply locking `Lex` in `CC`, zero premature stock deduction, Scenario S2 (`Approve Issue & Trigger PO`), Scenario S3 (`STOCK_SHORTAGE` metrics + inline-edited `ask_making_minimum` inquiry), Scenario S4 (`MINIMUM_QTY_CONFIRMATION` approval), Scenario S1 (`Reject Request`), `issue_partial_stock`, and 0 console/page errors.
+
 ---
 
 ## Next Slice Options
-- **Frontend Stock-Request & 7-Persona Mailroom Track (`Slice P2-5`):** 7-persona Mailroom UI, remove `Withdraw` from `InventoryPage.tsx`, and render Stock-Request alerts/CTAs in `AlertsPage.tsx`.
-  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §4`, `docs/phase2/SLICES_P2.md` (`Slice P2-5`).
-  - **Leave Untouched:** `backend/`, `POTrackerPage.tsx`, `SuppliersPlanningPage.tsx`, `AIHealthPage.tsx`.
 - **Backend PO Logistics Track (`Slice P2-6`):** PO logistics triage, 2-day deferred SLA, mandatory Lex action alerts, and Procurement escalation.
   - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §5`, `docs/phase2/DESIGN_P2.md §4.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-6`).
   - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`.
+- **Frontend PO Tracker Stepper & Escalation Track (`Slice P2-7`, depends on `P2-6`):** Horizontal Order Tracking Stepper, Shipment & Logistics Details card, and `Escalate to Procurement` modal in `POTrackerPage.tsx`.
 
 ---
 

@@ -41,6 +41,29 @@ function asString(v: unknown): string | null {
   return typeof v === 'string' && v.trim() ? v : null;
 }
 
+interface OpenPoSummary {
+  po_id: number | null;
+  po_number: string;
+  status: string;
+  qty: number;
+  eta: string | null;
+  supplier_name: string | null;
+}
+
+function asOpenPos(v: unknown): OpenPoSummary[] | null {
+  if (!Array.isArray(v)) return null;
+  return v
+    .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+    .map((item) => ({
+      po_id: asNumber(item.po_id),
+      po_number: asString(item.po_number) ?? 'PO',
+      status: asString(item.status) ?? 'OPEN',
+      qty: asNumber(item.qty) ?? 0,
+      eta: asString(item.eta),
+      supplier_name: asString(item.supplier_name),
+    }));
+}
+
 export function AlertsPage({
   refreshNonce,
   onMutated,
@@ -103,7 +126,10 @@ export function AlertsPage({
     setBusyAlertId(item.id);
     try {
       const params: Record<string, unknown> = {};
-      if (action === 'approve_draft' && item.draft_preview) {
+      if (
+        (action === 'approve_draft' || action === 'ask_making_minimum') &&
+        item.draft_preview
+      ) {
         const edit = draftEdits[item.id];
         if (edit) {
           if (edit.subject.trim() !== item.draft_preview.subject.trim()) {
@@ -120,12 +146,22 @@ export function AlertsPage({
       }
 
       const res = await api.executeAlertCta(item.id, action, params);
-      const detail =
-        typeof res.new_po_number === 'string'
-          ? `Created backup PO ${res.new_po_number}`
-          : typeof res.approval_outcome === 'string'
-            ? `Draft ${res.approval_outcome}`
-            : undefined;
+      let detail: string | undefined;
+      if (typeof res.new_po_number === 'string') {
+        detail = `Created backup PO ${res.new_po_number}`;
+      } else if (typeof res.approved_qty === 'number') {
+        const stockAfter =
+          typeof res.on_hand_after === 'number'
+            ? ` (on-hand now ${res.on_hand_after})`
+            : '';
+        const poNote =
+          typeof res.created_po_number === 'string'
+            ? ` · Triggered ${res.created_po_number}`
+            : '';
+        detail = `Issued ${res.approved_qty} units${stockAfter}${poNote}`;
+      } else if (typeof res.approval_outcome === 'string') {
+        detail = `Draft ${res.approval_outcome}`;
+      }
       onNotify('success', `Executed: ${label}`, detail);
       onMutated();
       await loadAlerts();
@@ -208,7 +244,7 @@ export function AlertsPage({
             No {filter.toLowerCase()} alerts
           </h2>
           <p className="mt-1 text-xs text-[#6E6E73]">
-            Advance the simulated clock, withdraw stock, or trigger a supplier email to see alerts here.
+            Advance the simulated clock, send a Making Team stock request, or trigger a supplier email to see alerts here.
           </p>
         </div>
       ) : (
@@ -242,14 +278,47 @@ export function AlertsPage({
             const recRop = asNumber(payload.rop);
             const recS = asNumber(payload.replenishment_point);
 
+            // Making-team stock request metrics
+            const stockRequestId = asNumber(payload.stock_request_id);
+            const isStockRequestAlert =
+              stockRequestId !== null ||
+              item.type === 'STOCK_WITHDRAWAL_REQUEST' ||
+              item.type === 'STOCK_SHORTAGE';
+            const reqSku = asString(payload.sku);
+            const reqQty = asNumber(payload.requested_qty);
+            const origReqQty = asNumber(payload.original_requested_qty);
+            const onHandStock = asNumber(payload.on_hand_stock);
+            const quarantinedStock = asNumber(payload.quarantined_stock);
+            const inventoryPosition = asNumber(payload.inventory_position);
+            const shortfallQty = asNumber(payload.shortfall_qty);
+            const projectedOnHand = asNumber(payload.projected_on_hand);
+            const projectedIp = asNumber(payload.projected_ip);
+            const willTriggerPo = payload.will_trigger_po === true;
+            const projectedOrderQty = asNumber(payload.projected_order_qty);
+            const primarySupName = asString(payload.primary_supplier_name);
+            const primaryUnitPrice = asNumber(payload.primary_unit_price);
+            const primaryEffLt = asNumber(payload.primary_effective_lt);
+            const primaryMoq = asNumber(payload.primary_moq);
+            const primaryReliability = asNumber(payload.primary_reliability_score);
+            const openPos = asOpenPos(payload.open_pos);
+
+            const hasStockRequestMetrics =
+              isStockRequestAlert &&
+              (reqQty !== null ||
+                onHandStock !== null ||
+                shortfallQty !== null ||
+                openPos !== null ||
+                projectedOrderQty !== null);
+
             const hasImpactMetrics =
+              hasStockRequestMetrics ||
               daysOfSupply !== null ||
               priceVarInr !== null ||
               proposedPrice !== null ||
               proposedQty !== null ||
               proposedEta !== null ||
               backupName !== null ||
-              recRop !== null;
+              (!isStockRequestAlert && recRop !== null);
 
             return (
               <article
@@ -319,6 +388,164 @@ export function AlertsPage({
 
                 {hasImpactMetrics && (
                   <div className="mt-3.5 flex flex-wrap gap-2 rounded-xl border border-black/[0.06] bg-[#FBFBFD] p-3 text-xs tabular-nums">
+                    {hasStockRequestMetrics && (
+                      <>
+                        {reqQty !== null && (
+                          <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                            <span className="text-[#6E6E73]">
+                              {reqSku ? `Requested (${reqSku}):` : 'Requested Qty:'}
+                            </span>{' '}
+                            <span className="font-semibold text-[#1D1D1F]">{reqQty} units</span>
+                            {origReqQty !== null && origReqQty !== reqQty && (
+                              <span className="ml-1 text-[#6E6E73]">(orig. {origReqQty})</span>
+                            )}
+                          </div>
+                        )}
+                        {onHandStock !== null && (
+                          <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                            <span className="text-[#6E6E73]">On-Hand:</span>{' '}
+                            <span
+                              className={`font-semibold ${
+                                onHandStock === 0 ? 'text-[#B82923]' : 'text-[#1D1D1F]'
+                              }`}
+                            >
+                              {onHandStock} units
+                            </span>
+                            {quarantinedStock !== null && quarantinedStock > 0 && (
+                              <span className="ml-1.5 font-medium text-[#945600]">
+                                ({quarantinedStock} quarantined)
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {shortfallQty !== null && shortfallQty > 0 && (
+                          <div className="rounded-lg bg-[#C9342D]/[0.06] px-2.5 py-1.5 border border-[#C9342D]/20">
+                            <span className="text-[#B82923]">Shortfall:</span>{' '}
+                            <span className="font-bold text-[#B82923]">{shortfallQty} units</span>
+                          </div>
+                        )}
+                        {shortfallQty === 0 &&
+                          projectedOnHand !== null &&
+                          projectedIp !== null &&
+                          recRop !== null && (
+                            <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                              <span className="text-[#6E6E73]">Post-Issue:</span>{' '}
+                              <span className="font-semibold text-[#1D1D1F]">
+                                {projectedOnHand} on-hand · IP {projectedIp}
+                              </span>{' '}
+                              <span
+                                className={
+                                  willTriggerPo
+                                    ? 'font-semibold text-[#945600]'
+                                    : 'text-[#1B6B43] font-medium'
+                                }
+                              >
+                                ({willTriggerPo ? `< ROP ${recRop}` : `>= ROP ${recRop}`})
+                              </span>
+                            </div>
+                          )}
+                        {(shortfallQty === null || shortfallQty > 0) &&
+                          inventoryPosition !== null &&
+                          recRop !== null &&
+                          recS !== null && (
+                            <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                              <span className="text-[#6E6E73]">Inv. Position / ROP / S:</span>{' '}
+                              <span className="font-semibold text-[#1D1D1F]">
+                                {inventoryPosition}
+                              </span>{' '}
+                              <span className="text-[#6E6E73]">
+                                (ROP {recRop} / S {recS})
+                              </span>
+                            </div>
+                          )}
+                        {willTriggerPo && projectedOrderQty !== null && (
+                          <div className="rounded-lg bg-[#0066CC]/[0.06] px-2.5 py-1.5 border border-[#0066CC]/20">
+                            <span className="text-[#0058B3] font-medium">Projected PO:</span>{' '}
+                            <span className="font-semibold text-[#1D1D1F]">
+                              {projectedOrderQty} units
+                            </span>
+                            {primarySupName && (
+                              <span className="text-[#1D1D1F]"> via {primarySupName}</span>
+                            )}
+                            {primaryUnitPrice !== null && (
+                              <span className="text-[#6E6E73]">
+                                {' '}
+                                @ {formatInr(primaryUnitPrice)}
+                              </span>
+                            )}
+                            {primaryEffLt !== null && (
+                              <span className="text-[#6E6E73]">
+                                {' '}
+                                · {primaryEffLt.toFixed(1)}d LT
+                              </span>
+                            )}
+                            {primaryMoq !== null && (
+                              <span className="text-[#6E6E73]"> · MOQ {primaryMoq}</span>
+                            )}
+                            {primaryReliability !== null && (
+                              <span className="text-[#6E6E73]">
+                                {' '}
+                                · Rel {Math.round(primaryReliability * 100)}%
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {!willTriggerPo &&
+                          shortfallQty !== null &&
+                          shortfallQty > 0 &&
+                          primarySupName && (
+                            <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                              <span className="text-[#6E6E73]">Primary Supplier:</span>{' '}
+                              <span className="font-semibold text-[#1D1D1F]">{primarySupName}</span>
+                              {primaryUnitPrice !== null && (
+                                <span className="text-[#6E6E73]">
+                                  {' '}
+                                  @ {formatInr(primaryUnitPrice)}
+                                </span>
+                              )}
+                              {primaryEffLt !== null && (
+                                <span className="text-[#6E6E73]">
+                                  {' '}
+                                  · {primaryEffLt.toFixed(1)}d LT
+                                </span>
+                              )}
+                              {primaryMoq !== null && (
+                                <span className="text-[#6E6E73]"> · MOQ {primaryMoq}</span>
+                              )}
+                            </div>
+                          )}
+                        {openPos !== null && (
+                          <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07] flex flex-wrap items-center gap-1.5">
+                            <span className="text-[#6E6E73]">Active POs:</span>
+                            {openPos.length === 0 ? (
+                              <span className="font-medium text-[#86868B]">None</span>
+                            ) : (
+                              openPos.map((po, idx) =>
+                                po.po_id !== null ? (
+                                  <button
+                                    key={`${po.po_number}-${idx}`}
+                                    type="button"
+                                    onClick={() => onNavigatePo(po.po_id!)}
+                                    className="apple-press inline-flex items-center gap-1 rounded-md border border-black/[0.08] bg-[#FBFBFD] px-2 py-0.5 font-semibold text-[#0066CC] hover:bg-[#0066CC]/[0.06]"
+                                  >
+                                    {po.po_number} · {po.qty}u · {po.status} · ETA{' '}
+                                    {po.eta ?? 'TBD'}
+                                  </button>
+                                ) : (
+                                  <span
+                                    key={`${po.po_number}-${idx}`}
+                                    className="rounded-md border border-black/[0.08] bg-[#FBFBFD] px-2 py-0.5 font-semibold text-[#1D1D1F]"
+                                  >
+                                    {po.po_number} · {po.qty}u · {po.status} · ETA{' '}
+                                    {po.eta ?? 'TBD'}
+                                  </span>
+                                ),
+                              )
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
                     {daysOfSupply !== null && (
                       <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
                         <span className="text-[#6E6E73]">Projected Supply:</span>{' '}
@@ -383,7 +610,7 @@ export function AlertsPage({
                         {backupLt !== null && ` (${backupLt}d LT)`}
                       </div>
                     )}
-                    {recRop !== null && recS !== null && (
+                    {!isStockRequestAlert && recRop !== null && recS !== null && (
                       <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
                         <span className="text-[#6E6E73]">Recommended ROP / S:</span>{' '}
                         <span className="font-semibold text-[#0066CC]">
@@ -483,14 +710,24 @@ export function AlertsPage({
                         const isApprove =
                           cta.action === 'approve_draft' ||
                           cta.action === 'approve_rop' ||
-                          cta.action === 'update_po';
+                          cta.action === 'update_po' ||
+                          cta.action === 'approve_stock_withdrawal' ||
+                          cta.action === 'ask_making_minimum';
                         const isRejectOrCancel =
-                          cta.action === 'reject_draft' || cta.action === 'cancel_po';
-                        const isSwitch = cta.action === 'switch_backup_supplier';
+                          cta.action === 'reject_draft' ||
+                          cta.action === 'cancel_po' ||
+                          cta.action === 'reject_stock_request';
+                        const isSwitchOrPartial =
+                          cta.action === 'switch_backup_supplier' ||
+                          cta.action === 'issue_partial_stock';
+                        const draftAlreadySent =
+                          cta.action === 'ask_making_minimum' &&
+                          draft !== null &&
+                          draft.status !== 'DRAFT_PENDING_APPROVAL';
 
                         const btnClass = isApprove
                           ? 'bg-[#0066CC] text-white hover:bg-[#0071E3] border-[#0066CC] shadow-2xs'
-                          : isSwitch
+                          : isSwitchOrPartial
                             ? 'bg-[#B46900] text-white hover:bg-[#945600] border-[#B46900]'
                             : isRejectOrCancel
                               ? 'bg-white text-[#B82923] border-[#C9342D]/25 hover:bg-[#C9342D]/[0.07]'
@@ -500,11 +737,11 @@ export function AlertsPage({
                           <button
                             key={cta.action}
                             type="button"
-                            disabled={isBusy}
+                            disabled={isBusy || draftAlreadySent}
                             onClick={() => void handleExecuteCta(item, cta.action, cta.label)}
                             className={`apple-press inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-1.5 text-xs font-semibold disabled:opacity-45 ${btnClass}`}
                           >
-                            {cta.label}
+                            {draftAlreadySent ? 'Min-Qty Inquiry Sent' : cta.label}
                           </button>
                         );
                       })}

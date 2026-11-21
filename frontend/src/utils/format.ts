@@ -95,6 +95,10 @@ export function personaLabel(persona: string): string {
   switch (persona) {
     case 'inventory_manager':
       return 'Inventory Manager';
+    case 'making':
+      return 'Making Team';
+    case 'procurement':
+      return 'Procurement';
     case 'sup1':
       return 'Sup1 (Apex Precision)';
     case 'sup2':

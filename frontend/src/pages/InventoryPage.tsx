@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowDownCircle,
   Edit3,
   Package,
   RefreshCw,
@@ -23,7 +22,6 @@ interface InventoryPageProps {
 }
 
 type ModalState =
-  | { kind: 'consume'; part: PartItem }
   | { kind: 'rop'; part: PartItem }
   | { kind: 'demand'; part: PartItem }
   | null;
@@ -43,8 +41,6 @@ export function InventoryPage({
   const [submitting, setSubmitting] = useState(false);
 
   // Form fields
-  const [withdrawQty, setWithdrawQty] = useState('1');
-  const [withdrawNote, setWithdrawNote] = useState('');
   const [ropInput, setRopInput] = useState('');
   const [sInput, setSInput] = useState('');
   const [demandInput, setDemandInput] = useState('');
@@ -72,10 +68,7 @@ export function InventoryPage({
   const openModal = useCallback((next: ModalState) => {
     setModal(next);
     if (!next) return;
-    if (next.kind === 'consume') {
-      setWithdrawQty('10');
-      setWithdrawNote('');
-    } else if (next.kind === 'rop') {
+    if (next.kind === 'rop') {
       setRopInput(String(next.part.rop));
       setSInput(String(next.part.replenishment_point));
     } else if (next.kind === 'demand') {
@@ -99,50 +92,6 @@ export function InventoryPage({
       );
     });
   }, [parts, search, criticality]);
-
-  const handleSubmitConsume = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (modal?.kind !== 'consume') return;
-    const qty = Number.parseInt(withdrawQty, 10);
-    if (!Number.isFinite(qty) || qty <= 0) {
-      onNotify('error', 'Invalid quantity', 'Enter a positive integer.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await api.consumeStock(modal.part.part_id, qty, withdrawNote.trim());
-      if (res.created_po) {
-        onNotify(
-          'success',
-          `Withdrew ${qty} ${modal.part.sku} → Triggered ${res.created_po.po_number}`,
-          `Draft PO for ${res.created_po.qty} units @ ${formatInr(res.created_po.unit_price)} awaiting dispatch approval.`,
-        );
-      } else if (res.consume.accelerated_burn) {
-        onNotify(
-          'info',
-          `Withdrew ${qty} ${modal.part.sku} — Accelerated Burn Alert`,
-          `Open PO already exists; raised expedited review alert.`,
-        );
-      } else {
-        onNotify(
-          'success',
-          `Withdrew ${qty} ${modal.part.sku}`,
-          `On-hand: ${res.consume.snapshot.on_hand_stock}, Inventory Position: ${res.consume.snapshot.inventory_position}`,
-        );
-      }
-      setModal(null);
-      onMutated();
-      await loadParts();
-    } catch (err) {
-      onNotify(
-        'error',
-        'Stock withdrawal failed',
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const handleSubmitRop = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -367,20 +316,12 @@ export function InventoryPage({
         key: 'actions',
         header: 'Actions',
         tooltip:
-          'Direct SKU controls: withdraw stock, adjust Reorder Point / Order-Up-To (ROP/S) parameters, or set a manual daily demand override.',
-        defaultWidth: 250,
-        minWidth: 210,
+          'SKU planning controls: adjust Reorder Point / Order-Up-To (ROP/S) parameters or set a manual daily demand override. Stock withdrawals are requested by Making Team via Mailroom and approved in Alerts.',
+        defaultWidth: 185,
+        minWidth: 165,
         align: 'right',
         renderCell: (part) => (
           <div className="inline-flex flex-wrap justify-end gap-1.5">
-            <button
-              type="button"
-              onClick={() => openModal({ kind: 'consume', part })}
-              className="apple-press inline-flex items-center gap-1 rounded-lg bg-[#0066CC] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0071E3] shadow-2xs"
-            >
-              <ArrowDownCircle className="h-3 w-3" />
-              Withdraw
-            </button>
             <button
               type="button"
               onClick={() => openModal({ kind: 'rop', part })}
@@ -412,7 +353,7 @@ export function InventoryPage({
         <div>
           <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Inventory &amp; Parts</h1>
           <p className="text-sm text-[#6E6E73]">
-            15-SKU live stock ledger, inventory position (On-Hand + On-Order + Quarantined), ROP/S, and supplier terms.
+            15-SKU live stock ledger, inventory position (On-Hand + On-Order + Quarantined), ROP/S, and supplier terms. Withdrawals flow via Making Team Mailroom requests &amp; Manager alert approvals.
           </p>
         </div>
 
@@ -493,11 +434,9 @@ export function InventoryPage({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h2 className="text-base font-bold tracking-tight text-[#1D1D1F]">
-                  {modal.kind === 'consume'
-                    ? `Withdraw Stock — ${modal.part.sku}`
-                    : modal.kind === 'rop'
-                      ? `Edit ROP / S — ${modal.part.sku}`
-                      : `Demand Override — ${modal.part.sku}`}
+                  {modal.kind === 'rop'
+                    ? `Edit ROP / S — ${modal.part.sku}`
+                    : `Demand Override — ${modal.part.sku}`}
                 </h2>
                 <p className="text-xs text-[#6E6E73] mt-0.5">{modal.part.name}</p>
               </div>
@@ -509,61 +448,6 @@ export function InventoryPage({
                 <X className="h-4 w-4" />
               </button>
             </div>
-
-            {modal.kind === 'consume' && (
-              <form onSubmit={handleSubmitConsume} className="mt-4 space-y-3">
-                <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] p-3 text-xs text-[#6E6E73] flex justify-between tabular-nums">
-                  <span>Available On-Hand: <strong className="text-[#1D1D1F]">{modal.part.on_hand_stock}</strong></span>
-                  <span>Inv. Position: <strong className="text-[#1D1D1F]">{modal.part.inventory_position}</strong></span>
-                  <span>ROP: <strong className="text-[#1D1D1F]">{modal.part.rop}</strong></span>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                    Quantity to Withdraw
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={modal.part.on_hand_stock}
-                    value={withdrawQty}
-                    onChange={(e) => setWithdrawQty(e.target.value)}
-                    required
-                    className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                    Note (optional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Line 2 assembly draw"
-                    value={withdrawNote}
-                    onChange={(e) => setWithdrawNote(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setModal(null)}
-                    className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
-                  >
-                    {submitting ? 'Withdrawing...' : 'Confirm Withdrawal'}
-                  </button>
-                </div>
-              </form>
-            )}
 
             {modal.kind === 'rop' && (
               <form onSubmit={handleSubmitRop} className="mt-4 space-y-3">

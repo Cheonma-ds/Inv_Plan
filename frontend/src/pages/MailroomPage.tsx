@@ -24,6 +24,8 @@ interface MailroomPageProps {
 
 const PERSONAS: PersonaKey[] = [
   'inventory_manager',
+  'making',
+  'procurement',
   'sup1',
   'sup2',
   'sup3',
@@ -115,16 +117,34 @@ export function MailroomPage({
     };
   }, [selectedEmail]);
 
+  const makingRequiresLexCc =
+    persona === 'making' && toPersonas.includes('inventory_manager');
+
   const openCompose = (replyTo?: StoredEmail) => {
     if (persona === 'lex') return;
     if (replyTo) {
-      const defaultRecipient: PersonaKey =
+      let defaultRecipient: PersonaKey =
         replyTo.from_persona !== persona
           ? (replyTo.from_persona as PersonaKey)
           : ((replyTo.to_personas[0] as PersonaKey) ?? 'inventory_manager');
-      setToPersonas([defaultRecipient]);
+      if (
+        persona === 'making' &&
+        replyTo.from_persona === 'lex' &&
+        replyTo.cc_personas.includes('inventory_manager')
+      ) {
+        defaultRecipient = 'inventory_manager';
+      }
+      const nextTo: PersonaKey[] = [defaultRecipient];
+      const mustLockLex =
+        persona === 'making' && nextTo.includes('inventory_manager');
+      setToPersonas(nextTo);
       setCcPersonas(
-        defaultRecipient !== 'lex' && persona !== 'inventory_manager' ? ['lex'] : [],
+        mustLockLex ||
+          (defaultRecipient !== 'lex' &&
+            persona !== 'inventory_manager' &&
+            persona !== 'procurement')
+          ? ['lex']
+          : [],
       );
       setComposeSubject(
         replyTo.subject.startsWith('Re:') ? replyTo.subject : `Re: ${replyTo.subject}`,
@@ -134,7 +154,9 @@ export function MailroomPage({
       setComposeThreadId(replyTo.thread_id);
     } else {
       setToPersonas(persona === 'inventory_manager' ? ['sup1'] : ['inventory_manager']);
-      setCcPersonas(persona === 'inventory_manager' ? [] : ['lex']);
+      setCcPersonas(
+        persona === 'inventory_manager' || persona === 'procurement' ? [] : ['lex'],
+      );
       setComposeSubject('');
       setComposeBody('');
       setComposePoId('');
@@ -152,6 +174,25 @@ export function MailroomPage({
     }
   };
 
+  const handleToggleTo = (p: PersonaKey) => {
+    const nextTo = toPersonas.includes(p)
+      ? toPersonas.filter((item) => item !== p)
+      : [...toPersonas, p];
+    setToPersonas(nextTo);
+    if (
+      persona === 'making' &&
+      nextTo.includes('inventory_manager') &&
+      !ccPersonas.includes('lex')
+    ) {
+      setCcPersonas((prev) => [...prev, 'lex']);
+    }
+  };
+
+  const handleToggleCc = (p: PersonaKey) => {
+    if (makingRequiresLexCc && p === 'lex') return;
+    toggleRecipient(ccPersonas, setCcPersonas, p);
+  };
+
   const handleSendEmail = async (e: React.FormEvent) => {
     e.preventDefault();
     if (persona === 'lex') {
@@ -162,12 +203,16 @@ export function MailroomPage({
       onNotify('error', 'Recipient required', 'Select at least one To persona.');
       return;
     }
+    const effectiveCc =
+      makingRequiresLexCc && !ccPersonas.includes('lex')
+        ? [...ccPersonas, 'lex']
+        : ccPersonas;
     setSending(true);
     try {
       const fd = new FormData();
       fd.append('from_persona', persona);
       fd.append('to_personas', toPersonas.join(','));
-      fd.append('cc_personas', ccPersonas.join(','));
+      fd.append('cc_personas', effectiveCc.join(','));
       fd.append('subject', composeSubject.trim());
       fd.append('body', composeBody.trim());
       if (composePoId) fd.append('po_id', composePoId);
@@ -182,7 +227,10 @@ export function MailroomPage({
         ? `Lex triage completed${
             typeof res.triage.matched_po_id === 'number'
               ? ` (PO #${res.triage.matched_po_id})`
-              : ''
+              : Array.isArray(res.triage.stock_request_ids) &&
+                  res.triage.stock_request_ids.length > 0
+                ? ` (${res.triage.stock_request_ids.length} stock request alert${res.triage.stock_request_ids.length > 1 ? 's' : ''} created)`
+                : ''
           }`
         : undefined;
       onNotify('success', `Email sent from ${personaLabel(persona)}`, triageInfo);
@@ -252,9 +300,9 @@ export function MailroomPage({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">5-Persona Mailroom</h1>
+          <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Mailroom</h1>
           <p className="text-sm text-[#6E6E73]">
-            Switch personas to simulate supplier correspondence, attach PDF invoices, and approve Lex email drafts.
+            Switch personas to coordinate across internal teams &amp; suppliers, submit Making stock requests, attach PDF invoices, and approve Lex drafts.
           </p>
         </div>
 
@@ -331,7 +379,7 @@ export function MailroomPage({
       {isLex && (
         <div className="flex items-center gap-2 rounded-xl border border-[#B46900]/24 bg-[#B46900]/[0.08] px-4 py-2.5 text-xs font-medium text-[#945600]">
           <Lock className="h-4 w-4 shrink-0 text-[#945600]" />
-          Lex inbox is read-only. Manual send from Lex is disabled; switch to Inventory Manager or a supplier to send messages.
+          Lex inbox is read-only. Manual send from Lex is disabled; switch to Inventory Manager, Making Team, Procurement, or a supplier to send messages.
         </div>
       )}
 
@@ -592,7 +640,7 @@ export function MailroomPage({
                       <button
                         key={p}
                         type="button"
-                        onClick={() => toggleRecipient(toPersonas, setToPersonas, p)}
+                        onClick={() => handleToggleTo(p)}
                         className={`apple-press rounded-full border px-3 py-1 font-semibold ${
                           checked
                             ? 'border-[#0066CC] bg-[#0066CC] text-white'
@@ -608,29 +656,43 @@ export function MailroomPage({
 
               <div>
                 <label className="block font-semibold text-[#1D1D1F] mb-1">
-                  CC (optional)
+                  CC {makingRequiresLexCc ? '(Lex required)' : '(optional)'}
                 </label>
                 <div className="flex flex-wrap gap-1.5">
                   {PERSONAS.filter((p) => p !== persona).map((p) => {
-                    const checked = ccPersonas.includes(p);
+                    const lockedLex = makingRequiresLexCc && p === 'lex';
+                    const checked = lockedLex || ccPersonas.includes(p);
                     return (
                       <button
                         key={p}
                         type="button"
-                        onClick={() => toggleRecipient(ccPersonas, setCcPersonas, p)}
-                        className={`apple-press rounded-full border px-3 py-1 font-medium ${
+                        disabled={lockedLex}
+                        onClick={() => handleToggleCc(p)}
+                        title={
+                          lockedLex
+                            ? 'Lex is automatically CC’d and locked when Making Team emails Inventory Manager.'
+                            : undefined
+                        }
+                        className={`apple-press inline-flex items-center gap-1 rounded-full border px-3 py-1 font-medium ${
                           checked
                             ? p === 'lex'
                               ? 'border-[#5E5CE6] bg-[#5E5CE6] text-white'
                               : 'border-[#0066CC] bg-[#0066CC] text-white'
                             : 'border-black/[0.08] bg-white text-[#6E6E73] hover:bg-[#FBFBFD] hover:text-[#1D1D1F]'
-                        }`}
+                        } ${lockedLex ? 'cursor-not-allowed opacity-90' : ''}`}
                       >
+                        {lockedLex && <Lock className="h-3 w-3" />}
                         {personaLabel(p)}
                       </button>
                     );
                   })}
                 </div>
+                {makingRequiresLexCc && (
+                  <p className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-[#4B48C4]">
+                    <Sparkles className="h-3 w-3 shrink-0" />
+                    Lex is automatically CC&apos;d and locked so stock requests are analyzed against inventory and active POs.
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
