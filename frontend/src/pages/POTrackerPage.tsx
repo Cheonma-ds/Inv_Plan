@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowRightLeft,
   CheckCircle2,
@@ -114,6 +115,17 @@ export function POTrackerPage({
     }
   }, [selectedPoId, loadDetail, refreshNonce]);
 
+  useEffect(() => {
+    if (selectedPoId === null) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedPoId(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedPoId]);
+
   const statusOptions = useMemo(() => {
     const distinct = Array.from(new Set(pos.map((p) => p.status))).sort();
     return ['OPEN', 'ALL', ...distinct];
@@ -219,8 +231,8 @@ export function POTrackerPage({
         header: 'PO Number',
         tooltip:
           'Unique Purchase Order identifier assigned when replenishment is triggered. Click any row to open the full lifecycle, GRN, invoice match, and linked email drawer.',
-        defaultWidth: 130,
-        minWidth: 100,
+        defaultWidth: 105,
+        minWidth: 90,
         cellClassName: 'font-mono font-bold text-[#1D1D1F]',
         renderCell: (po) => po.po_number,
       },
@@ -228,8 +240,8 @@ export function POTrackerPage({
         key: 'part',
         header: 'Part',
         tooltip: 'SKU code and part description ordered on this Purchase Order.',
-        defaultWidth: 240,
-        minWidth: 160,
+        defaultWidth: 205,
+        minWidth: 145,
         renderCell: (po) => (
           <>
             <div className="font-mono font-semibold text-[#1D1D1F]">
@@ -243,8 +255,8 @@ export function POTrackerPage({
         key: 'supplier',
         header: 'Supplier',
         tooltip: 'Assigned vendor fulfilling this Purchase Order (Primary or Backup supplier).',
-        defaultWidth: 210,
-        minWidth: 140,
+        defaultWidth: 175,
+        minWidth: 125,
         cellClassName: 'font-medium text-[#1D1D1F]',
         renderCell: (po) => po.supplier_name ?? `Supplier #${po.supplier_id}`,
       },
@@ -253,8 +265,8 @@ export function POTrackerPage({
         header: 'Quantity',
         tooltip:
           "Total order quantity in units, rounded up to meet the supplier's Minimum Order Quantity (MOQ).",
-        defaultWidth: 105,
-        minWidth: 80,
+        defaultWidth: 85,
+        minWidth: 75,
         align: 'right',
         cellClassName: 'font-semibold tabular-nums text-[#1D1D1F]',
         renderCell: (po) => po.qty,
@@ -264,8 +276,8 @@ export function POTrackerPage({
         header: 'Unit Price',
         tooltip:
           'Agreed contract price per unit (INR) used as the baseline during 3-way invoice matching.',
-        defaultWidth: 120,
-        minWidth: 95,
+        defaultWidth: 100,
+        minWidth: 85,
         align: 'right',
         cellClassName: 'tabular-nums text-[#6E6E73]',
         renderCell: (po) => formatInr(po.unit_price),
@@ -274,8 +286,8 @@ export function POTrackerPage({
         key: 'total_amount',
         header: 'Total Value',
         tooltip: 'Total PO commitment value (Quantity × Agreed Unit Price in INR).',
-        defaultWidth: 135,
-        minWidth: 105,
+        defaultWidth: 110,
+        minWidth: 90,
         align: 'right',
         cellClassName: 'font-semibold tabular-nums text-[#1D1D1F]',
         renderCell: (po) => formatInr(po.total_amount),
@@ -284,14 +296,15 @@ export function POTrackerPage({
         key: 'status',
         header: 'Status',
         tooltip:
-          'Current PO workflow state: PENDING_DISPATCH_APPROVAL (draft awaiting Manager send), SENT_AWAITING_ACK, ACKNOWLEDGED, DELAYED_CRITICAL, OVERDUE, DELIVERED_PENDING_INVOICE, INVOICE_MISMATCH_HOLD, CLOSED, or CANCELLED.',
-        defaultWidth: 225,
-        minWidth: 155,
+          'Current PO workflow state: PENDING_DISPATCH_APPROVAL (draft awaiting Manager send), SENT_AWAITING_ACK, ACKNOWLEDGED, EXCEPTION_REVIEW, UNRESPONSIVE_ESCALATED, DELAYED_CRITICAL, OVERDUE, RECEIVED_PENDING_INVOICE, QUARANTINED_INVOICE_MISMATCH, CLOSED, or CANCELLED.',
+        defaultWidth: 195,
+        minWidth: 140,
         renderCell: (po) => (
           <span
-            className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${poStatusBadgeClass(
+            className={`inline-block max-w-full truncate align-middle rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${poStatusBadgeClass(
               po.status,
             )}`}
+            title={po.status}
           >
             {po.status}
           </span>
@@ -302,8 +315,8 @@ export function POTrackerPage({
         header: 'Promised / Revised ETA',
         tooltip:
           'Original promised delivery date based on quoted lead time, plus any revised ETA communicated by the supplier in email updates.',
-        defaultWidth: 190,
-        minWidth: 140,
+        defaultWidth: 145,
+        minWidth: 125,
         cellClassName: 'text-[#6E6E73] tabular-nums',
         renderCell: (po) => (
           <>
@@ -380,48 +393,61 @@ export function POTrackerPage({
         }
       />
 
-      {/* Slide-over detail drawer */}
-      {selectedPoId !== null && (
-        <div className="anim-backdrop fixed inset-0 z-40 flex justify-end bg-black/28 backdrop-blur-xs">
-          <div className="anim-drawer-slide h-full w-full max-w-2xl overflow-y-auto bg-white shadow-[var(--shadow-drawer)] border-l border-black/[0.08] flex flex-col">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/[0.08] bg-white/88 backdrop-blur-xl px-6 py-4">
-              <div>
-                <h2 className="text-lg font-bold tracking-tight text-[#1D1D1F]">
-                  {poDetail ? poDetail.po_number : `PO #${selectedPoId}`}
-                </h2>
-                {poDetail && (
-                  <p className="text-xs text-[#6E6E73]">
-                    {poDetail.part_sku} · {poDetail.part_name} · {poDetail.supplier_name}
-                  </p>
-                )}
+      {/* Slide-over detail drawer (portaled to body so page animations never clip fixed overlay) */}
+      {selectedPoId !== null &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            onClick={() => setSelectedPoId(null)}
+            className="anim-backdrop fixed inset-0 z-40 flex justify-end bg-black/28 backdrop-blur-xs"
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={poDetail ? poDetail.po_number : `PO #${selectedPoId}`}
+              onClick={(e) => e.stopPropagation()}
+              className="anim-drawer-slide h-full w-full max-w-2xl overflow-y-auto bg-white shadow-[var(--shadow-drawer)] border-l border-black/[0.08] flex flex-col"
+            >
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-black/[0.08] bg-white/88 backdrop-blur-xl px-6 py-4">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-[#1D1D1F]">
+                    {poDetail ? poDetail.po_number : `PO #${selectedPoId}`}
+                  </h2>
+                  {poDetail && (
+                    <p className="text-xs text-[#6E6E73]">
+                      {poDetail.part_sku} · {poDetail.part_name} · {poDetail.supplier_name}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close PO detail drawer"
+                  onClick={() => setSelectedPoId(null)}
+                  className="apple-press rounded-full p-1.5 text-[#86868B] hover:bg-black/[0.05] hover:text-[#1D1D1F]"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setSelectedPoId(null)}
-                className="apple-press rounded-full p-1.5 text-[#86868B] hover:bg-black/[0.05] hover:text-[#1D1D1F]"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
 
-            {detailLoading || !poDetail ? (
-              <div className="p-6 text-sm text-[#6E6E73]">Loading PO details...</div>
-            ) : (
-              <div className="p-6 space-y-6">
-                {/* Summary KPIs */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
-                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
-                    <div className="text-[#86868B]">Status</div>
-                    <div className="mt-1.5">
-                      <span
-                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${poStatusBadgeClass(
-                          poDetail.status,
-                        )}`}
-                      >
-                        {poDetail.status}
-                      </span>
+              {detailLoading || !poDetail ? (
+                <div className="p-6 text-sm text-[#6E6E73]">Loading PO details...</div>
+              ) : (
+                <div className="p-6 space-y-6">
+                  {/* Summary KPIs */}
+                  <div className="grid grid-cols-2 sm:grid-cols-[minmax(195px,1.6fr)_0.8fr_1fr_1fr] gap-3 text-xs tabular-nums">
+                    <div className="min-w-0 rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
+                      <div className="text-[#86868B]">Status</div>
+                      <div className="mt-1.5">
+                        <span
+                          className={`inline-block max-w-full truncate align-middle rounded-full border px-2 py-0.5 text-[10px] font-semibold ${poStatusBadgeClass(
+                            poDetail.status,
+                          )}`}
+                          title={poDetail.status}
+                        >
+                          {poDetail.status}
+                        </span>
+                      </div>
                     </div>
-                  </div>
                   <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3">
                     <div className="text-[#86868B]">Order Qty</div>
                     <div className="mt-1 text-sm font-bold text-[#1D1D1F]">
@@ -455,7 +481,7 @@ export function POTrackerPage({
                       </span>
                     </div>
                     <div>
-                      <span className="text-[#6E6E73]">Dispatched:</span>{' '}
+                      <span className="text-[#6E6E73]">PO Sent:</span>{' '}
                       <span className="font-medium text-[#1D1D1F]">
                         {formatSimDateTime(poDetail.sent_at)}
                       </span>
@@ -732,11 +758,12 @@ export function POTrackerPage({
                     </div>
                   )}
                 </section>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+                </div>
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

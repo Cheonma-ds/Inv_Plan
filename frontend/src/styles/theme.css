@@ -66,7 +66,7 @@
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -125,7 +125,7 @@
 }
 
 .anim-page-enter {
-  animation: fadeSlideUp var(--duration-base) var(--ease-spring) both;
+  animation: fadeSlideUp var(--duration-base) var(--ease-spring) backwards;
 }
 
 .anim-modal-pop {

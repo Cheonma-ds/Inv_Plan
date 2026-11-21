@@ -100,7 +100,7 @@ export function personaLabel(persona: string): string {
     case 'sup2':
       return 'Sup2 (Bharat Fasteners)';
     case 'sup3':
-      return 'Sup3 (Deccan Valves)';
+      return 'Sup3 (Deccan Electro-Spares)';
     case 'lex':
       return 'Lex (AI Agent)';
     default:
