@@ -1,6 +1,6 @@
 # STATUS_P2.md — Phase 2 Live Session Baton
 
-**Current Stage:** Slice P2-1 & Slice P2-3 Complete (Ready for **Slice P2-2** or **Slice P2-4** / **Slice P2-6**)  
+**Current Stage:** Slices P2-1, P2-2 & P2-3 Complete (Ready for **Slice P2-4** or **Slice P2-6**)  
 **Last Updated:** 2026-11-21  
 **Baseline Reference:** Phase 1 MVP Complete (Slices 1–5 in [`STATUS.md`](../../STATUS.md))  
 **Planning Docs:** [`PRD_P2.md`](PRD_P2.md) · [`DESIGN_P2.md`](DESIGN_P2.md) · [`SLICES_P2.md`](SLICES_P2.md)
@@ -10,7 +10,7 @@
 ## Slice Progress Tracker
 
 - [x] **Slice P2-1:** Apple HIG Design System, Calm Palette, Smooth Animations & Wider Horizontal Layout
-- [ ] **Slice P2-2:** Universal `DataTable` (Dual-Axis Scroll, Frozen Title Case Headers, Zero-Icon Hover Tooltips, Resizable Columns)
+- [x] **Slice P2-2:** Universal `DataTable` (Dual-Axis Scroll, Frozen Title Case Headers, Zero-Icon Hover Tooltips, Resizable Columns)
 - [x] **Slice P2-3:** Backend Core Schema, Idempotent SQLite Migrations, 7 Personas (`making`, `procurement`) & PO Logistics Fields + Seed Fix
 - [ ] **Slice P2-4:** Backend Making-Team Stock Request Pipeline & Lex Analysis
 - [ ] **Slice P2-5:** Frontend 7-Persona Mailroom, Remove `Withdraw` from Inventory & Stock-Request Alerts
@@ -34,6 +34,20 @@
 - **Verification:**
   - `cd frontend && npm run build` (`tsc -b && vite build`) passed with 0 errors; confirmed `--bg-canvas`, `fadeSlideUp`, `modalPop`, `drawerSlide`, `prefers-reduced-motion`, and `max-w-[1640px]` compiled into `frontend/dist/assets/index-*.css`.
   - `uv run pytest` (`69 passed, 1 skipped`) and `uv run ruff check backend tests` (`All checks passed!`) confirmed zero backend regressions.
+
+### Slice P2-2 — Universal `DataTable` (Dual-Axis Scroll, Frozen Title Case Headers, Zero-Icon Hover Tooltips, Resizable Columns)
+- **Reusable `DataTable` Package (`frontend/src/components/DataTable/`):**
+  - `types.ts`: Strict `ColumnDef<T>`, `ColumnAlignment`, and `DataTableProps<T>` interfaces (`key`, `header`, `tooltip`, `defaultWidth`, `minWidth`, `align`, `renderCell`, `headerClassName`, `cellClassName`).
+  - `useColumnResize.ts`: Pointer-event drag resizing (`startResize`), per-column `minWidth` clamping, `localStorage` persistence (`storageKey`), double-click single-column reset (`resetColumn`), and full reset (`resetAllColumns`).
+  - `HeaderTooltip.tsx`: Pure-hover / focus portal tooltip rendered via `createPortal(..., document.body)` with `position: fixed` anchored to `<th>` `getBoundingClientRect()` (viewport-clamped, `pointer-events-none`, zero clipping by `overflow-auto`) and **zero icons** inside `<th>`.
+  - `DataTable.tsx` & `index.ts`: Bounded vertical + horizontal scroll container (`overflow-auto overscroll-contain`, configurable `maxHeight`), `table-fixed` + `<colgroup>` width binding, `border-separate border-spacing-0` sticky `<thead>` (`sticky top-0 z-10 bg-[#FBFBFD]/95 backdrop-blur-md`), Title Case headers with no `uppercase` transform, subtle hover-revealed right-edge `col-resize` dividers with double-click reset, and a conditional `Reset column widths` control when widths are customized.
+- **Page Migrations:**
+  - `frontend/src/pages/InventoryPage.tsx`: Migrated parts table to `<DataTable>` (`invplan_col_widths_inventory`, `maxHeight="calc(100vh - 280px)"`) with Title Case headers (`Part`, `On-Hand`, `Quarantined`, `On-Order`, `Inventory Position`, `Reorder Point / Target`, `Demand Override`, `Primary & Backup Suppliers`, `Actions`) and hover tooltips (including `CRITICAL` / `STANDARD` / `LOW` tiers and `Inventory Position` pipeline guard). Preserved `Withdraw` button/modal for Slice P2-5.
+  - `frontend/src/pages/POTrackerPage.tsx`: Migrated PO table to `<DataTable>` (`invplan_col_widths_po_tracker`, `maxHeight="calc(100vh - 280px)"`) with Title Case headers (`PO Number`, `Part`, `Supplier`, `Quantity`, `Unit Price`, `Total Value`, `Status`, `Promised / Revised ETA`) and hover tooltips. Preserved slide-over drawer for Slice P2-7.
+  - `frontend/src/pages/AIHealthPage.tsx`: Migrated Autonomy Policies table to embedded `<DataTable>` (`invplan_col_widths_ai_health`, `maxHeight="380px"`) with Title Case headers (`Category`, `Policy Mode`, `Approved As-Is`, `Approved Edited`, `Rejected`, `Edit-Free %`, `Trust Distribution`) and hover tooltips.
+- **Verification:**
+  - `cd frontend && npm run build` (`tsc -b && vite build`) passed with 0 errors.
+  - Headless Chromium CDP browser verification across all 3 pages confirmed bounded dual-axis scrolling, sticky frozen Title Case headers (`textTransform !== 'uppercase'`, 0 icons inside `<th>`), `document.body` fixed-position hover tooltips, pointer-drag column resizing with `localStorage` persistence, and double-click width reset.
 
 ### Slice P2-3 — Backend Core Schema, Migrations, 7 Personas & PO Logistics Fields + Seed Fix
 - **Core Enums & Models (`backend/core/enums.py`, `backend/core/models.py`):**
@@ -59,12 +73,12 @@
 ---
 
 ## Next Slice Options
-- **Frontend Table Ergonomics (`Slice P2-2`):** Universal `DataTable` (dual-axis scroll, frozen Title Case headers, zero-icon hover tooltips, resizable columns).
-  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §3`, `docs/phase2/DESIGN_P2.md §3.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-2`), `frontend/src/pages/{InventoryPage,POTrackerPage,AIHealthPage}.tsx`.
-  - **Leave Untouched:** All `backend/`, `tests/`, `MailroomPage.tsx`, and `Withdraw` modal behavior (`P2-5`).
 - **Backend Stock-Request Track (`Slice P2-4`):** Making-team stock request triage, deterministic stock/PO analysis, and Manager approval CTAs.
   - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §4.3`, `docs/phase2/DESIGN_P2.md §4.2`, `docs/phase2/SLICES_P2.md` (`Slice P2-4`).
   - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`, `backend/po/matching.py`, `backend/orchestrator/sla_watcher.py`.
+- **Backend PO Logistics Track (`Slice P2-6`):** PO logistics triage, 2-day deferred SLA, mandatory Lex action alerts, and Procurement escalation.
+  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §5`, `docs/phase2/DESIGN_P2.md §4.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-6`).
+  - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`.
 
 ---
 

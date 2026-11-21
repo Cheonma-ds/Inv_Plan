@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { PODetail, POListItem } from '../api/types';
+import { DataTable, type ColumnDef } from '../components/DataTable';
 import {
   formatInr,
   formatSimDate,
@@ -211,6 +212,114 @@ export function POTrackerPage({
     }
   };
 
+  const poColumns = useMemo<ColumnDef<POListItem>[]>(
+    () => [
+      {
+        key: 'po_number',
+        header: 'PO Number',
+        tooltip:
+          'Unique Purchase Order identifier assigned when replenishment is triggered. Click any row to open the full lifecycle, GRN, invoice match, and linked email drawer.',
+        defaultWidth: 130,
+        minWidth: 100,
+        cellClassName: 'font-mono font-bold text-[#1D1D1F]',
+        renderCell: (po) => po.po_number,
+      },
+      {
+        key: 'part',
+        header: 'Part',
+        tooltip: 'SKU code and part description ordered on this Purchase Order.',
+        defaultWidth: 240,
+        minWidth: 160,
+        renderCell: (po) => (
+          <>
+            <div className="font-mono font-semibold text-[#1D1D1F]">
+              {po.part_sku ?? `Part #${po.part_id}`}
+            </div>
+            <div className="text-[#6E6E73]">{po.part_name}</div>
+          </>
+        ),
+      },
+      {
+        key: 'supplier',
+        header: 'Supplier',
+        tooltip: 'Assigned vendor fulfilling this Purchase Order (Primary or Backup supplier).',
+        defaultWidth: 210,
+        minWidth: 140,
+        cellClassName: 'font-medium text-[#1D1D1F]',
+        renderCell: (po) => po.supplier_name ?? `Supplier #${po.supplier_id}`,
+      },
+      {
+        key: 'qty',
+        header: 'Quantity',
+        tooltip:
+          "Total order quantity in units, rounded up to meet the supplier's Minimum Order Quantity (MOQ).",
+        defaultWidth: 105,
+        minWidth: 80,
+        align: 'right',
+        cellClassName: 'font-semibold tabular-nums text-[#1D1D1F]',
+        renderCell: (po) => po.qty,
+      },
+      {
+        key: 'unit_price',
+        header: 'Unit Price',
+        tooltip:
+          'Agreed contract price per unit (INR) used as the baseline during 3-way invoice matching.',
+        defaultWidth: 120,
+        minWidth: 95,
+        align: 'right',
+        cellClassName: 'tabular-nums text-[#6E6E73]',
+        renderCell: (po) => formatInr(po.unit_price),
+      },
+      {
+        key: 'total_amount',
+        header: 'Total Value',
+        tooltip: 'Total PO commitment value (Quantity × Agreed Unit Price in INR).',
+        defaultWidth: 135,
+        minWidth: 105,
+        align: 'right',
+        cellClassName: 'font-semibold tabular-nums text-[#1D1D1F]',
+        renderCell: (po) => formatInr(po.total_amount),
+      },
+      {
+        key: 'status',
+        header: 'Status',
+        tooltip:
+          'Current PO workflow state: PENDING_DISPATCH_APPROVAL (draft awaiting Manager send), SENT_AWAITING_ACK, ACKNOWLEDGED, DELAYED_CRITICAL, OVERDUE, DELIVERED_PENDING_INVOICE, INVOICE_MISMATCH_HOLD, CLOSED, or CANCELLED.',
+        defaultWidth: 225,
+        minWidth: 155,
+        renderCell: (po) => (
+          <span
+            className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${poStatusBadgeClass(
+              po.status,
+            )}`}
+          >
+            {po.status}
+          </span>
+        ),
+      },
+      {
+        key: 'eta',
+        header: 'Promised / Revised ETA',
+        tooltip:
+          'Original promised delivery date based on quoted lead time, plus any revised ETA communicated by the supplier in email updates.',
+        defaultWidth: 190,
+        minWidth: 140,
+        cellClassName: 'text-[#6E6E73] tabular-nums',
+        renderCell: (po) => (
+          <>
+            <div>{formatSimDate(po.promised_eta)}</div>
+            {po.revised_eta && (
+              <div className="text-[#945600] font-medium">
+                Rev: {formatSimDate(po.revised_eta)}
+              </div>
+            )}
+          </>
+        ),
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -256,82 +365,20 @@ export function POTrackerPage({
         </select>
       </div>
 
-      <div className="apple-card overflow-x-auto rounded-2xl">
-        <table className="min-w-full divide-y divide-black/[0.06] text-left text-xs">
-          <thead className="bg-[#FBFBFD] text-[#6E6E73] font-semibold uppercase tracking-wider">
-            <tr>
-              <th className="px-4 py-3">PO #</th>
-              <th className="px-4 py-3">Part</th>
-              <th className="px-4 py-3">Supplier</th>
-              <th className="px-3 py-3 text-right">Qty</th>
-              <th className="px-3 py-3 text-right">Unit Price</th>
-              <th className="px-3 py-3 text-right">Total</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Promised / Revised ETA</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/[0.05]">
-            {filteredPos.map((po) => {
-              const isSelected = selectedPoId === po.id;
-              return (
-                <tr
-                  key={po.id}
-                  onClick={() => setSelectedPoId(po.id)}
-                  className={`cursor-pointer transition-colors ${
-                    isSelected ? 'bg-[#0066CC]/[0.07]' : 'hover:bg-black/[0.02]'
-                  }`}
-                >
-                  <td className="px-4 py-3 font-mono font-bold text-[#1D1D1F]">
-                    {po.po_number}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="font-mono font-semibold text-[#1D1D1F]">
-                      {po.part_sku ?? `Part #${po.part_id}`}
-                    </div>
-                    <div className="text-[#6E6E73]">{po.part_name}</div>
-                  </td>
-                  <td className="px-4 py-3 font-medium text-[#1D1D1F]">
-                    {po.supplier_name ?? `Supplier #${po.supplier_id}`}
-                  </td>
-                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-[#1D1D1F]">
-                    {po.qty}
-                  </td>
-                  <td className="px-3 py-3 text-right tabular-nums text-[#6E6E73]">
-                    {formatInr(po.unit_price)}
-                  </td>
-                  <td className="px-3 py-3 text-right font-semibold tabular-nums text-[#1D1D1F]">
-                    {formatInr(po.total_amount)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${poStatusBadgeClass(
-                        po.status,
-                      )}`}
-                    >
-                      {po.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-[#6E6E73] tabular-nums">
-                    <div>{formatSimDate(po.promised_eta)}</div>
-                    {po.revised_eta && (
-                      <div className="text-[#945600] font-medium">
-                        Rev: {formatSimDate(po.revised_eta)}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-            {filteredPos.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-[#6E6E73]">
-                  No purchase orders match this filter.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        storageKey="invplan_col_widths_po_tracker"
+        ariaLabel="Purchase Orders"
+        columns={poColumns}
+        rows={filteredPos}
+        rowKey={(po) => po.id}
+        loading={loading}
+        maxHeight="calc(100vh - 280px)"
+        emptyMessage="No purchase orders match this filter."
+        onRowClick={(po) => setSelectedPoId(po.id)}
+        rowClassName={(po) =>
+          selectedPoId === po.id ? 'bg-[#0066CC]/[0.07]' : 'hover:bg-black/[0.02]'
+        }
+      />
 
       {/* Slide-over detail drawer */}
       {selectedPoId !== null && (

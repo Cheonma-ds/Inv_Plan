@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { PartItem } from '../api/types';
+import { DataTable, type ColumnDef } from '../components/DataTable';
 import { criticalityBadgeClass, formatInr } from '../utils/format';
 
 interface InventoryPageProps {
@@ -68,7 +69,7 @@ export function InventoryPage({
     void loadParts();
   }, [loadParts, refreshNonce]);
 
-  const openModal = (next: ModalState) => {
+  const openModal = useCallback((next: ModalState) => {
     setModal(next);
     if (!next) return;
     if (next.kind === 'consume') {
@@ -84,7 +85,7 @@ export function InventoryPage({
           : '',
       );
     }
-  };
+  }, []);
 
   const filteredParts = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -206,6 +207,205 @@ export function InventoryPage({
   const totalQuarantined = parts.reduce((acc, p) => acc + p.quarantined_stock, 0);
   const belowRopCount = parts.filter((p) => p.inventory_position < p.rop).length;
 
+  const columns = useMemo<ColumnDef<PartItem>[]>(
+    () => [
+      {
+        key: 'part',
+        header: 'Part',
+        tooltip:
+          'Unique SKU identifier, part name, and operational criticality tier. CRITICAL: essential parts with 98% target service level (Z = 2.05) and 24h supplier ack SLA. STANDARD: core production items with 95% service level (Z = 1.65) and 48h SLA. LOW: routine/non-urgent items with 90% service level (Z = 1.28).',
+        defaultWidth: 250,
+        minWidth: 180,
+        renderCell: (part) => (
+          <>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Package className="h-3.5 w-3.5 text-[#86868B] shrink-0" />
+              <span className="font-mono font-semibold text-[#1D1D1F]">{part.sku}</span>
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${criticalityBadgeClass(
+                  part.criticality,
+                )}`}
+              >
+                {part.criticality}
+              </span>
+            </div>
+            <div className="mt-0.5 text-[#6E6E73] font-medium">{part.name}</div>
+          </>
+        ),
+      },
+      {
+        key: 'on_hand',
+        header: 'On-Hand',
+        tooltip:
+          'Usable physical stock currently available in the warehouse. Excludes quarantined units awaiting invoice discrepancy resolution.',
+        defaultWidth: 105,
+        minWidth: 85,
+        align: 'right',
+        cellClassName: 'font-semibold tabular-nums text-[#1D1D1F]',
+        renderCell: (part) => part.on_hand_stock,
+      },
+      {
+        key: 'quarantined',
+        header: 'Quarantined',
+        tooltip:
+          'Units physically received via GRN but locked out of usable On-Hand stock due to a 3-way invoice mismatch. Released once a corrected PDF invoice matches.',
+        defaultWidth: 120,
+        minWidth: 95,
+        align: 'right',
+        cellClassName: 'tabular-nums',
+        renderCell: (part) =>
+          part.quarantined_stock > 0 ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#B46900]/10 border border-[#B46900]/24 px-2 py-0.5 font-semibold text-[#945600]">
+              <AlertTriangle className="h-3 w-3" />
+              {part.quarantined_stock}
+            </span>
+          ) : (
+            <span className="text-[#86868B]">0</span>
+          ),
+      },
+      {
+        key: 'on_order',
+        header: 'On-Order',
+        tooltip:
+          'Open replenishment quantity across active Purchase Orders (including drafts awaiting dispatch approval, net of quarantined units) to prevent duplicate POs.',
+        defaultWidth: 105,
+        minWidth: 85,
+        align: 'right',
+        cellClassName: 'tabular-nums text-[#6E6E73] font-medium',
+        renderCell: (part) => part.on_order_stock,
+      },
+      {
+        key: 'inventory_position',
+        header: 'Inventory Position',
+        tooltip:
+          'Total pipeline stock (On-Hand + On-Order + Quarantined) evaluated against ROP before triggering a new PO so in-flight or disputed shipments never spawn duplicate POs.',
+        defaultWidth: 150,
+        minWidth: 115,
+        align: 'right',
+        cellClassName: 'tabular-nums',
+        renderCell: (part) => {
+          const isBelowRop = part.inventory_position < part.rop;
+          return (
+            <span className={`font-bold ${isBelowRop ? 'text-[#B82923]' : 'text-[#1D1D1F]'}`}>
+              {part.inventory_position}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'rop_s',
+        header: 'Reorder Point / Target',
+        tooltip:
+          'Reorder Point (ROP) trigger threshold and Order-Up-To target level (S) with target coverage days. When Inventory Position < ROP, an order of (S - Inventory Position) rounded up to MOQ is triggered.',
+        defaultWidth: 175,
+        minWidth: 135,
+        align: 'right',
+        cellClassName: 'tabular-nums text-[#1D1D1F]',
+        renderCell: (part) => (
+          <>
+            <span className="font-semibold">{part.rop}</span>
+            <span className="text-[#86868B]"> / </span>
+            <span>{part.replenishment_point}</span>
+            <div className="text-[10px] text-[#86868B]">{part.target_coverage_days}d cov</div>
+          </>
+        ),
+      },
+      {
+        key: 'demand_override',
+        header: 'Demand Override',
+        tooltip:
+          'Manual daily demand rate (units/day) overriding the automatic 12-month EWMA demand forecast. Shows Auto when statistical EWMA forecasting is active.',
+        defaultWidth: 145,
+        minWidth: 115,
+        align: 'right',
+        cellClassName: 'tabular-nums',
+        renderCell: (part) =>
+          part.manual_demand_override !== null ? (
+            <span className="rounded-full bg-[#0066CC]/10 border border-[#0066CC]/22 px-2 py-0.5 font-semibold text-[#0058B3]">
+              {part.manual_demand_override}/d
+            </span>
+          ) : (
+            <span className="text-[#86868B]">Auto</span>
+          ),
+      },
+      {
+        key: 'suppliers',
+        header: 'Primary & Backup Suppliers',
+        tooltip:
+          'Ranked Primary (1°) and Backup (2°) suppliers for this SKU, displaying agreed unit price, observed effective lead time vs. quoted lead time, and Minimum Order Quantity (MOQ).',
+        defaultWidth: 360,
+        minWidth: 220,
+        cellClassName: 'space-y-1 tabular-nums',
+        renderCell: (part) => {
+          const primary = part.suppliers.find((s) => s.supplier_rank === 1);
+          const backup = part.suppliers.find((s) => s.supplier_rank === 2);
+          return (
+            <>
+              {primary ? (
+                <div className="text-[#1D1D1F]">
+                  <span className="font-semibold">1° {primary.supplier_name}</span>{' '}
+                  <span className="text-[#6E6E73]">
+                    · {formatInr(primary.agreed_unit_price)} ·{' '}
+                    {primary.effective_lead_time_days.toFixed(1)}d eff LT (q
+                    {primary.quoted_lead_time_days}d) · MOQ {primary.moq}
+                  </span>
+                </div>
+              ) : (
+                <div className="text-[#86868B]">No primary supplier</div>
+              )}
+              {backup && (
+                <div className="text-[#6E6E73]">
+                  <span>2° {backup.supplier_name}</span> · {formatInr(backup.agreed_unit_price)} ·{' '}
+                  {backup.quoted_lead_time_days}d LT · MOQ {backup.moq}
+                </div>
+              )}
+            </>
+          );
+        },
+      },
+      {
+        key: 'actions',
+        header: 'Actions',
+        tooltip:
+          'Direct SKU controls: withdraw stock, adjust Reorder Point / Order-Up-To (ROP/S) parameters, or set a manual daily demand override.',
+        defaultWidth: 250,
+        minWidth: 210,
+        align: 'right',
+        renderCell: (part) => (
+          <div className="inline-flex flex-wrap justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => openModal({ kind: 'consume', part })}
+              className="apple-press inline-flex items-center gap-1 rounded-lg bg-[#0066CC] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0071E3] shadow-2xs"
+            >
+              <ArrowDownCircle className="h-3 w-3" />
+              Withdraw
+            </button>
+            <button
+              type="button"
+              onClick={() => openModal({ kind: 'rop', part })}
+              className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
+              title="Edit ROP and S"
+            >
+              <Edit3 className="h-3 w-3 text-[#6E6E73]" />
+              ROP/S
+            </button>
+            <button
+              type="button"
+              onClick={() => openModal({ kind: 'demand', part })}
+              className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
+              title="Manual daily demand override"
+            >
+              <Sliders className="h-3 w-3 text-[#6E6E73]" />
+              Demand
+            </button>
+          </div>
+        ),
+      },
+    ],
+    [openModal],
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -269,162 +469,23 @@ export function InventoryPage({
         </div>
       </div>
 
-      <div className="apple-card overflow-x-auto rounded-2xl">
-        <table className="min-w-full divide-y divide-black/[0.06] text-left text-xs">
-          <thead className="bg-[#FBFBFD] text-[#6E6E73] font-semibold uppercase tracking-wider">
-            <tr>
-              <th className="px-4 py-3">Part</th>
-              <th className="px-3 py-3 text-right">On-Hand</th>
-              <th className="px-3 py-3 text-right">Quarantined</th>
-              <th className="px-3 py-3 text-right">On-Order</th>
-              <th className="px-3 py-3 text-right">Inv. Pos.</th>
-              <th className="px-3 py-3 text-right">ROP / S</th>
-              <th className="px-3 py-3 text-right">Demand Override</th>
-              <th className="px-4 py-3">Primary &amp; Backup Suppliers</th>
-              <th className="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/[0.05]">
-            {filteredParts.map((part) => {
-              const primary = part.suppliers.find((s) => s.supplier_rank === 1);
-              const backup = part.suppliers.find((s) => s.supplier_rank === 2);
-              const isBelowRop = part.inventory_position < part.rop;
-              const isFocused = focusPartId === part.part_id;
-
-              return (
-                <tr
-                  key={part.part_id}
-                  className={`transition-colors ${
-                    isFocused
-                      ? 'bg-[#0066CC]/[0.07]'
-                      : isBelowRop
-                        ? 'bg-[#C9342D]/[0.03] hover:bg-[#C9342D]/[0.06]'
-                        : 'hover:bg-black/[0.02]'
-                  }`}
-                >
-                  <td className="px-4 py-3 align-top">
-                    <div className="flex items-center gap-2">
-                      <Package className="h-3.5 w-3.5 text-[#86868B] shrink-0" />
-                      <span className="font-mono font-semibold text-[#1D1D1F]">
-                        {part.sku}
-                      </span>
-                      <span
-                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${criticalityBadgeClass(
-                          part.criticality,
-                        )}`}
-                      >
-                        {part.criticality}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 text-[#6E6E73] font-medium">{part.name}</div>
-                  </td>
-
-                  <td className="px-3 py-3 text-right align-top font-semibold tabular-nums text-[#1D1D1F]">
-                    {part.on_hand_stock}
-                  </td>
-
-                  <td className="px-3 py-3 text-right align-top tabular-nums">
-                    {part.quarantined_stock > 0 ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-[#B46900]/10 border border-[#B46900]/24 px-2 py-0.5 font-semibold text-[#945600]">
-                        <AlertTriangle className="h-3 w-3" />
-                        {part.quarantined_stock}
-                      </span>
-                    ) : (
-                      <span className="text-[#86868B]">0</span>
-                    )}
-                  </td>
-
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-[#6E6E73] font-medium">
-                    {part.on_order_stock}
-                  </td>
-
-                  <td className="px-3 py-3 text-right align-top tabular-nums">
-                    <span
-                      className={`font-bold ${
-                        isBelowRop ? 'text-[#B82923]' : 'text-[#1D1D1F]'
-                      }`}
-                    >
-                      {part.inventory_position}
-                    </span>
-                  </td>
-
-                  <td className="px-3 py-3 text-right align-top tabular-nums text-[#1D1D1F]">
-                    <span className="font-semibold">{part.rop}</span>
-                    <span className="text-[#86868B]"> / </span>
-                    <span>{part.replenishment_point}</span>
-                    <div className="text-[10px] text-[#86868B]">
-                      {part.target_coverage_days}d cov
-                    </div>
-                  </td>
-
-                  <td className="px-3 py-3 text-right align-top tabular-nums">
-                    {part.manual_demand_override !== null ? (
-                      <span className="rounded-full bg-[#0066CC]/10 border border-[#0066CC]/22 px-2 py-0.5 font-semibold text-[#0058B3]">
-                        {part.manual_demand_override}/d
-                      </span>
-                    ) : (
-                      <span className="text-[#86868B]">Auto</span>
-                    )}
-                  </td>
-
-                  <td className="px-4 py-3 align-top space-y-1 tabular-nums">
-                    {primary ? (
-                      <div className="text-[#1D1D1F]">
-                        <span className="font-semibold">1° {primary.supplier_name}</span>{' '}
-                        <span className="text-[#6E6E73]">
-                          · {formatInr(primary.agreed_unit_price)} ·{' '}
-                          {primary.effective_lead_time_days.toFixed(1)}d eff LT (q
-                          {primary.quoted_lead_time_days}d) · MOQ {primary.moq}
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="text-[#86868B]">No primary supplier</div>
-                    )}
-                    {backup && (
-                      <div className="text-[#6E6E73]">
-                        <span>2° {backup.supplier_name}</span> ·{' '}
-                        {formatInr(backup.agreed_unit_price)} ·{' '}
-                        {backup.quoted_lead_time_days}d LT · MOQ {backup.moq}
-                      </div>
-                    )}
-                  </td>
-
-                  <td className="px-4 py-3 text-right align-top">
-                    <div className="inline-flex flex-wrap justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => openModal({ kind: 'consume', part })}
-                        className="apple-press inline-flex items-center gap-1 rounded-lg bg-[#0066CC] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#0071E3] shadow-2xs"
-                      >
-                        <ArrowDownCircle className="h-3 w-3" />
-                        Withdraw
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openModal({ kind: 'rop', part })}
-                        className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-                        title="Edit ROP and S"
-                      >
-                        <Edit3 className="h-3 w-3 text-[#6E6E73]" />
-                        ROP/S
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openModal({ kind: 'demand', part })}
-                        className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-                        title="Manual daily demand override"
-                      >
-                        <Sliders className="h-3 w-3 text-[#6E6E73]" />
-                        Demand
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DataTable
+        storageKey="invplan_col_widths_inventory"
+        ariaLabel="Inventory and Parts Ledger"
+        columns={columns}
+        rows={filteredParts}
+        rowKey={(part) => part.part_id}
+        loading={loading}
+        maxHeight="calc(100vh - 280px)"
+        emptyMessage="No parts match the current filter."
+        rowClassName={(part) => {
+          const isBelowRop = part.inventory_position < part.rop;
+          const isFocused = focusPartId === part.part_id;
+          if (isFocused) return 'bg-[#0066CC]/[0.07]';
+          if (isBelowRop) return 'bg-[#C9342D]/[0.03] hover:bg-[#C9342D]/[0.06]';
+          return 'hover:bg-black/[0.02]';
+        }}
+      />
 
       {modal && (
         <div className="anim-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/30 backdrop-blur-xs p-4">

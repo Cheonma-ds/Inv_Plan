@@ -20,6 +20,7 @@ import type {
   EvalSuiteMetadata,
   ObservabilityStatusResponse,
 } from '../api/types';
+import { DataTable, type ColumnDef } from '../components/DataTable';
 import { formatSimDateTime } from '../utils/format';
 
 interface AIHealthPageProps {
@@ -206,6 +207,127 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
     };
   }, [statusInfo]);
 
+  const policyColumns = useMemo<ColumnDef<AutonomyPolicyItem>[]>(
+    () => [
+      {
+        key: 'category',
+        header: 'Category',
+        tooltip:
+          'Outbound email workflow category governed by Lex draft-first policy (such as PO_DISPATCH, FOLLOW_UP, EXPEDITE, or INVOICE_DISPUTE).',
+        defaultWidth: 260,
+        minWidth: 165,
+        cellClassName: 'font-semibold text-[#1D1D1F]',
+        renderCell: (p) => p.action_category,
+      },
+      {
+        key: 'mode',
+        header: 'Policy Mode',
+        tooltip:
+          'Autonomy governance mode for this category. APPROVAL_REQUIRED holds every draft for Inventory Manager review; AUTO_SEND allows autonomous dispatch when enabled.',
+        defaultWidth: 185,
+        minWidth: 140,
+        renderCell: (p) => (
+          <span
+            className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
+              p.mode === 'AUTO_SEND'
+                ? 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22'
+                : 'bg-black/[0.04] text-[#6E6E73] border-black/[0.08]'
+            }`}
+          >
+            {p.mode}
+          </span>
+        ),
+      },
+      {
+        key: 'approved_as_is',
+        header: 'Approved As-Is',
+        tooltip:
+          'Count of Lex drafts approved and sent by the Inventory Manager without any text modifications.',
+        defaultWidth: 140,
+        minWidth: 105,
+        align: 'right',
+        cellClassName: 'font-semibold tabular-nums text-[#1B6B43]',
+        renderCell: (p) => p.approved_as_is_count,
+      },
+      {
+        key: 'approved_edited',
+        header: 'Approved Edited',
+        tooltip:
+          'Count of Lex drafts where the Inventory Manager edited the subject or body before approving dispatch.',
+        defaultWidth: 150,
+        minWidth: 110,
+        align: 'right',
+        cellClassName: 'font-semibold tabular-nums text-[#945600]',
+        renderCell: (p) => p.approved_edited_count,
+      },
+      {
+        key: 'rejected',
+        header: 'Rejected',
+        tooltip: 'Count of Lex drafts rejected/discarded by the Inventory Manager.',
+        defaultWidth: 110,
+        minWidth: 85,
+        align: 'right',
+        cellClassName: 'font-semibold tabular-nums text-[#B82923]',
+        renderCell: (p) => p.rejected_count,
+      },
+      {
+        key: 'edit_free_rate',
+        header: 'Edit-Free %',
+        tooltip:
+          'Share of reviewed drafts approved without edits: Approved As-Is / (Approved As-Is + Approved Edited + Rejected).',
+        defaultWidth: 125,
+        minWidth: 95,
+        align: 'right',
+        cellClassName: 'font-bold tabular-nums text-[#1D1D1F]',
+        renderCell: (p) =>
+          p.edit_free_approval_rate !== null ? `${p.edit_free_approval_rate}%` : '—',
+      },
+      {
+        key: 'trust_distribution',
+        header: 'Trust Distribution',
+        tooltip:
+          'Visual proportion of review outcomes for this category: green = Approved As-Is, amber = Approved Edited, red = Rejected.',
+        defaultWidth: 220,
+        minWidth: 150,
+        cellClassName: 'align-middle',
+        renderCell: (p) => {
+          const total = p.total_decisions;
+          const asIsPct = total > 0 ? (p.approved_as_is_count / total) * 100 : 0;
+          const editPct = total > 0 ? (p.approved_edited_count / total) * 100 : 0;
+          const rejPct = total > 0 ? (p.rejected_count / total) * 100 : 0;
+          return total === 0 ? (
+            <div className="h-2 w-full rounded-full bg-black/[0.06]" />
+          ) : (
+            <div className="flex h-2 w-full overflow-hidden rounded-full bg-black/[0.06]">
+              {asIsPct > 0 && (
+                <div
+                  className="bg-[#1F7A4D]"
+                  style={{ width: `${asIsPct}%` }}
+                  title={`As-is: ${p.approved_as_is_count}`}
+                />
+              )}
+              {editPct > 0 && (
+                <div
+                  className="bg-[#D97706]"
+                  style={{ width: `${editPct}%` }}
+                  title={`Edited: ${p.approved_edited_count}`}
+                />
+              )}
+              {rejPct > 0 && (
+                <div
+                  className="bg-[#C9342D]"
+                  style={{ width: `${rejPct}%` }}
+                  title={`Rejected: ${p.rejected_count}`}
+                />
+              )}
+            </div>
+          );
+        },
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -331,98 +453,18 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
           )}
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-black/[0.06] text-xs">
-            <thead className="bg-[#FBFBFD] text-[#6E6E73] font-semibold">
-              <tr>
-                <th className="px-4 py-2.5 text-left">Category</th>
-                <th className="px-4 py-2.5 text-left">Policy Mode</th>
-                <th className="px-4 py-2.5 text-right">Approved As-Is</th>
-                <th className="px-4 py-2.5 text-right">Approved Edited</th>
-                <th className="px-4 py-2.5 text-right">Rejected</th>
-                <th className="px-4 py-2.5 text-right">Edit-Free %</th>
-                <th className="px-4 py-2.5 text-left w-44">Trust Distribution</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-black/[0.05] tabular-nums">
-              {policies.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-[#6E6E73]">
-                    No autonomy policy rows found.
-                  </td>
-                </tr>
-              ) : (
-                policies.map((p) => {
-                  const total = p.total_decisions;
-                  const asIsPct = total > 0 ? (p.approved_as_is_count / total) * 100 : 0;
-                  const editPct = total > 0 ? (p.approved_edited_count / total) * 100 : 0;
-                  const rejPct = total > 0 ? (p.rejected_count / total) * 100 : 0;
-                  return (
-                    <tr key={p.id} className="hover:bg-black/[0.02] transition-colors">
-                      <td className="px-4 py-2.5 font-semibold text-[#1D1D1F]">
-                        {p.action_category}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span
-                          className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${
-                            p.mode === 'AUTO_SEND'
-                              ? 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22'
-                              : 'bg-black/[0.04] text-[#6E6E73] border-black/[0.08]'
-                          }`}
-                        >
-                          {p.mode}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-[#1B6B43]">
-                        {p.approved_as_is_count}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-[#945600]">
-                        {p.approved_edited_count}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-[#B82923]">
-                        {p.rejected_count}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-bold text-[#1D1D1F]">
-                        {p.edit_free_approval_rate !== null
-                          ? `${p.edit_free_approval_rate}%`
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        {total === 0 ? (
-                          <div className="h-2 w-full rounded-full bg-black/[0.06]" />
-                        ) : (
-                          <div className="flex h-2 w-full overflow-hidden rounded-full bg-black/[0.06]">
-                            {asIsPct > 0 && (
-                              <div
-                                className="bg-[#1F7A4D]"
-                                style={{ width: `${asIsPct}%` }}
-                                title={`As-is: ${p.approved_as_is_count}`}
-                              />
-                            )}
-                            {editPct > 0 && (
-                              <div
-                                className="bg-[#D97706]"
-                                style={{ width: `${editPct}%` }}
-                                title={`Edited: ${p.approved_edited_count}`}
-                              />
-                            )}
-                            {rejPct > 0 && (
-                              <div
-                                className="bg-[#C9342D]"
-                                style={{ width: `${rejPct}%` }}
-                                title={`Rejected: ${p.rejected_count}`}
-                              />
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          embedded
+          storageKey="invplan_col_widths_ai_health"
+          ariaLabel="Autonomy Policies"
+          columns={policyColumns}
+          rows={policies}
+          rowKey={(p) => p.id}
+          loading={loading}
+          maxHeight="380px"
+          emptyMessage="No autonomy policy rows found."
+          rowClassName={() => 'hover:bg-black/[0.02]'}
+        />
       </section>
 
       {/* Section 2: 1-Click YAML Eval Runner & Scorecard */}
