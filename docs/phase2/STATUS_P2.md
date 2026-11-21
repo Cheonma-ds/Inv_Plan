@@ -1,6 +1,6 @@
 # STATUS_P2.md — Phase 2 Live Session Baton
 
-**Current Stage:** Slice P2-6 Complete (Ready for **Slice P2-7**)  
+**Current Stage:** Phase 2 Complete (Slices P2-1 through P2-7 Complete)  
 **Last Updated:** 2026-11-21  
 **Baseline Reference:** Phase 1 MVP Complete (Slices 1–5 in [`STATUS.md`](../../STATUS.md))  
 **Planning Docs:** [`PRD_P2.md`](PRD_P2.md) · [`DESIGN_P2.md`](DESIGN_P2.md) · [`SLICES_P2.md`](SLICES_P2.md)
@@ -15,7 +15,7 @@
 - [x] **Slice P2-4:** Backend Making-Team Stock Request Pipeline & Lex Analysis
 - [x] **Slice P2-5:** Frontend Mailroom (7 Personas), Remove `Withdraw` from Inventory & Stock-Request Alerts
 - [x] **Slice P2-6:** Backend PO Logistics Triage, 2-Day Deferred SLA, Mandatory Lex Action Alerts & Procurement Escalation
-- [ ] **Slice P2-7:** Frontend Horizontal Order Tracking Stepper, Logistics Card & `Escalate to Procurement` UI
+- [x] **Slice P2-7:** Frontend Horizontal Order Tracking Stepper, Logistics Card & `Escalate to Procurement` UI
 
 ---
 
@@ -120,14 +120,26 @@
   - `uv run pytest -v`: **81 passed, 3 skipped** offline; `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/`: **8 passed**; live `gemini-3.5-flash-lite` logistics evals: **6/6 PASS**.
   - `uv run ruff check backend tests`: **All checks passed!**
 
+### Slice P2-7 — Frontend Horizontal Order Tracking Stepper, Logistics Details & `Escalate to Procurement` UI
+- **API Types & Client (`frontend/src/api/types.ts`, `frontend/src/api/client.ts`):**
+  - Extended `POListItem` / `PODetail` with all Phase 2 logistics, stepper, and escalation fields (`acknowledged_at`, `promised_dispatch_date`, `actual_dispatch_date`, `carrier_name`, `tracking_number`, `dispatch_details_status`, `dispatch_details_due_at`, `missing_dispatch_fields`, `escalated_to_procurement_at`, `procurement_escalation_note`, `closed_at`).
+  - Added `EscalateProcurementResponse` and `api.escalatePoToProcurement(poId, reason)`.
+- **Order Tracking Stepper & Procurement Escalation Modal (`frontend/src/components/OrderTrackingStepper.tsx`, `frontend/src/components/ProcurementEscalationModal.tsx`):**
+  - Created `OrderTrackingStepper.tsx` rendering the 6-node horizontal stepper (`Created` → `PO Sent` → `Acknowledged` → `Dispatched` → `Delivered (GRN)` → `Closed`) with status-aware node indicators (`completed` green check, `active` calm blue pulse ring, `blocked` amber/coral warning, `pending` outline), distinct milestone dates, and smooth connector transitions honoring `theme.css` / `prefers-reduced-motion`.
+  - Created `ProcurementEscalationModal.tsx` showing PO#, Part SKU, Supplier, current Status, Follow-ups Sent, and an escalation reason input, calling `POST /api/pos/{po_id}/escalate-procurement` on submit.
+- **PO Tracker Integration (`frontend/src/pages/POTrackerPage.tsx`):**
+  - Added `Dispatch`, `Carrier`, and `Tracking` summary columns to the PO `<DataTable>` with Title Case headers and pure-hover portal tooltips (zero icons inside `<th>`), and included `carrier_name` / `tracking_number` in search filtering.
+  - Replaced the flat Lifecycle Timeline inside the PO detail drawer with `<OrderTrackingStepper />` and the **Shipment & Logistics Details** card (`Promised Dispatch`, `Actual Dispatch`, `Carrier`, `Tracking Number`, `Promised ETA`, `Revised ETA`, `Follow-ups Sent`, `Pre-ETA Check`, `dispatch_details_status` badges including `2-Day Waiting` / `Awaiting Dispatch Details` / `Dispatch Details Overdue` / `Dispatch Details Complete` with missing field names, and the Procurement escalation banner/note when escalated).
+  - Added the **Escalate to Procurement** button alongside **Switch to Backup Supplier** for non-terminal POs, refreshing PO list/detail and global alert/mailroom state with a confirmation toast upon escalation.
+- **Verification:**
+  - `cd frontend && npm run build` (`tsc -b && vite build`) passed with 0 errors.
+  - `uv run pytest` (**82 passed, 3 skipped** offline live-Gemini tests) and `uv run ruff check backend tests` (**All checks passed!**).
+  - Headless Chromium Playwright E2E suite (against isolated temp SQLite + built `frontend/dist` + deterministic mock Lex LLM) verified: Title Case zero-icon headers (`Dispatch`, `Carrier`, `Tracking`) + portal hover tooltips, `PO-1037` distinct stepper milestones & `BlueDart`/`BD-440192` logistics card, `PO-1001` all-completed closed stepper without non-terminal actions, `PO-1038` `DEFERRED_2D` (`2-Day Waiting`) → `+2d` simulated clock advance (`Dispatch Details Overdue`) → follow-up tracking update (`BlueDart`/`BD-8821`, `Dispatch Details Complete`, `Dispatched` step completed), **Escalate to Procurement** modal delivering email to `Procurement` Mailroom inbox + `HIGH` alert in `Actionable Alerts` + escalation banner in drawer, zero `Withdraw` buttons on `Inventory & Parts`, and zero browser console/page errors.
+
 ---
 
 ## Next Slice Options
-- **Frontend PO Tracker Stepper & Escalation Track (`Slice P2-7`, Final Phase 2 Slice):** Horizontal Order Tracking Stepper, Shipment & Logistics Details card, and `Escalate to Procurement` modal in `POTrackerPage.tsx`.
-  - **Read First:** `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md §5.1–§5.4 & §6`, `docs/phase2/DESIGN_P2.md §3.1`, `docs/phase2/SLICES_P2.md` (`Slice P2-7`), `frontend/src/api/types.ts`, `frontend/src/api/client.ts`, `frontend/src/pages/POTrackerPage.tsx`.
-  - **Leave Untouched:** `backend/`, `tests/`, `frontend/src/pages/InventoryPage.tsx`, `frontend/src/pages/MailroomPage.tsx`, `frontend/src/pages/AIHealthPage.tsx`.
-  - **Next-Session Handoff Prompt:**
-    > Implement Slice P2-7 (Frontend Horizontal Order Tracking Stepper, Logistics Details & `Escalate to Procurement` UI) for InvPlan. Read `AGENTS.md`, `docs/phase2/STATUS_P2.md`, `docs/phase2/PRD_P2.md` (§5.1–§5.4, §6), `docs/phase2/DESIGN_P2.md` (§3.1), `docs/phase2/SLICES_P2.md` (Slice P2-7), `frontend/src/api/types.ts`, `frontend/src/api/client.ts`, and `frontend/src/pages/POTrackerPage.tsx`. Leave `backend/`, `tests/`, `InventoryPage.tsx`, `MailroomPage.tsx`, and `AIHealthPage.tsx` untouched. Update `types.ts` and `client.ts` for the new PO logistics/stepper/escalation fields and `escalatePoToProcurement(poId, reason)`; create `frontend/src/components/OrderTrackingStepper.tsx` and `frontend/src/components/ProcurementEscalationModal.tsx`; and update `POTrackerPage.tsx` to replace the flat Lifecycle Timeline box with `<OrderTrackingStepper />`, a Shipment & Logistics Details card, and an `Escalate to Procurement` button + modal for non-terminal POs (plus optional Carrier/Tracking/Dispatch summary columns in the PO `<DataTable>`). Verify with `cd frontend && npm run build`, `uv run pytest`, `uv run ruff check backend tests`, and Playwright/headless browser verification covering `PRD_P2.md §6`; update `docs/phase2/STATUS_P2.md` and commit as `feat(slice-p2-7): frontend order tracking stepper and procurement escalation`.
+- **Phase 2 Complete:** All 7 slices (`P2-1` through `P2-7`) are implemented and verified against `PRD_P2.md §6`. Ready for any future Phase 3 work or live `RUN_LIVE_GEMINI=1` exploratory session.
 
 ---
 

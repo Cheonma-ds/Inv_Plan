@@ -6,6 +6,7 @@ import type {
   AutonomyPolicyItem,
   ClockResponse,
   ConsumeResponse,
+  EscalateProcurementResponse,
   EvalRunReport,
   EvalSuiteMetadata,
   MailroomSendResponse,
@@ -138,6 +139,10 @@ export const api = {
   switchPoSupplier: (poId: number, backupSupplierId?: number) =>
     jsonPost<SwitchSupplierResponse>(`/api/pos/${poId}/switch-supplier`, {
       backup_supplier_id: backupSupplierId ?? null,
+    }),
+  escalatePoToProcurement: (poId: number, reason = '') =>
+    jsonPost<EscalateProcurementResponse>(`/api/pos/${poId}/escalate-procurement`, {
+      reason,
     }),
 
   // Mailroom

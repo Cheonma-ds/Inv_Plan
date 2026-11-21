@@ -144,11 +144,34 @@ export interface POListItem {
   status: string;
   created_at: string;
   sent_at: string | null;
+  acknowledged_at: string | null;
+  promised_dispatch_date: string | null;
+  actual_dispatch_date: string | null;
+  carrier_name: string | null;
+  tracking_number: string | null;
+  dispatch_details_status:
+    | 'NONE'
+    | 'AWAITING_IMMEDIATE'
+    | 'DEFERRED_2D'
+    | 'COMPLETE'
+    | 'TIMED_OUT'
+    | string;
+  dispatch_details_due_at: string | null;
+  missing_dispatch_fields: string[];
+  escalated_to_procurement_at: string | null;
+  procurement_escalation_note: string;
+  closed_at: string | null;
   promised_eta: string | null;
   revised_eta: string | null;
   follow_up_count: number;
   pre_eta_checked: boolean;
   notes: string | null;
+}
+
+export interface EscalateProcurementResponse {
+  po: POListItem;
+  comm_id: number;
+  alert_id: number;
 }
 
 export interface GoodsReceiptItem {

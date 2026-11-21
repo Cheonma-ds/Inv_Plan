@@ -4,16 +4,25 @@ import {
   ArrowRightLeft,
   CheckCircle2,
   ClipboardCheck,
+  Clock,
   FileText,
   Mail,
   PackageCheck,
   RefreshCw,
   Search,
+  ShieldAlert,
+  Truck,
   X,
 } from 'lucide-react';
 import { api } from '../api/client';
-import type { PODetail, POListItem } from '../api/types';
+import type {
+  EscalateProcurementResponse,
+  PODetail,
+  POListItem,
+} from '../api/types';
 import { DataTable, type ColumnDef } from '../components/DataTable';
+import { OrderTrackingStepper } from '../components/OrderTrackingStepper';
+import { ProcurementEscalationModal } from '../components/ProcurementEscalationModal';
 import {
   formatInr,
   formatSimDate,
@@ -57,6 +66,7 @@ export function POTrackerPage({
   const [grnCondition, setGrnCondition] = useState('GOOD');
   const [noteInput, setNoteInput] = useState('');
   const [busyAction, setBusyAction] = useState(false);
+  const [showEscalationModal, setShowEscalationModal] = useState(false);
 
   const loadPos = useCallback(async () => {
     setLoading(true);
@@ -108,6 +118,7 @@ export function POTrackerPage({
   }, [focusPoId, onClearFocus]);
 
   useEffect(() => {
+    setShowEscalationModal(false);
     if (selectedPoId !== null) {
       void loadDetail(selectedPoId);
     } else {
@@ -116,7 +127,7 @@ export function POTrackerPage({
   }, [selectedPoId, loadDetail, refreshNonce]);
 
   useEffect(() => {
-    if (selectedPoId === null) return;
+    if (selectedPoId === null || showEscalationModal) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSelectedPoId(null);
@@ -124,7 +135,7 @@ export function POTrackerPage({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedPoId]);
+  }, [selectedPoId, showEscalationModal]);
 
   const statusOptions = useMemo(() => {
     const distinct = Array.from(new Set(pos.map((p) => p.status))).sort();
@@ -143,7 +154,9 @@ export function POTrackerPage({
         po.po_number.toLowerCase().includes(q) ||
         (po.part_sku ?? '').toLowerCase().includes(q) ||
         (po.part_name ?? '').toLowerCase().includes(q) ||
-        (po.supplier_name ?? '').toLowerCase().includes(q)
+        (po.supplier_name ?? '').toLowerCase().includes(q) ||
+        (po.carrier_name ?? '').toLowerCase().includes(q) ||
+        (po.tracking_number ?? '').toLowerCase().includes(q)
       );
     });
   }, [pos, statusFilter, search]);
@@ -222,6 +235,17 @@ export function POTrackerPage({
     } finally {
       setBusyAction(false);
     }
+  };
+
+  const handleEscalated = async (res: EscalateProcurementResponse) => {
+    setShowEscalationModal(false);
+    onNotify(
+      'success',
+      `Escalated ${res.po.po_number} to Procurement`,
+      `Internal escalation email delivered to Procurement inbox and alert #${res.alert_id} created.`,
+    );
+    onMutated();
+    await Promise.all([loadPos(), loadDetail(res.po.id)]);
   };
 
   const poColumns = useMemo<ColumnDef<POListItem>[]>(
@@ -329,6 +353,59 @@ export function POTrackerPage({
           </>
         ),
       },
+      {
+        key: 'dispatch',
+        header: 'Dispatch',
+        tooltip:
+          'Promised or actual shipment dispatch date from the supplier, plus missing dispatch details status (2-day waiting or overdue nudge).',
+        defaultWidth: 145,
+        minWidth: 120,
+        cellClassName: 'text-[#6E6E73] tabular-nums',
+        renderCell: (po) => (
+          <div className="space-y-0.5">
+            <div>
+              {po.actual_dispatch_date
+                ? `Shipped: ${formatSimDate(po.actual_dispatch_date)}`
+                : po.promised_dispatch_date
+                  ? `Prom: ${formatSimDate(po.promised_dispatch_date)}`
+                  : '—'}
+            </div>
+            {po.dispatch_details_status === 'DEFERRED_2D' && (
+              <span className="inline-block rounded-full border border-[#B46900]/25 bg-[#B46900]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#945600]">
+                2d Wait
+              </span>
+            )}
+            {po.dispatch_details_status === 'AWAITING_IMMEDIATE' && (
+              <span className="inline-block rounded-full border border-[#0066CC]/22 bg-[#0066CC]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#0058B3]">
+                Details Needed
+              </span>
+            )}
+            {po.dispatch_details_status === 'TIMED_OUT' && (
+              <span className="inline-block rounded-full border border-[#C9342D]/25 bg-[#C9342D]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#B82923]">
+                Details Overdue
+              </span>
+            )}
+          </div>
+        ),
+      },
+      {
+        key: 'carrier',
+        header: 'Carrier',
+        tooltip: 'Delivery courier or logistics service assigned by the supplier (e.g., BlueDart, Delhivery, DTDC).',
+        defaultWidth: 110,
+        minWidth: 88,
+        cellClassName: 'text-[#1D1D1F] font-medium',
+        renderCell: (po) => po.carrier_name ?? '—',
+      },
+      {
+        key: 'tracking',
+        header: 'Tracking',
+        tooltip: 'Shipment tracking number provided by the supplier for live transit verification.',
+        defaultWidth: 135,
+        minWidth: 105,
+        cellClassName: 'font-mono text-[#6E6E73] tabular-nums',
+        renderCell: (po) => po.tracking_number ?? '—',
+      },
     ],
     [],
   );
@@ -357,7 +434,7 @@ export function POTrackerPage({
           <Search className="pointer-events-none absolute left-3.5 top-2.5 h-4 w-4 text-[#86868B]" />
           <input
             type="text"
-            placeholder="Search PO#, SKU, or supplier..."
+            placeholder="Search PO#, SKU, supplier, or tracking..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-xl border border-black/[0.08] bg-white py-2 pl-9 pr-3 text-sm text-[#1D1D1F] placeholder:text-[#86868B] shadow-2xs focus:border-[#0066CC] focus:outline-none"
@@ -468,52 +545,133 @@ export function POTrackerPage({
                   </div>
                 </div>
 
-                {/* State Timeline */}
-                <section className="space-y-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B]">
-                    Lifecycle Timeline
-                  </h3>
-                  <div className="rounded-xl border border-black/[0.07] bg-[#FBFBFD] p-3.5 grid grid-cols-2 gap-3 text-xs tabular-nums">
-                    <div>
-                      <span className="text-[#6E6E73]">Created:</span>{' '}
-                      <span className="font-medium text-[#1D1D1F]">
-                        {formatSimDateTime(poDetail.created_at)}
+                {/* Horizontal Order Tracking Stepper & Shipment Logistics Details */}
+                <section className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#86868B]">
+                      Order Tracking
+                    </h3>
+                    {poDetail.dispatch_details_status === 'DEFERRED_2D' && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[#B46900]/25 bg-[#B46900]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#945600]">
+                        <Clock className="h-3 w-3" />
+                        2-Day Waiting (Due {formatSimDate(poDetail.dispatch_details_due_at)})
                       </span>
-                    </div>
-                    <div>
-                      <span className="text-[#6E6E73]">PO Sent:</span>{' '}
-                      <span className="font-medium text-[#1D1D1F]">
-                        {formatSimDateTime(poDetail.sent_at)}
+                    )}
+                    {poDetail.dispatch_details_status === 'AWAITING_IMMEDIATE' && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[#0066CC]/22 bg-[#0066CC]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#0058B3]">
+                        <Clock className="h-3 w-3" />
+                        Awaiting Dispatch Details
                       </span>
-                    </div>
-                    <div>
-                      <span className="text-[#6E6E73]">Promised ETA:</span>{' '}
-                      <span className="font-medium text-[#1D1D1F]">
-                        {formatSimDate(poDetail.promised_eta)}
+                    )}
+                    {poDetail.dispatch_details_status === 'TIMED_OUT' && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[#C9342D]/25 bg-[#C9342D]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#B82923]">
+                        <Clock className="h-3 w-3" />
+                        Dispatch Details Overdue
                       </span>
-                    </div>
-                    <div>
-                      <span className="text-[#6E6E73]">Revised ETA:</span>{' '}
-                      <span className="font-medium text-[#945600]">
-                        {formatSimDate(poDetail.revised_eta)}
+                    )}
+                    {poDetail.dispatch_details_status === 'COMPLETE' && (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[#1F7A4D]/22 bg-[#1F7A4D]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#1B6B43]">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Dispatch Details Complete
                       </span>
+                    )}
+                  </div>
+
+                  <OrderTrackingStepper po={poDetail} />
+
+                  {/* Shipment & Logistics Details Card */}
+                  <div
+                    data-testid="shipment-logistics-card"
+                    className="rounded-2xl border border-black/[0.08] bg-white p-4 space-y-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-[#1D1D1F] flex items-center gap-1.5">
+                        <Truck className="h-3.5 w-3.5 text-[#0066CC]" />
+                        Shipment &amp; Logistics Details
+                      </h4>
+                      {poDetail.missing_dispatch_fields.length > 0 && (
+                        <span className="text-[11px] text-[#945600] font-medium">
+                          Missing: {poDetail.missing_dispatch_fields.join(', ')}
+                        </span>
+                      )}
                     </div>
-                    <div>
-                      <span className="text-[#6E6E73]">Follow-ups Sent:</span>{' '}
-                      <span className="font-semibold text-[#1D1D1F]">
-                        {poDetail.follow_up_count}
-                      </span>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Promised Dispatch</div>
+                        <div className="mt-0.5 font-semibold text-[#1D1D1F]">
+                          {formatSimDate(poDetail.promised_dispatch_date)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Actual Dispatch</div>
+                        <div className="mt-0.5 font-semibold text-[#1D1D1F]">
+                          {formatSimDate(poDetail.actual_dispatch_date)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Carrier</div>
+                        <div className="mt-0.5 font-semibold text-[#1D1D1F]">
+                          {poDetail.carrier_name ?? '—'}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Tracking Number</div>
+                        <div className="mt-0.5 font-mono font-semibold text-[#1D1D1F] truncate" title={poDetail.tracking_number ?? undefined}>
+                          {poDetail.tracking_number ?? '—'}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Promised ETA</div>
+                        <div className="mt-0.5 font-medium text-[#1D1D1F]">
+                          {formatSimDate(poDetail.promised_eta)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Revised ETA</div>
+                        <div className="mt-0.5 font-medium text-[#945600]">
+                          {formatSimDate(poDetail.revised_eta)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Follow-ups Sent</div>
+                        <div className="mt-0.5 font-semibold text-[#1D1D1F]">
+                          {poDetail.follow_up_count}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2">
+                        <div className="text-[11px] text-[#86868B]">Pre-ETA Check</div>
+                        <div className="mt-0.5 font-semibold text-[#1D1D1F]">
+                          {poDetail.pre_eta_checked ? 'Done' : 'Pending'}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-[#6E6E73]">Pre-ETA Check:</span>{' '}
-                      <span className="font-semibold text-[#1D1D1F]">
-                        {poDetail.pre_eta_checked ? 'Done' : 'Pending'}
-                      </span>
-                    </div>
+
+                    {poDetail.escalated_to_procurement_at && (
+                      <div
+                        data-testid="procurement-escalation-banner"
+                        className="rounded-xl border border-[#C9342D]/25 bg-[#C9342D]/[0.05] px-3.5 py-2.5 text-xs space-y-1"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1.5 font-semibold text-[#B82923]">
+                            <ShieldAlert className="h-3.5 w-3.5" />
+                            Escalated to Procurement
+                          </span>
+                          <span className="text-[11px] text-[#6E6E73] tabular-nums">
+                            {formatSimDateTime(poDetail.escalated_to_procurement_at)}
+                          </span>
+                        </div>
+                        {poDetail.procurement_escalation_note && (
+                          <p className="text-[#1D1D1F]">
+                            {poDetail.procurement_escalation_note}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </section>
 
-                {/* Log GRN + Switch Backup */}
+                {/* Log GRN + Switch Backup + Escalate to Procurement */}
                 {!TERMINAL_STATUSES.has(poDetail.status) && (
                   <section className="rounded-2xl border border-black/[0.08] bg-white p-4 space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -522,15 +680,26 @@ export function POTrackerPage({
                         Warehouse Goods Receipt (GRN)
                       </h3>
 
-                      <button
-                        type="button"
-                        disabled={busyAction}
-                        onClick={() => void handleSwitchBackup()}
-                        className="apple-press inline-flex items-center gap-1.5 rounded-xl border border-[#B46900]/25 bg-[#B46900]/[0.08] px-3 py-1.5 text-xs font-semibold text-[#945600] hover:bg-[#B46900]/[0.14] disabled:opacity-45"
-                      >
-                        <ArrowRightLeft className="h-3.5 w-3.5" />
-                        Switch to Backup Supplier
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={busyAction}
+                          onClick={() => void handleSwitchBackup()}
+                          className="apple-press inline-flex items-center gap-1.5 rounded-xl border border-[#B46900]/25 bg-[#B46900]/[0.08] px-3 py-1.5 text-xs font-semibold text-[#945600] hover:bg-[#B46900]/[0.14] disabled:opacity-45"
+                        >
+                          <ArrowRightLeft className="h-3.5 w-3.5" />
+                          Switch to Backup Supplier
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busyAction}
+                          onClick={() => setShowEscalationModal(true)}
+                          className="apple-press inline-flex items-center gap-1.5 rounded-xl border border-[#C9342D]/25 bg-[#C9342D]/[0.08] px-3 py-1.5 text-xs font-semibold text-[#B82923] hover:bg-[#C9342D]/[0.14] disabled:opacity-45"
+                        >
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                          Escalate to Procurement
+                        </button>
+                      </div>
                     </div>
 
                     {!GRN_ALLOWED_STATUSES.has(poDetail.status) ? (
@@ -764,6 +933,14 @@ export function POTrackerPage({
           </div>,
           document.body,
         )}
+
+      {showEscalationModal && poDetail && (
+        <ProcurementEscalationModal
+          po={poDetail}
+          onClose={() => setShowEscalationModal(false)}
+          onEscalated={(res) => void handleEscalated(res)}
+        />
+      )}
     </div>
   );
 }
