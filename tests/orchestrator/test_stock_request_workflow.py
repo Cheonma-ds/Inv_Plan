@@ -114,15 +114,15 @@ def test_http_making_to_manager_without_lex_returns_400_and_with_lex_triages(
             confidence=0.95,
             requested_items=[
                 StockRequestItem(
-                    part_sku="SKU-001",
+                    part_sku="BRG-402",
                     part_name="Precision Ball Bearing 6205",
                     requested_qty=2,
                 )
             ],
             urgency_note="Spindle assembly line #1",
-            summary_for_manager="Making Team requested 2 units of SKU-001.",
+            summary_for_manager="Making Team requested 2 units of BRG-402.",
             suggested_action="Approve withdrawal and trigger replenishment PO.",
-            reasoning="Clear SKU-001 request for 2 units.",
+            reasoning="Clear BRG-402 request for 2 units.",
         )
     )
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -139,14 +139,14 @@ def test_http_making_to_manager_without_lex_returns_400_and_with_lex_triages(
             "from_persona": "making",
             "to_personas": "inventory_manager",
             "cc_personas": "",
-            "subject": "Need SKU-001",
-            "body": "Please issue 2 units of SKU-001.",
+            "subject": "Need BRG-402",
+            "body": "Please issue 2 units of BRG-402.",
         },
     )
     assert bad_resp.status_code == 400
     assert "lex" in bad_resp.json()["detail"].lower()
 
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     assert part.on_hand_stock == 4
 
@@ -157,8 +157,8 @@ def test_http_making_to_manager_without_lex_returns_400_and_with_lex_triages(
             "from_persona": "making",
             "to_personas": "inventory_manager",
             "cc_personas": "lex",
-            "subject": "Need SKU-001",
-            "body": "Please issue 2 units of SKU-001 for spindle assembly.",
+            "subject": "Need BRG-402",
+            "body": "Please issue 2 units of BRG-402 for spindle assembly.",
         },
     )
     assert ok_resp.status_code == 200
@@ -173,7 +173,7 @@ def test_http_making_to_manager_without_lex_returns_400_and_with_lex_triages(
 
 
 def test_scenario_s1_healthy_stock_approve_and_reject(seeded_session) -> None:
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-002"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
     assert part is not None
     part.on_hand_stock = 20
     part.rop = 5
@@ -185,9 +185,9 @@ def test_scenario_s1_healthy_stock_approve_and_reject(seeded_session) -> None:
             intent=StockRequestIntent.STOCK_REQUEST,
             confidence=0.97,
             requested_items=[
-                StockRequestItem(part_sku="SKU-002", part_name=part.name, requested_qty=3)
+                StockRequestItem(part_sku="VLV-204", part_name=part.name, requested_qty=3)
             ],
-            summary_for_manager="Making Team requested 3 units of SKU-002.",
+            summary_for_manager="Making Team requested 3 units of VLV-204.",
             suggested_action="Approve stock withdrawal.",
             reasoning="Clear SKU and quantity.",
         )
@@ -201,8 +201,8 @@ def test_scenario_s1_healthy_stock_approve_and_reject(seeded_session) -> None:
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Request SKU-002",
-            body="Please issue 3 units of SKU-002.",
+            subject="Request VLV-204",
+            body="Please issue 3 units of VLV-204.",
         ),
     )
     triage = res["triage"]
@@ -248,8 +248,8 @@ def test_scenario_s1_healthy_stock_approve_and_reject(seeded_session) -> None:
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Another SKU-002 request",
-            body="Please issue 3 units of SKU-002.",
+            subject="Another VLV-204 request",
+            body="Please issue 3 units of VLV-204.",
         ),
     )
     alert2_id = res2["triage"]["alert_ids"][0]
@@ -268,8 +268,8 @@ def test_scenario_s1_healthy_stock_approve_and_reject(seeded_session) -> None:
 
 
 def test_scenario_s2_sufficient_stock_triggers_po_only_after_approval(seeded_session) -> None:
-    # Hero part SKU-001: on_hand=4, rop=3, S=6 -> withdrawing 2 drops IP to 2 (<3) -> PO for 4
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    # Hero part BRG-402: on_hand=4, rop=3, S=6 -> withdrawing 2 drops IP to 2 (<3) -> PO for 4
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     assert part.on_hand_stock == 4
 
@@ -278,11 +278,11 @@ def test_scenario_s2_sufficient_stock_triggers_po_only_after_approval(seeded_ses
             intent=StockRequestIntent.STOCK_REQUEST,
             confidence=0.96,
             requested_items=[
-                StockRequestItem(part_sku="SKU-001", part_name=part.name, requested_qty=2)
+                StockRequestItem(part_sku="BRG-402", part_name=part.name, requested_qty=2)
             ],
-            summary_for_manager="Making Team requested 2 units of SKU-001.",
+            summary_for_manager="Making Team requested 2 units of BRG-402.",
             suggested_action="Approve withdrawal and trigger replenishment PO.",
-            reasoning="Clear SKU-001 request.",
+            reasoning="Clear BRG-402 request.",
         )
     )
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -294,8 +294,8 @@ def test_scenario_s2_sufficient_stock_triggers_po_only_after_approval(seeded_ses
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Issue 2 units SKU-001",
-            body="Need 2 units of SKU-001 for assembly.",
+            subject="Issue 2 units BRG-402",
+            body="Need 2 units of BRG-402 for assembly.",
         ),
     )
     alert_id = res["triage"]["alert_ids"][0]
@@ -335,7 +335,7 @@ def test_scenario_s2_sufficient_stock_triggers_po_only_after_approval(seeded_ses
 
 
 def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_session) -> None:
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     part.on_hand_stock = 2
     seeded_session.flush()
@@ -345,12 +345,12 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
             intent=StockRequestIntent.STOCK_REQUEST,
             confidence=0.95,
             requested_items=[
-                StockRequestItem(part_sku="SKU-001", part_name=part.name, requested_qty=10)
+                StockRequestItem(part_sku="BRG-402", part_name=part.name, requested_qty=10)
             ],
             urgency_note="Line 2 batch build",
-            summary_for_manager="Making Team requested 10 units of SKU-001 (only 2 on hand).",
+            summary_for_manager="Making Team requested 10 units of BRG-402 (only 2 on hand).",
             suggested_action="Ask Making Team for minimum required quantity.",
-            reasoning="Requested 10 units of SKU-001.",
+            reasoning="Requested 10 units of BRG-402.",
         )
     )
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -362,8 +362,8 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Need 10 units SKU-001",
-            body="Please issue 10 units of SKU-001 for Line 2.",
+            subject="Need 10 units BRG-402",
+            body="Please issue 10 units of BRG-402 for Line 2.",
         ),
     )
     thread_id = req_res["email"].thread_id
@@ -401,10 +401,10 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
         intent=StockRequestIntent.MINIMUM_QTY_CONFIRMATION,
         confidence=0.94,
         requested_items=[
-            StockRequestItem(part_sku="SKU-001", part_name=part.name, requested_qty=2)
+            StockRequestItem(part_sku="BRG-402", part_name=part.name, requested_qty=2)
         ],
-        summary_for_manager="Making Team confirmed minimum 2 units of SKU-001 needed.",
-        suggested_action="Approve and issue 2 units of SKU-001.",
+        summary_for_manager="Making Team confirmed minimum 2 units of BRG-402 needed.",
+        suggested_action="Approve and issue 2 units of BRG-402.",
         reasoning="Making confirmed min 2 units on thread.",
     )
     reply_res = engine.send_mailroom_email(
@@ -414,7 +414,7 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
             thread_id=thread_id,
-            subject="Re: [SKU-001] Clarification",
+            subject="Re: [BRG-402] Clarification",
             body="Minimum 2 units needed to keep the line running.",
         ),
     )
@@ -449,9 +449,9 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
         intent=StockRequestIntent.STOCK_REQUEST,
         confidence=0.95,
         requested_items=[
-            StockRequestItem(part_sku="SKU-001", part_name=part.name, requested_qty=7)
+            StockRequestItem(part_sku="BRG-402", part_name=part.name, requested_qty=7)
         ],
-        summary_for_manager="Making Team requested 7 units of SKU-001 (3 on hand).",
+        summary_for_manager="Making Team requested 7 units of BRG-402 (3 on hand).",
         suggested_action="Issue 3 available units or ask for minimum qty.",
         reasoning="Clear shortage request.",
     )
@@ -461,8 +461,8 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Need 7 units SKU-001",
-            body="Please send 7 units of SKU-001.",
+            subject="Need 7 units BRG-402",
+            body="Please send 7 units of BRG-402.",
         ),
     )
     partial_alert_id = partial_req["triage"]["alert_ids"][0]
@@ -480,7 +480,7 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
 
 
 def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded_session) -> None:
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-002"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
     assert part is not None
     part.on_hand_stock = 2
     part.rop = 1
@@ -518,11 +518,11 @@ def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded
             intent=StockRequestIntent.STOCK_REQUEST,
             confidence=0.96,
             requested_items=[
-                StockRequestItem(part_sku="SKU-002", part_name=part.name, requested_qty=2)
+                StockRequestItem(part_sku="VLV-204", part_name=part.name, requested_qty=2)
             ],
-            summary_for_manager="Making Team requested final 2 units of SKU-002.",
+            summary_for_manager="Making Team requested final 2 units of VLV-204.",
             suggested_action="Approve withdrawal.",
-            reasoning="Clear SKU-002 request.",
+            reasoning="Clear VLV-204 request.",
         )
     )
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -532,8 +532,8 @@ def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Need 2 units SKU-002",
-            body="Please issue 2 units of SKU-002.",
+            subject="Need 2 units VLV-204",
+            body="Please issue 2 units of VLV-204.",
         ),
     )
     alert_id = res["triage"]["alert_ids"][0]
@@ -549,7 +549,7 @@ def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded
 
 
 def test_low_confidence_and_unknown_sku_guardrails_zero_mutation(seeded_session) -> None:
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     initial_on_hand = part.on_hand_stock
     sr_count_before = len(seeded_session.scalars(select(StockRequest)).all())
@@ -561,7 +561,7 @@ def test_low_confidence_and_unknown_sku_guardrails_zero_mutation(seeded_session)
             intent=StockRequestIntent.STOCK_REQUEST,
             confidence=0.62,
             requested_items=[
-                StockRequestItem(part_sku="SKU-001", part_name=part.name, requested_qty=2)
+                StockRequestItem(part_sku="BRG-402", part_name=part.name, requested_qty=2)
             ],
             summary_for_manager="Uncertain request for bearings.",
             suggested_action="Clarify SKU and quantity manually.",

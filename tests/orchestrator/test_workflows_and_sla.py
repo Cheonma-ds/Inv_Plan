@@ -102,7 +102,7 @@ def test_withdraw_to_draft_approve_dispatch_and_autonomy_tracking(seeded_session
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
     # Hero part SKU-001: on_hand=4, rop=3, S=6 -> withdraw 2 => on_hand=2 < 3 => order 4
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     res = engine.withdraw_stock(seeded_session, part_id=part.id, qty=2, note="Spindle repair")
     po = res["created_po"]
@@ -230,7 +230,7 @@ def test_inbound_ack_price_change_post_ack_delay_and_ambiguous_guardrail(seeded_
     # 3. Scenario 2: Price change on a SENT_AWAITING_ACK PO -> EXCEPTION_REVIEW + update_po CTA
     po_exc = engine.withdraw_stock(
         seeded_session,
-        part_id=seeded_session.scalar(select(Part.id).where(Part.sku == "SKU-001")),
+        part_id=seeded_session.scalar(select(Part.id).where(Part.sku == "BRG-402")),
         qty=2,
     )["created_po"]
     assert po_exc is not None
@@ -487,7 +487,7 @@ def test_fastapi_routes_http_end_to_end(seeded_session):
     # 5. Withdraw stock via API -> creates draft -> approve edited via API
     parts_resp = client.get("/api/parts")
     assert parts_resp.status_code == 200
-    hero_part = next(p for p in parts_resp.json() if p["sku"] == "SKU-001")
+    hero_part = next(p for p in parts_resp.json() if p["sku"] == "BRG-402")
 
     consume_resp = client.post(
         f"/api/parts/{hero_part['part_id']}/consume",
@@ -674,17 +674,18 @@ def test_scenario_2_price_variance_stockout_payload_default_update_po_and_cancel
         select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
     )
     assert po_await is not None
-    orig_price = po_await.unit_price  # 780.0
-    orig_qty = po_await.qty  # 15
+    orig_price = po_await.unit_price
+    orig_qty = po_await.qty
+    proposed_price = round(orig_price * 1.2, 2)  # +20.0%
 
     llm.next_triage = EmailTriageResult(
         matched_po_number=po_await.po_number,
         intent=EmailIntent.PRICE_CHANGE,
         confidence=0.96,
-        proposed_unit_price=936.0,  # +156.0 (+20.0%)
+        proposed_unit_price=proposed_price,
         proposed_qty=12,
         proposed_eta_date="2026-12-25",
-        summary_for_manager="Supplier hiked price to ₹936 and cut qty to 12.",
+        summary_for_manager=f"Supplier hiked price to ₹{proposed_price:.0f} and cut qty to 12.",
         suggested_action="Review exception.",
         reasoning="Price and qty revision.",
     )
@@ -694,15 +695,18 @@ def test_scenario_2_price_variance_stockout_payload_default_update_po_and_cancel
             from_persona=PersonaKey.SUP3,
             to_personas=[PersonaKey.LEX],
             subject=f"Update on {po_await.po_number}",
-            body="Price is now Rs 936 for 12 pcs, ETA Dec 25.",
+            body=f"Price is now Rs {proposed_price:.0f} for 12 pcs, ETA Dec 25.",
         ),
     )
     alert = seeded_session.get(ActionItem, res["triage"]["alert_id"])
     assert alert is not None and alert.type == "PO_EXCEPTION"
     cta = alert.cta_payload_json
-    assert cta["price_variance_inr"] == round(936.0 - orig_price, 2)
+    assert cta["price_variance_inr"] == round(proposed_price - orig_price, 2)
     assert cta["price_variance_pct"] == 20.0
-    assert cta["total_cost_impact_inr"] == round((936.0 - orig_price) * 12, 2)
+    assert cta["price_only_impact_inr"] == round((proposed_price - orig_price) * 12, 2)
+    assert cta["total_cost_impact_inr"] == round(
+        (proposed_price * 12) - (orig_price * orig_qty), 2
+    )
     assert cta["projected_stockout_date"] is not None
     assert cta["projected_days_of_supply"] > 0
     action_names = [a["action"] for a in alert.suggested_actions_json]
@@ -712,7 +716,7 @@ def test_scenario_2_price_variance_stockout_payload_default_update_po_and_cancel
     # Execute update_po CTA with EMPTY params -> must default from cta_payload_json!
     upd_res = engine.execute_alert_cta(seeded_session, alert.id, action="update_po", params={})
     seeded_session.refresh(po_await)
-    assert po_await.unit_price == 936.0
+    assert po_await.unit_price == proposed_price
     assert po_await.qty == 12
     assert po_await.revised_eta is not None
     assert po_await.status == POStatus.PENDING_DISPATCH_APPROVAL.value
@@ -746,7 +750,7 @@ def test_scenario_2_price_variance_stockout_payload_default_update_po_and_cancel
     assert cancel_res["po_status"] == POStatus.CANCELLED.value
     assert po_await.status == POStatus.CANCELLED.value
     assert alert2.status == ActionItemStatus.RESOLVED.value
-    assert orig_qty == 15
+    assert orig_qty == 10
 
 
 def test_quarantine_sla_timer_anchors_on_max_of_invoice_and_grn_timestamps(seeded_session):

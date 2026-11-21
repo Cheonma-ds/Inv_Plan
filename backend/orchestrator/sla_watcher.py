@@ -91,6 +91,16 @@ def _backup_supplier_payload(session: Session, part_id: int, current_supplier_id
     }
 
 
+def _term_currency(session: Session, part_id: int, supplier_id: int) -> str:
+    term = session.scalar(
+        select(PartSupplierTerm).where(
+            PartSupplierTerm.part_id == part_id,
+            PartSupplierTerm.supplier_id == supplier_id,
+        )
+    )
+    return term.currency if term is not None and term.currency else "INR"
+
+
 def _draft_lex_email_for_po(
     session: Session,
     lex_agent: LexAgent,
@@ -102,6 +112,7 @@ def _draft_lex_email_for_po(
     context_facts: dict,
 ):
     sim_now = clock.now(session)
+    currency = _term_currency(session, part.id, supplier.id)
     draft_result = lex_agent.draft_email(
         session,
         EmailDraftInput(
@@ -111,11 +122,12 @@ def _draft_lex_email_for_po(
             part_name=part.name,
             qty=po.qty,
             unit_price=po.unit_price,
+            currency=currency,
             recipient_persona=supplier.persona_key,
             recipient_name=supplier.name,
             current_date=sim_now.date().isoformat(),
             supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
-            context_facts=context_facts,
+            context_facts={"currency": currency, **context_facts},
         ),
         linked_po_id=po.id,
     )

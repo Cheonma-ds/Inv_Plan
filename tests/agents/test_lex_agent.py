@@ -123,6 +123,24 @@ def test_triage_unmatched_po_forces_ambiguous_guardrail(seeded_session):
     assert "does not match an open PO" in res.reasoning
 
 
+def test_triage_price_change_without_price_or_qty_forces_ambiguous(seeded_session):
+    canned = EmailTriageResult(
+        matched_po_number="PO-1037",
+        intent=EmailIntent.PRICE_CHANGE,
+        confidence=0.88,
+        proposed_unit_price=None,
+        proposed_qty=None,
+        summary_for_manager="Supplier says they might revise pricing.",
+        suggested_action="Ask for firm quote.",
+        reasoning="Checking rate revision with plant.",
+    )
+    lex = LexAgent(llm_client=StubLLMClient(canned))
+    res = lex.triage_email(seeded_session, _sample_triage_input())
+
+    assert res.intent == EmailIntent.AMBIGUOUS
+    assert "without any proposed numeric price or quantity" in res.reasoning
+
+
 def test_draft_email_enforces_manager_cc_and_po_subject(seeded_session):
     canned = EmailDraftResult(
         to_personas=["sup2"],

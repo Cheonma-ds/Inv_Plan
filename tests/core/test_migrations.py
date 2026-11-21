@@ -67,6 +67,8 @@ def test_init_db_migrates_legacy_sqlite_purchase_orders_idempotently(tmp_path: P
         "closed_at",
     }
     assert expected_new.issubset(cols)
+    comm_cols = {col["name"] for col in inspector.get_columns("po_communications")}
+    assert "attachment_paths_json" in comm_cols
     assert "stock_requests" in set(inspector.get_table_names())
 
     # Second pass must be a clean no-op

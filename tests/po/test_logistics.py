@@ -14,7 +14,7 @@ from backend.po import (
 
 
 def test_state_machine_sets_acknowledged_at_and_closed_at(seeded_session):
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     sup = seeded_session.scalar(select(Supplier).where(Supplier.persona_key == "sup1"))
     assert part is not None and sup is not None
 
@@ -46,7 +46,7 @@ def test_state_machine_sets_acknowledged_at_and_closed_at(seeded_session):
 
 
 def test_apply_po_logistics_updates_missing_deferred_and_complete(seeded_session):
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     sup = seeded_session.scalar(select(Supplier).where(Supplier.persona_key == "sup1"))
     assert part is not None and sup is not None
 

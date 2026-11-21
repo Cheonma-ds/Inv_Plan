@@ -38,5 +38,7 @@ This repository builds **InvPlan**, a Demand-to-Delivery & Inventory Planning pr
 ## 5. End-of-Session Handoff Checklist
 Before finishing a slice:
 1. Run `uv run pytest`, `uv run ruff check backend tests`, and (if frontend changed) `cd frontend && npm run build`.
-2. Update `STATUS.md` with completed work, exact files added, test results, any caveats/decisions, and the exact next slice to start.
-3. Commit your slice cleanly to `git` with a concise message (e.g., `feat(slice-1): deterministic inventory, PO core, and seed data`).
+2. **Review slice logic against the plan (`DESIGN.md` / `PRD.md`):** If the implementation deviated from the original plan, analyze why. If the original logic proved invalid or flawed during implementation, document the discrepancy and its proof (e.g., failing edge case, architecture constraint, or test result) in the relevant design/status docs (`DESIGN.md`, `STATUS.md`).
+3. Update `STATUS.md` with completed work, exact files added, test results, any caveats/decisions, and the exact next slice to start.
+4. **Write a focused next-session handoff prompt:** Prepare a self-contained prompt for the next coding agent covering only the next independent slice/step—specifying which doc sections and files to read, which files/folders to leave untouched, and the acceptance criteria—so the next session stays scoped without bloating context or needing mid-session summarization.
+5. Commit your slice cleanly to `git` with a concise message (e.g., `feat(slice-1): deterministic inventory, PO core, and seed data`).

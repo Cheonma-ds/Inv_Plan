@@ -1,7 +1,7 @@
 # STATUS.md — Live Session Baton
 
-**Current Stage:** Slices 1–5 Complete (MVP Feature-Complete)  
-**Last Updated:** 2026-11-20
+**Current Stage:** Slices 1–5 + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) Complete & Verified  
+**Last Updated:** 2026-11-21
 
 ## Completed
 - **PRD (`PRD.md` v1.0) & Design (`DESIGN.md` v1.0):** Approved baselines.
@@ -92,7 +92,13 @@
     - Live `uvicorn :8000` + `vite :5173` E2E verification: Vite served `AIHealthPage.tsx` & `App.tsx`, `POST /api/evals/lex/run` (`offline`) scored `16/16 (100.0%)` and logged 16 traces to `/api/observability/traces`, draft approve-as-is / edit-and-approve / reject updated `OVERDUE_CHASE` trust counters (`0/0/0 → 1/1/1`) in `/api/observability/autonomy`, and `ENABLE_PHOENIX=true` cleanly reported `mode="fallback_sqlite"` without `--extra phoenix`.
 
 ## Current Status & Optional Next Steps
-- All 5 planned MVP slices (`DESIGN.md §10`) are complete and verified.
+- **PRD Fixes & Gap Closure (`docs/PRD_FIXES.md` `F-1.1`–`F-4.3`):** Implemented and verified on 2026-11-21 (`docs/test-scenarios/results-fixes-retest.md`):
+  - **Workstream 1 (`F-1.1`–`F-1.4`):** Damaged GRN physical quality quarantine gate (`DAMAGED_GOODS_HOLD` + Manager release/claim CTAs), encrypted/unreadable PDF resilience (HTTP `200` + `INVOICE_EXTRACTION_REVIEW`), mandatory `procurement` + `inventory_manager` CC on `EXPEDITE_REQUEST` drafts, and explicit `INR` currency grounding in `EmailDraftInput` / `DRAFT_SYSTEM_PROMPT`.
+  - **Workstream 2 (`F-2.1`–`F-2.3`):** Foreign-currency triage detection (`proposed_currency`) + `CURRENCY_MISMATCH` guardrail blocking blind `update_po`, post-acknowledgment `ACKNOWLEDGED`/`DELAYED_CRITICAL → EXCEPTION_REVIEW` reversal flow with `REVISED_PO` draft generation, multi-PO supplier email splitting (`additional_po_updates`), and consolidated multi-PO PDF escalation surfacing `referenced_po_numbers`.
+  - **Workstream 3 (`F-3.1`–`F-3.3`):** Multi-attachment Mailroom upload/storage/UI (`attachment_paths_json` + idempotent migration in `backend/core/migrations.py`, keeping single `attachment_path` compatibility), Packing List cross-check & paired Invoice + Credit Note `INVOICE_WITH_CREDIT_NOTE_REVIEW` (`approve_net_settlement`), multimodal non-invoice PDF triage (`triage_email` `pdf_bytes`), `.csv` BOM attachment extraction for Making requests, `.jpg`/`.jpeg`/`.png` damage photo attachments, and strict `400` validation on `.xlsx`/`.zip`/0-byte files.
+  - **Workstream 4 (`F-4.1`–`F-4.3`):** Optional clarification drafts on `AMBIGUOUS_EMAIL` / `AMBIGUOUS_STOCK_REQUEST`, true `total_cost_impact_inr` alongside `price_only_impact_inr` on combined price+qty exceptions, date-only ETA normalization aligned to `09:00:00Z`, and deterministic guardrail escalating unquantified `PRICE_CHANGE` (`proposed_unit_price=None, proposed_qty=None`) to `AMBIGUOUS`.
+  - **Verification Gates:** `uv run ruff check backend tests` (`All checks passed!`), `uv run pytest -q` (`92 passed, 3 skipped`), `cd frontend && npm run build` (`✓ built in 1.53s`), `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/` (`9 passed`), `POST /api/evals/lex/run` (`29/30`, `96.7%`), and `16/16` live `gemini-3.5-flash-lite` scenario re-verification pass rate.
+- All 5 planned MVP slices (`DESIGN.md §10`), Phase 2 (`docs/phase2/STATUS_P2.md`), and `PRD_FIXES.md` (`F-1.1`–`F-4.3`) are complete and verified.
 - Optional future work (deferred post-MVP):
   - Install `uv sync --extra phoenix` and run `uv run phoenix serve` with `ENABLE_PHOENIX=true` to verify live OTel span export to `http://localhost:6006`.
   - Run `POST /api/evals/lex/run` with `{"mode": "live"}` in a networked environment with `$GEMINI_API_KEY` set to benchmark live `gemini-3.5-flash-lite` pass rates on `backend/evals/lex.yaml`.

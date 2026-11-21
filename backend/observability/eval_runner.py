@@ -209,6 +209,30 @@ def _evaluate_rule(
             message=msg,
         )
 
+    if rule_name == "contains_all":
+        items = list(expected) if isinstance(expected, list) else [expected]
+        if isinstance(actual, list):
+            missing = [item for item in items if item not in actual]
+        elif isinstance(actual, str):
+            low = actual.lower()
+            missing = [item for item in items if str(item).lower() not in low]
+        else:
+            missing = items
+        ok = len(missing) == 0
+        msg = (
+            f"{field_name} contains all {items!r}"
+            if ok
+            else f"{field_name}: missing {missing!r} in {actual!r}"
+        )
+        return EvalAssertionResult(
+            field=field_name,
+            rule="contains_all",
+            expected=items,
+            actual=actual,
+            passed=ok,
+            message=msg,
+        )
+
     if rule_name == "not_contains":
         if isinstance(actual, list):
             ok = expected not in actual

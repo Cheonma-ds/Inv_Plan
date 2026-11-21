@@ -1,3 +1,6 @@
+import csv
+import io
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -192,12 +195,108 @@ def _format_open_pos_snippet(open_pos: list[dict[str, Any]]) -> str:
     return "Active POs: " + "; ".join(parts) + "."
 
 
+def _read_csv_bom_text(email: StoredEmail) -> str | None:
+    """Safely read and format bounded .csv BOM attachment rows for Making triage."""
+    paths = list(email.attachment_paths or [])
+    if email.attachment_path and email.attachment_path not in paths:
+        paths.insert(0, email.attachment_path)
+    csv_paths = [p for p in paths if p.lower().endswith(".csv")]
+    if not csv_paths:
+        return None
+
+    sections: list[str] = []
+    for raw_path in csv_paths[:3]:
+        file_path = Path(raw_path)
+        if not file_path.is_file():
+            continue
+        raw_bytes = file_path.read_bytes()[:32768]
+        try:
+            text = raw_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw_bytes.decode("latin-1", errors="replace")
+        reader = csv.reader(io.StringIO(text))
+        rows = []
+        for idx, row in enumerate(reader):
+            if idx >= 51:  # header + max 50 BOM rows
+                break
+            if any(cell.strip() for cell in row):
+                rows.append(", ".join(cell.strip() for cell in row))
+        if rows:
+            sections.append(f"CSV BOM ({file_path.name}):\n" + "\n".join(rows))
+    return "\n\n".join(sections) if sections else None
+
+
 def _create_ambiguous_stock_alert(
     session: Session,
+    engine: "WorkflowEngine",
     email: StoredEmail,
     triage_result: StockRequestTriageResult,
-) -> ActionItem:
-    return create_action_item(
+    *,
+    sim_now_iso: str,
+) -> tuple[ActionItem, StoredEmail | None]:
+    draft: StoredEmail | None = None
+    try:
+        draft_res = engine.lex.draft_email(
+            session,
+            EmailDraftInput(
+                category=EmailCategory.STOCK_REQUEST_CLARIFICATION,
+                po_number="",
+                part_sku="GENERAL",
+                part_name="Requested Part(s)",
+                qty=0,
+                unit_price=0.0,
+                currency="INR",
+                recipient_persona=PersonaKey.MAKING.value,
+                recipient_name="Making Team",
+                current_date=sim_now_iso,
+                thread_subject=email.subject,
+                required_cc_personas=[PersonaKey.INVENTORY_MANAGER.value],
+                context_facts={
+                    "purpose": "clarification",
+                    "ambiguity_summary": triage_result.summary_for_manager,
+                    "reasoning": triage_result.reasoning,
+                    "requested_action": (
+                        "Please confirm the exact part SKU(s) and firm integer quantities needed "
+                        "so we can review and process your stock request."
+                    ),
+                },
+            ),
+        )
+        to_personas = [PersonaKey(p) for p in draft_res.to_personas]
+        if PersonaKey.MAKING not in to_personas:
+            to_personas = [PersonaKey.MAKING]
+        cc_personas = [PersonaKey(p) for p in draft_res.cc_personas]
+        if PersonaKey.INVENTORY_MANAGER not in cc_personas:
+            cc_personas.append(PersonaKey.INVENTORY_MANAGER)
+        draft = save_draft(
+            session,
+            OutboundMessage(
+                from_persona=PersonaKey.LEX,
+                to_personas=to_personas,
+                cc_personas=cc_personas,
+                subject=draft_res.subject,
+                body=draft_res.body,
+                po_id=None,
+                thread_id=email.thread_id,
+                category=EmailCategory.STOCK_REQUEST_CLARIFICATION,
+            ),
+        )
+    except AssertionError:
+        raise
+    except Exception:
+        draft = None
+
+    suggested = []
+    if draft is not None:
+        suggested.extend(
+            [
+                {"action": "approve_draft", "label": "Approve & Send Clarification"},
+                {"action": "reject_draft", "label": "Reject Draft"},
+            ]
+        )
+    suggested.append({"action": "add_note", "label": "Log Review Note"})
+
+    alert = create_action_item(
         session,
         type="AMBIGUOUS_STOCK_REQUEST",
         severity=AlertSeverity.HIGH,
@@ -206,9 +305,15 @@ def _create_ambiguous_stock_alert(
             f"{triage_result.summary_for_manager} "
             f"(Confidence: {triage_result.confidence:.0%}. No stock or PO state was changed.)"
         ),
-        suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
-        cta_payload={"comm_id": email.id, "reasoning": triage_result.reasoning},
+        draft_comm_id=draft.id if draft else None,
+        suggested_actions=suggested,
+        cta_payload={
+            "comm_id": email.id,
+            "reasoning": triage_result.reasoning,
+            "draft_comm_id": draft.id if draft else None,
+        },
     )
+    return alert, draft
 
 
 def _create_shortage_draft(
@@ -317,6 +422,7 @@ def process_inbound_making_email(
                 )
             )
 
+    csv_bom_text = _read_csv_bom_text(email)
     triage_result = engine.lex.triage_stock_request(
         session,
         StockRequestTriageInput(
@@ -324,6 +430,7 @@ def process_inbound_making_email(
             sender_name="Making Team",
             subject=email.subject,
             body=email.body,
+            attachment_csv_text=csv_bom_text,
             current_date=sim_now.date().isoformat(),
             catalog_parts=catalog_parts,
             thread_history=thread_history,
@@ -358,12 +465,18 @@ def process_inbound_making_email(
         }
 
     if triage_result.intent == StockRequestIntent.AMBIGUOUS:
-        alert = _create_ambiguous_stock_alert(session, email, triage_result)
+        alert, amb_draft = _create_ambiguous_stock_alert(
+            session,
+            engine,
+            email,
+            triage_result,
+            sim_now_iso=sim_now.date().isoformat(),
+        )
         return {
             "triage": triage_result,
             "stock_request_ids": [],
             "alert_ids": [alert.id],
-            "draft_comm_ids": [],
+            "draft_comm_ids": [amb_draft.id] if amb_draft else [],
         }
 
     # Resolve & aggregate items by part_id to prevent duplicate StockRequests for the same SKU
@@ -371,12 +484,18 @@ def process_inbound_making_email(
     for item in triage_result.requested_items:
         part = _resolve_part_from_item(item, parts_by_sku, all_parts)
         if part is None or item.requested_qty is None or item.requested_qty <= 0:
-            alert = _create_ambiguous_stock_alert(session, email, triage_result)
+            alert, amb_draft = _create_ambiguous_stock_alert(
+                session,
+                engine,
+                email,
+                triage_result,
+                sim_now_iso=sim_now.date().isoformat(),
+            )
             return {
                 "triage": triage_result,
                 "stock_request_ids": [],
                 "alert_ids": [alert.id],
-                "draft_comm_ids": [],
+                "draft_comm_ids": [amb_draft.id] if amb_draft else [],
             }
         prev_qty = aggregated[part.id][1] if part.id in aggregated else 0
         aggregated[part.id] = (part, prev_qty + item.requested_qty)

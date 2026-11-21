@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,6 +16,7 @@ from backend.core.models import (
     Supplier,
 )
 from backend.orchestrator.deps import get_workflow_engine
+from backend.orchestrator.logistics_workflow import parse_iso_date_utc
 from backend.orchestrator.workflows import WorkflowEngine
 from backend.po import (
     InvalidPOTransitionError,
@@ -164,6 +165,9 @@ def get_po_detail(po_id: int, session: Session = Depends(get_session)) -> dict:
                 "subject": c.subject,
                 "body": c.body,
                 "attachment_path": c.attachment_path,
+                "attachment_paths": list(
+                    c.attachment_paths_json or ([c.attachment_path] if c.attachment_path else [])
+                ),
                 "ai_classification": c.ai_classification,
                 "ai_confidence": c.ai_confidence,
                 "timestamp": clock.ensure_utc(c.timestamp).isoformat(),
@@ -216,13 +220,9 @@ def patch_po(
 ) -> dict:
     revised_eta = None
     if payload.revised_eta:
-        try:
-            dt = datetime.fromisoformat(payload.revised_eta.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            revised_eta = dt.astimezone(timezone.utc)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid revised_eta ISO date") from exc
+        revised_eta = parse_iso_date_utc(payload.revised_eta)
+        if revised_eta is None:
+            raise HTTPException(status_code=400, detail="Invalid revised_eta ISO date")
     try:
         po = update_po_terms(
             session,

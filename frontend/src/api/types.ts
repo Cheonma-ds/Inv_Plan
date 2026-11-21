@@ -207,6 +207,7 @@ export interface POCommunicationItem {
   subject: string;
   body: string;
   attachment_path: string | null;
+  attachment_paths?: string[];
   ai_classification: string | null;
   ai_confidence: number | null;
   timestamp: string;
@@ -254,6 +255,7 @@ export interface StoredEmail {
   subject: string;
   body: string;
   attachment_path: string | null;
+  attachment_paths?: string[];
   ai_classification: string | null;
   ai_extracted_json: Record<string, unknown> | null;
   ai_confidence: number | null;

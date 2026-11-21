@@ -544,14 +544,14 @@ cases:
         days_of_supply: 9
     mock_response:
       to_personas: [sup2]
-      cc_personas: [inventory_manager]
+      cc_personas: [inventory_manager, procurement]
       subject: "[PO-1038] Urgent Expedite Request — Stockout Projected Before 2026-12-05"
       body: "Dear Bharat Fasteners & Seals, our inventory for SKU-004 is projected to stock out by 2026-11-29, ahead of the revised 2026-12-05 ETA on PO-1038. Please confirm whether partial dispatch or an earlier shipment date is possible."
     expect:
       to_personas:
         contains: sup2
       cc_personas:
-        contains: inventory_manager
+        contains_all: [inventory_manager, procurement]
       subject:
         contains: PO-1038
       body:
@@ -915,3 +915,175 @@ cases:
         not_null: true
         min_len: 30
         contains_any_ci: ["tracking", "dispatch"]
+
+  # ---------------------------------------------------------------------------
+  # 6. PRD Fixes Eval Cases (F-1.4, F-2.1, F-2.3, F-3.1, F-3.3)
+  # ---------------------------------------------------------------------------
+  - id: triage_foreign_currency_usd_quote
+    name: "Supplier quote in USD extracts proposed_currency=USD without converting to INR"
+    task: email_triage
+    tags: [triage, currency, gap_01]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Quotation & Confirmation for PO-1038"
+      body: "Hi, please see our quote for PO-1038 at 18.50 per unit (imported batch, USD billing). Delivery in 14 days."
+      has_pdf_attachment: true
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1038
+          part_sku: RLY-901
+          part_name: PLC Safety Relay Module 24V
+          qty: 10
+          unit_price: 100.0
+          currency: INR
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      matched_po_number: PO-1038
+      intent: PRICE_CHANGE
+      confidence: 0.95
+      proposed_unit_price: 18.5
+      proposed_currency: USD
+      proposed_eta_date: "2026-12-04"
+      summary_for_manager: "Deccan Electro-Spares quoted 18.50 USD/unit for PO-1038 (vs PO currency INR)."
+      suggested_action: "Flag USD currency mismatch and request INR re-quote."
+      reasoning: "Supplier quoted $18.50 in USD while PO-1038 is contracted in INR."
+    expect:
+      intent: PRICE_CHANGE
+      matched_po_number: PO-1038
+      proposed_unit_price: 18.5
+      proposed_currency: USD
+      min_confidence: 0.85
+
+  - id: triage_multi_po_delay_splitting
+    name: "Single supplier email reporting delays on two explicit POs splits updates cleanly"
+    task: email_triage
+    tags: [triage, multi_po, gap_05]
+    input:
+      sender_persona: sup2
+      sender_name: Bharat Industrial Fasteners
+      subject: "Delay update for PO-1041 and PO-1039"
+      body: "Apologies, due to furnace maintenance both PO-1041 and PO-1039 are delayed until 2026-12-05."
+      has_pdf_attachment: false
+      current_date: "2026-11-20"
+      open_pos:
+        - po_number: PO-1041
+          part_sku: VLV-204
+          part_name: High-Pressure Solenoid Valve
+          qty: 5
+          unit_price: 1500.0
+          currency: INR
+          status: ACKNOWLEDGED
+          quoted_lead_time_days: 10
+          promised_eta: "2026-11-25"
+        - po_number: PO-1039
+          part_sku: BLT-301
+          part_name: M10 Hex Bolt
+          qty: 50
+          unit_price: 100.0
+          currency: INR
+          status: ACKNOWLEDGED
+          quoted_lead_time_days: 12
+          promised_eta: "2026-11-28"
+    mock_response:
+      matched_po_number: PO-1041
+      intent: POST_ACK_DELAY
+      confidence: 0.94
+      proposed_eta_date: "2026-12-05"
+      delay_reason: "Furnace maintenance"
+      summary_for_manager: "Bharat Industrial Fasteners delayed PO-1041 (and PO-1039) to 2026-12-05 due to furnace maintenance."
+      suggested_action: "Evaluate stockout impact separately for PO-1041 and PO-1039."
+      reasoning: "Email explicitly cites both PO-1041 and PO-1039."
+      additional_po_updates:
+        - matched_po_number: PO-1039
+          intent: POST_ACK_DELAY
+          confidence: 0.94
+          proposed_eta_date: "2026-12-05"
+          delay_reason: "Furnace maintenance"
+          summary_for_manager: "PO-1039 delayed to 2026-12-05 due to furnace maintenance."
+          suggested_action: "Evaluate buffer for PO-1039."
+    expect:
+      intent: POST_ACK_DELAY
+      matched_po_number: PO-1041
+      additional_po_updates.0.matched_po_number: PO-1039
+      additional_po_updates.0.intent: POST_ACK_DELAY
+      min_confidence: 0.85
+
+  - id: draft_po_dispatch_inr_currency_compliance
+    name: "PO dispatch draft expresses amounts in INR/₹ and never USD/$"
+    task: email_draft
+    tags: [draft, compliance, currency]
+    input:
+      category: PO_DISPATCH
+      po_number: "PO-1041"
+      part_sku: "SNS-802"
+      part_name: "Inductive Proximity Sensor"
+      qty: 9
+      unit_price: 600.0
+      currency: "INR"
+      recipient_persona: sup3
+      recipient_name: "Deccan Electro-Spares"
+      current_date: "2026-11-20"
+      context_facts:
+        currency: "INR"
+        order_qty: 9
+        unit_price: 600.0
+        total_value: 5400.0
+    mock_response:
+      to_personas: [sup3]
+      cc_personas: [inventory_manager]
+      subject: "[PO-1041] New Purchase Order — SNS-802 (9 units)"
+      body: "Dear Deccan Electro-Spares, please confirm PO-1041 for 9 units of SNS-802 at ₹600.00/unit (Total INR 5,400.00) and share your promised dispatch date."
+    expect:
+      to_personas:
+        contains: sup3
+      cc_personas:
+        contains: inventory_manager
+      body:
+        not_contains_any_ci: ["USD", "$"]
+        contains_any_ci: ["INR", "₹", "Rs"]
+
+  - id: stock_request_csv_bom_multi_sku
+    name: "Making Team CSV BOM attachment extracts all SKUs and quantities"
+    task: stock_request_triage
+    tags: [stock_request, csv_bom]
+    input:
+      sender_persona: making
+      sender_name: Making Team
+      subject: "Line 3 Maintenance BOM"
+      body: "Please issue all parts listed in the attached BOM CSV."
+      attachment_csv_text: |
+        CSV BOM (making_bom_line3.csv):
+        sku, part_name, qty_needed, urgency
+        BRG-402, Deep Groove Bearing, 4, HIGH
+        GSK-512, Viton Gasket, 6, STANDARD
+      current_date: "2026-11-20"
+      catalog_parts:
+        - part_sku: BRG-402
+          part_name: Deep Groove Bearing
+          criticality: CRITICAL
+        - part_sku: GSK-512
+          part_name: Viton Gasket
+          criticality: STANDARD
+    mock_response:
+      intent: STOCK_REQUEST
+      confidence: 0.96
+      requested_items:
+        - part_sku: BRG-402
+          part_name: Deep Groove Bearing
+          requested_qty: 4
+        - part_sku: GSK-512
+          part_name: Viton Gasket
+          requested_qty: 6
+      urgency_note: "Line 3 Maintenance BOM"
+      summary_for_manager: "Making Team requested 4 units of BRG-402 and 6 units of GSK-512 from attached BOM CSV."
+      suggested_action: "Review stock availability for both SKUs."
+      reasoning: "Parsed 2 SKU rows from attachment_csv_text."
+    expect:
+      intent: STOCK_REQUEST
+      requested_items.0.part_sku: BRG-402
+      requested_items.0.requested_qty: 4
+      requested_items.1.part_sku: GSK-512
+      requested_items.1.requested_qty: 6
+      min_confidence: 0.85

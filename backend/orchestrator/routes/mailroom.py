@@ -14,7 +14,7 @@ from backend.mailroom import (
     list_drafts,
     list_inbox,
     list_sent,
-    save_pdf_attachment,
+    save_mailroom_attachment,
 )
 from backend.orchestrator.deps import get_workflow_engine
 from backend.orchestrator.workflows import WorkflowEngine
@@ -78,6 +78,7 @@ async def send_email_endpoint(
     thread_id: str | None = Form(default=None),
     category: str = Form(default=EmailCategory.GENERAL.value),
     attachment: UploadFile | None = File(default=None),
+    attachments: list[UploadFile] = File(default_factory=list),
     session: Session = Depends(get_session),
     engine: WorkflowEngine = Depends(get_workflow_engine),
 ) -> dict:
@@ -105,11 +106,23 @@ async def send_email_endpoint(
             detail="Making Team emails to Inventory Manager must include 'lex' in To or CC.",
         )
 
-    attachment_path: str | None = None
+    upload_files: list[UploadFile] = []
     if attachment is not None and attachment.filename:
-        raw_bytes = await attachment.read()
+        upload_files.append(attachment)
+    for extra in attachments:
+        if extra is not None and extra.filename:
+            upload_files.append(extra)
+
+    saved_paths: list[str] = []
+    for up in upload_files:
+        raw_bytes = await up.read()
         try:
-            attachment_path = save_pdf_attachment(attachment.filename, raw_bytes)
+            saved = save_mailroom_attachment(
+                up.filename or "",
+                raw_bytes,
+                sender_persona=sender.value,
+            )
+            saved_paths.append(saved)
         except InvalidAttachmentError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -122,7 +135,8 @@ async def send_email_endpoint(
         po_id=po_id,
         thread_id=thread_id or None,
         category=email_cat,
-        attachment_path=attachment_path,
+        attachment_path=saved_paths[0] if saved_paths else None,
+        attachment_paths=saved_paths,
     )
 
     try:

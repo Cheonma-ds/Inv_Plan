@@ -139,17 +139,26 @@ def cancel_po(
     return transition_po(session, po, POStatus.CANCELLED, note=cancel_note)
 
 
+def is_grn_damaged(condition: str | None) -> bool:
+    """Treat any GRN condition other than GOOD/OK as a physical quality hold."""
+    cleaned = (condition or "GOOD").strip().upper()
+    return cleaned not in ("GOOD", "OK")
+
+
 def _apply_match_outcome(
     session: Session,
     po: PurchaseOrder,
     grn: GoodsReceipt,
     invoice: Invoice,
     result: ThreeWayMatchResult,
+    *,
+    grn_already_quarantined: bool = False,
 ) -> None:
     invoice.match_status = result.match_status.value
     invoice.discrepancy_summary = result.discrepancy_summary
+    damaged = is_grn_damaged(grn.condition)
 
-    if result.matched:
+    if result.matched and not damaged:
         was_quarantined = po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
         grn.status = GRNStatus.RELEASED.value
         result.stock_action = (
@@ -165,12 +174,47 @@ def _apply_match_outcome(
             POStatus.CLOSED,
             note=f"3-way match passed (Invoice {invoice.invoice_number} v{invoice.version}).",
         )
+    elif result.matched and damaged:
+        # Invoice numbers are clean, but physical goods failed quality inspection -> keep held!
+        result.damaged_hold = True
+        grn.status = GRNStatus.HELD_QUARANTINE.value
+        invoice.discrepancy_summary = (
+            f"Invoice matches PO, but GRN #{grn.id} is marked '{grn.condition}' — "
+            "units remain quarantined until Manager inspection/disposition."
+        )
+        result.discrepancy_summary = invoice.discrepancy_summary
+        if po.status == POStatus.RECEIVED_PENDING_INVOICE.value:
+            result.stock_action = "NONE" if grn_already_quarantined else "HOLD_QUARANTINE"
+            result.stock_qty = 0 if grn_already_quarantined else grn.received_qty
+            result.stock_note = (
+                f"Quality hold on {po.po_number}: GRN condition={grn.condition}"
+            )
+            transition_po(
+                session,
+                po,
+                POStatus.QUARANTINED_INVOICE_MISMATCH,
+                note=(
+                    f"Invoice {invoice.invoice_number} v{invoice.version} matched numerically, "
+                    f"but GRN #{grn.id} is '{grn.condition}'; held in quality quarantine."
+                ),
+            )
+        else:
+            result.stock_action = "NONE"
+            result.stock_qty = 0
+            append_po_note(
+                session,
+                po,
+                f"Invoice {invoice.invoice_number} v{invoice.version} matched numerically, "
+                f"but PO remains quarantined due to GRN condition '{grn.condition}'.",
+            )
     else:
+        if damaged:
+            result.damaged_hold = True
         grn.status = GRNStatus.HELD_QUARANTINE.value
         if po.status == POStatus.RECEIVED_PENDING_INVOICE.value:
-            # Emit HOLD_QUARANTINE once on the first mismatch; do not double-count.
-            result.stock_action = "HOLD_QUARANTINE"
-            result.stock_qty = grn.received_qty
+            # Emit HOLD_QUARANTINE once on the first mismatch unless already quarantined by GRN.
+            result.stock_action = "NONE" if grn_already_quarantined else "HOLD_QUARANTINE"
+            result.stock_qty = 0 if grn_already_quarantined else grn.received_qty
             result.stock_note = (
                 f"Quarantined {po.po_number} due to invoice {invoice.invoice_number} mismatch"
             )
@@ -317,8 +361,133 @@ def submit_invoice_and_match(
             invoice_line_subtotal=extracted_total,
         )
     )
-    _apply_match_outcome(session, po, latest_grn, invoice, result)
+    _apply_match_outcome(
+        session,
+        po,
+        latest_grn,
+        invoice,
+        result,
+        grn_already_quarantined=is_grn_damaged(latest_grn.condition),
+    )
     return invoice, result
+
+
+def apply_damaged_goods_disposition(
+    session: Session,
+    *,
+    po_id: int,
+    good_qty: int,
+    note: str = "",
+) -> dict[str, int | str]:
+    """Update GRN/PO state after Manager inspects a DAMAGED GRN in quarantine."""
+    po = _get_po_or_raise(session, po_id)
+    grn = session.scalar(
+        select(GoodsReceipt)
+        .where(
+            GoodsReceipt.po_id == po.id,
+            GoodsReceipt.status == GRNStatus.HELD_QUARANTINE.value,
+        )
+        .order_by(GoodsReceipt.id.desc())
+        .limit(1)
+    )
+    if grn is None:
+        raise ValueError(f"No held GRN found for PO {po.po_number}")
+    if good_qty < 0 or good_qty > grn.received_qty:
+        raise ValueError(
+            f"good_qty ({good_qty}) must be between 0 and held GRN qty ({grn.received_qty})"
+        )
+
+    held_qty = grn.received_qty
+    damaged_qty = held_qty - good_qty
+    if good_qty > 0:
+        grn.status = GRNStatus.RELEASED.value
+        grn.received_qty = good_qty
+        grn.condition = (
+            "INSPECTED_GOOD"
+            if damaged_qty == 0
+            else f"PARTIAL_GOOD ({good_qty}/{held_qty})"
+        )
+    else:
+        grn.condition = f"SCRAPPED_DAMAGED ({held_qty})"
+
+    latest_inv = session.scalar(
+        select(Invoice)
+        .where(Invoice.po_id == po.id)
+        .order_by(Invoice.version.desc(), Invoice.id.desc())
+        .limit(1)
+    )
+    if (
+        good_qty == held_qty
+        and latest_inv is not None
+        and latest_inv.match_status == InvoiceMatchStatus.MATCHED.value
+        and po.status in (
+            POStatus.RECEIVED_PENDING_INVOICE.value,
+            POStatus.QUARANTINED_INVOICE_MISMATCH.value,
+        )
+    ):
+        transition_po(
+            session,
+            po,
+            POStatus.CLOSED,
+            note=note
+            or f"Manager cleared {good_qty}/{held_qty} units from damaged quarantine; PO closed.",
+        )
+    else:
+        append_po_note(
+            session,
+            po,
+            note
+            or (
+                f"Damaged GRN disposition: released {good_qty} usable units, "
+                f"rejected/cleared {damaged_qty} damaged units."
+            ),
+        )
+    session.flush()
+    return {
+        "po_id": po.id,
+        "po_number": po.po_number,
+        "po_status": po.status,
+        "held_qty": held_qty,
+        "good_qty": good_qty,
+        "damaged_qty": damaged_qty,
+    }
+
+
+def record_net_settlement_invoice(
+    session: Session,
+    *,
+    po_id: int,
+    invoice_number: str,
+    credit_note_number: str,
+    invoice_subtotal: float,
+    credit_note_amount: float,
+    net_amount: float,
+    extracted_qty: int,
+    pdf_path: str = "",
+    comm_id: int | None = None,
+) -> tuple[Invoice, ThreeWayMatchResult | None]:
+    """Record a Manager-approved Invoice + Credit Note net settlement and evaluate 3-way match."""
+    effective_unit_price = (
+        round(net_amount / extracted_qty, 2) if extracted_qty > 0 else round(net_amount, 2)
+    )
+    invoice, match_result = submit_invoice_and_match(
+        session,
+        po_id=po_id,
+        invoice_number=f"{invoice_number} + {credit_note_number}",
+        extracted_qty=extracted_qty,
+        extracted_unit_price=effective_unit_price,
+        extracted_total=round(net_amount, 2),
+        pdf_path=pdf_path,
+        comm_id=comm_id,
+    )
+    if match_result is not None and match_result.matched and not match_result.damaged_hold:
+        invoice.discrepancy_summary = (
+            f"Net settlement approved: Invoice {invoice_number} (₹{invoice_subtotal:,.2f}) "
+            f"+ Credit Note {credit_note_number} (-₹{abs(credit_note_amount):,.2f}) "
+            f"= ₹{net_amount:,.2f}."
+        )
+        session.flush()
+    return invoice, match_result
 
 
 def switch_po_to_backup_supplier(

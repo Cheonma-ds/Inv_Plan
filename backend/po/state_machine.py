@@ -34,10 +34,12 @@ ALLOWED_TRANSITIONS: dict[POStatus, set[POStatus]] = {
     POStatus.ACKNOWLEDGED: {
         POStatus.DELAYED_CRITICAL,
         POStatus.ACKNOWLEDGED,
+        POStatus.EXCEPTION_REVIEW,
         POStatus.OVERDUE,
         POStatus.RECEIVED_PENDING_INVOICE,
     },
     POStatus.DELAYED_CRITICAL: {
+        POStatus.EXCEPTION_REVIEW,
         POStatus.OVERDUE,
         POStatus.RECEIVED_PENDING_INVOICE,
         POStatus.CANCELLED,

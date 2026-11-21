@@ -1,0 +1,161 @@
+{
+  "traces": [],
+  "autonomy": [
+    {
+      "id": 2,
+      "agent_name": "lex",
+      "action_category": "ACK_REMINDER",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 11,
+      "agent_name": "lex",
+      "action_category": "DISPATCH_DETAILS_NUDGE",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 10,
+      "agent_name": "lex",
+      "action_category": "DISPATCH_DETAILS_REQUEST",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 6,
+      "agent_name": "lex",
+      "action_category": "EXPEDITE_REQUEST",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 13,
+      "agent_name": "lex",
+      "action_category": "GENERAL",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 5,
+      "agent_name": "lex",
+      "action_category": "INVOICE_DISCREPANCY",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 4,
+      "agent_name": "lex",
+      "action_category": "OVERDUE_CHASE",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 1,
+      "agent_name": "lex",
+      "action_category": "PO_DISPATCH",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 3,
+      "agent_name": "lex",
+      "action_category": "PRE_ETA_CHECKIN",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 12,
+      "agent_name": "lex",
+      "action_category": "PROCUREMENT_ESCALATION",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 7,
+      "agent_name": "lex",
+      "action_category": "REVISED_PO",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 8,
+      "agent_name": "lex",
+      "action_category": "STOCK_REQUEST_CLARIFICATION",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 9,
+      "agent_name": "lex",
+      "action_category": "STOCK_REQUEST_RESPONSE",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    }
+  ]
+}

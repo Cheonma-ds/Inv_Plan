@@ -923,7 +923,11 @@ export function POTrackerPage({
                           <p className="whitespace-pre-wrap text-[#6E6E73]">{c.body}</p>
                           <div className="text-[11px] text-[#86868B] tabular-nums">
                             {formatSimDateTime(c.timestamp)}
-                            {c.attachment_path ? ` · Attachment: ${c.attachment_path}` : ''}
+                            {c.attachment_paths && c.attachment_paths.length > 0
+                              ? ` · Attachments: ${c.attachment_paths.map((p) => p.split('/').pop() || p).join(', ')}`
+                              : c.attachment_path
+                                ? ` · Attachment: ${c.attachment_path}`
+                                : ''}
                           </div>
                         </div>
                       ))}

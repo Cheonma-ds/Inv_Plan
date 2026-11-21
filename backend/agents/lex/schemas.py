@@ -24,6 +24,7 @@ class OpenPOContext(BaseModel):
     part_name: str
     qty: int
     unit_price: float
+    currency: str = "INR"
     status: str
     quoted_lead_time_days: int
     promised_eta: str | None = None
@@ -48,10 +49,31 @@ class EmailTriageInput(BaseModel):
     subject: str
     body: str
     has_pdf_attachment: bool = False
+    has_image_attachment: bool = False
+    attachment_filenames: list[str] = Field(default_factory=list)
     current_date: str
     open_pos: list[OpenPOContext] = Field(default_factory=list)
     thread_history: list[ThreadMessageContext] = Field(default_factory=list)
     supplier_memory_notes: list[str] = Field(default_factory=list)
+
+
+class AdditionalPOUpdate(BaseModel):
+    matched_po_number: str
+    intent: EmailIntent
+    confidence: float = Field(ge=0.0, le=1.0)
+    proposed_unit_price: float | None = None
+    proposed_currency: str | None = None
+    proposed_qty: int | None = None
+    proposed_eta_date: str | None = None
+    promised_dispatch_date: str | None = None
+    actual_dispatch_date: str | None = None
+    carrier_name: str | None = None
+    tracking_number: str | None = None
+    details_promised_later: bool = False
+    details_promised_by_date: str | None = None
+    delay_reason: str | None = None
+    summary_for_manager: str = ""
+    suggested_action: str = ""
 
 
 class EmailTriageResult(BaseModel):
@@ -59,6 +81,7 @@ class EmailTriageResult(BaseModel):
     intent: EmailIntent
     confidence: float = Field(ge=0.0, le=1.0)
     proposed_unit_price: float | None = None
+    proposed_currency: str | None = None
     proposed_qty: int | None = None
     proposed_eta_date: str | None = None
     promised_dispatch_date: str | None = None
@@ -72,6 +95,7 @@ class EmailTriageResult(BaseModel):
     suggested_action: str
     new_memory_note: str | None = None
     reasoning: str
+    additional_po_updates: list[AdditionalPOUpdate] = Field(default_factory=list)
 
 
 class InvoiceLineItem(BaseModel):
@@ -95,9 +119,18 @@ class InvoiceLineItem(BaseModel):
         return self.part_sku
 
 
+class PDFDocumentType(StrEnum):
+    INVOICE = "INVOICE"
+    CREDIT_NOTE = "CREDIT_NOTE"
+    PACKING_LIST = "PACKING_LIST"
+    OTHER = "OTHER"
+
+
 class InvoiceExtractionResult(BaseModel):
+    document_type: PDFDocumentType = PDFDocumentType.INVOICE
     invoice_number: str
     po_number: str | None = None
+    referenced_po_numbers: list[str] = Field(default_factory=list)
     supplier_name: str | None = None
     invoice_date: str | None = None
     currency: str = "INR"
@@ -136,11 +169,13 @@ class EmailDraftInput(BaseModel):
     part_name: str
     qty: int
     unit_price: float = 0.0
+    currency: str = "INR"
     recipient_persona: str
     recipient_name: str
     current_date: str
     thread_subject: str | None = None
     supplier_memory_notes: list[str] = Field(default_factory=list)
+    required_cc_personas: list[str] = Field(default_factory=list)
     context_facts: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -182,6 +217,7 @@ class StockRequestTriageInput(BaseModel):
     sender_name: str = "Making Team"
     subject: str
     body: str
+    attachment_csv_text: str | None = None
     current_date: str
     catalog_parts: list[StockPartContext] = Field(default_factory=list)
     thread_history: list[ThreadMessageContext] = Field(default_factory=list)

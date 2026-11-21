@@ -25,21 +25,21 @@ def _should_run_live_gemini() -> bool:
 )
 def test_live_gemini_making_shortage_min_qty_and_po_trigger_end_to_end(seeded_session) -> None:
     """Live Gemini end-to-end smoke test for Making stock request -> shortage -> min-qty -> PO."""
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     assert part.on_hand_stock == 4
 
     lex = LexAgent(llm_client=GeminiLLMClient(model_name=settings.gemini_model))
     engine = WorkflowEngine(lex_agent=lex)
 
-    # 1. Making requests 10 units of SKU-001 (only 4 on hand) -> S3 shortage + clarification draft
+    # 1. Making requests 10 units of BRG-402 (only 4 on hand) -> S3 shortage + clarification draft
     req_res = engine.send_mailroom_email(
         seeded_session,
         OutboundMessage(
             from_persona=PersonaKey.MAKING,
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
-            subject="Urgent: Need 10 units of SKU-001",
+            subject="Urgent: Need 10 units of BRG-402",
             body=(
                 f"Hi Inventory team, please issue 10 units of {part.sku} "
                 f"({part.name}) for Spindle Assembly Line 2 today."
@@ -74,7 +74,7 @@ def test_live_gemini_making_shortage_min_qty_and_po_trigger_end_to_end(seeded_se
             to_personas=[PersonaKey.INVENTORY_MANAGER],
             cc_personas=[PersonaKey.LEX],
             thread_id=req_res["email"].thread_id,
-            subject="Re: [SKU-001] Minimum Quantity Needed",
+            subject="Re: [BRG-402] Minimum Quantity Needed",
             body="We can manage with minimum 2 units right now until the next shipment arrives.",
         ),
     )
@@ -111,7 +111,7 @@ def test_live_gemini_making_shortage_min_qty_and_po_trigger_end_to_end(seeded_se
     reason="Set RUN_LIVE_GEMINI=1 (with GEMINI_API_KEY) to run live Gemini stock request tests",
 )
 def test_live_gemini_vague_stock_request_escalates_ambiguous(seeded_session) -> None:
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
     initial_stock = part.on_hand_stock
     sr_before = len(seeded_session.scalars(select(StockRequest)).all())

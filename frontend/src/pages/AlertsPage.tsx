@@ -104,6 +104,7 @@ export function AlertsPage({
   const [busyAlertId, setBusyAlertId] = useState<number | null>(null);
   const [draftEdits, setDraftEdits] = useState<Record<number, DraftEdits>>({});
   const [noteInputs, setNoteInputs] = useState<Record<number, string>>({});
+  const [goodQtyInputs, setGoodQtyInputs] = useState<Record<number, string>>({});
 
   const loadAlerts = useCallback(async () => {
     setLoading(true);
@@ -170,6 +171,20 @@ export function AlertsPage({
         params.note =
           (noteInputs[item.id] ?? '').trim() ||
           `Reviewed alert #${item.id} (${label}) via Action Center.`;
+      } else if (action === 'release_damaged_goods') {
+        const rawGood = (goodQtyInputs[item.id] ?? '').trim();
+        if (rawGood !== '') {
+          const parsed = Number.parseInt(rawGood, 10);
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            onNotify('error', 'Invalid usable qty', 'Enter a non-negative integer.');
+            setBusyAlertId(null);
+            return;
+          }
+          params.good_qty = parsed;
+        }
+        if ((noteInputs[item.id] ?? '').trim()) {
+          params.note = noteInputs[item.id].trim();
+        }
       }
 
       const res = await api.executeAlertCta(item.id, action, params);
@@ -289,14 +304,21 @@ export function AlertsPage({
               (edit.subject.trim() !== draft.subject.trim() ||
                 edit.body.trim() !== draft.body.trim());
             const hasAddNoteCta = item.suggested_actions.some((a) => a.action === 'add_note');
+            const hasReleaseDamagedCta = item.suggested_actions.some(
+              (a) => a.action === 'release_damaged_goods',
+            );
 
             const daysOfSupply = asNumber(payload.projected_days_of_supply);
             const stockoutDate = asString(payload.projected_stockout_date);
             const daysToNewEta = asNumber(payload.days_to_new_eta);
             const priceVarInr = asNumber(payload.price_variance_inr);
             const priceVarPct = asNumber(payload.price_variance_pct);
+            const priceOnlyImpact = asNumber(payload.price_only_impact_inr);
             const totalCostImpact = asNumber(payload.total_cost_impact_inr);
             const proposedPrice = asNumber(payload.proposed_unit_price);
+            const proposedCurrency = asString(payload.proposed_currency);
+            const poCurrency = asString(payload.po_currency) ?? 'INR';
+            const currencyMismatch = payload.currency_mismatch === true;
             const proposedQty = asNumber(payload.proposed_qty);
             const proposedEta = asString(payload.proposed_eta_date);
             const backupName = asString(payload.backup_supplier_name);
@@ -306,6 +328,11 @@ export function AlertsPage({
               asNumber(payload.backup_effective_lt);
             const recRop = asNumber(payload.rop);
             const recS = asNumber(payload.replenishment_point);
+            const heldQty = asNumber(payload.held_qty);
+            const invoiceAmount = asNumber(payload.invoice_amount);
+            const creditNoteAmount = asNumber(payload.credit_note_amount);
+            const netAmount = asNumber(payload.net_amount);
+            const packingListQty = asNumber(payload.packing_list_qty);
 
             // Making-team stock request metrics
             const stockRequestId = asNumber(payload.stock_request_id);
@@ -347,6 +374,9 @@ export function AlertsPage({
               proposedQty !== null ||
               proposedEta !== null ||
               backupName !== null ||
+              heldQty !== null ||
+              netAmount !== null ||
+              packingListQty !== null ||
               (!isStockRequestAlert && recRop !== null);
 
             return (
@@ -573,11 +603,15 @@ export function AlertsPage({
                     )}
                     {proposedPrice !== null && (
                       <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                        <span className="text-[#6E6E73]">Proposed Price:</span>{' '}
+                        <span className="text-[#6E6E73]">
+                          {currencyMismatch ? 'Foreign Quote:' : 'Proposed Price:'}
+                        </span>{' '}
                         <span className="font-semibold text-[#1D1D1F]">
-                          {formatInr(proposedPrice)}
+                          {currencyMismatch && proposedCurrency
+                            ? `${proposedPrice.toFixed(2)} ${proposedCurrency} (vs PO ${poCurrency})`
+                            : formatInr(proposedPrice)}
                         </span>
-                        {priceVarInr !== null && (
+                        {!currencyMismatch && priceVarInr !== null && (
                           <span className="ml-1 font-medium text-[#945600]">
                             ({priceVarInr >= 0 ? '+' : ''}
                             {formatInr(priceVarInr)}
@@ -586,12 +620,46 @@ export function AlertsPage({
                         )}
                       </div>
                     )}
-                    {totalCostImpact !== null && (
+                    {!currencyMismatch &&
+                      priceOnlyImpact !== null &&
+                      totalCostImpact !== null &&
+                      Math.abs(priceOnlyImpact - totalCostImpact) > 0.01 && (
+                        <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                          <span className="text-[#6E6E73]">Price-Only Impact:</span>{' '}
+                          <span className="font-semibold text-[#945600]">
+                            {priceOnlyImpact >= 0 ? '+' : ''}
+                            {formatInr(priceOnlyImpact)}
+                          </span>
+                        </div>
+                      )}
+                    {!currencyMismatch && totalCostImpact !== null && (
                       <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                        <span className="text-[#6E6E73]">Total Cost Impact:</span>{' '}
+                        <span className="text-[#6E6E73]">Total Spend Impact:</span>{' '}
                         <span className="font-semibold text-[#B82923]">
+                          {totalCostImpact >= 0 ? '+' : ''}
                           {formatInr(totalCostImpact)}
                         </span>
+                      </div>
+                    )}
+                    {heldQty !== null && (
+                      <div className="rounded-lg bg-[#C9342D]/[0.06] px-2.5 py-1.5 border border-[#C9342D]/20">
+                        <span className="text-[#B82923]">Quarantined (Damaged Hold):</span>{' '}
+                        <span className="font-bold text-[#B82923]">{heldQty} units</span>
+                      </div>
+                    )}
+                    {invoiceAmount !== null && creditNoteAmount !== null && netAmount !== null && (
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Net Settlement:</span>{' '}
+                        <span className="font-semibold text-[#1D1D1F]">
+                          {formatInr(invoiceAmount)} {creditNoteAmount < 0 ? '-' : '+'}{' '}
+                          {formatInr(Math.abs(creditNoteAmount))} = {formatInr(netAmount)}
+                        </span>
+                      </div>
+                    )}
+                    {packingListQty !== null && (
+                      <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
+                        <span className="text-[#6E6E73]">Packing List Qty:</span>{' '}
+                        <span className="font-semibold text-[#945600]">{packingListQty}</span>
                       </div>
                     )}
                     {proposedQty !== null && (
@@ -695,6 +763,24 @@ export function AlertsPage({
                 {item.status === 'OPEN' && (
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-black/[0.06]">
                     <div className="flex flex-wrap items-center gap-2 flex-1">
+                      {hasReleaseDamagedCta && (
+                        <input
+                          type="number"
+                          min={0}
+                          max={heldQty ?? undefined}
+                          placeholder={`Usable qty (default ${heldQty ?? 0})`}
+                          value={goodQtyInputs[item.id] ?? ''}
+                          onChange={(e) =>
+                            setGoodQtyInputs((prev) => ({
+                              ...prev,
+                              [item.id]: e.target.value,
+                            }))
+                          }
+                          aria-label="Usable quantity to release"
+                          className="w-40 rounded-xl border border-black/[0.10] bg-[#FBFBFD] px-3 py-1.5 text-xs text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:bg-white focus:outline-none"
+                        />
+                      )}
+
                       {hasAddNoteCta && (
                         <input
                           type="text"
@@ -716,14 +802,19 @@ export function AlertsPage({
                           cta.action === 'approve_rop' ||
                           cta.action === 'update_po' ||
                           cta.action === 'approve_stock_withdrawal' ||
-                          cta.action === 'ask_making_minimum';
+                          cta.action === 'ask_making_minimum' ||
+                          cta.action === 'release_damaged_goods' ||
+                          cta.action === 'approve_net_settlement' ||
+                          cta.action === 'request_inr_quote';
                         const isRejectOrCancel =
                           cta.action === 'reject_draft' ||
                           cta.action === 'cancel_po' ||
                           cta.action === 'reject_stock_request';
                         const isSwitchOrPartial =
                           cta.action === 'switch_backup_supplier' ||
-                          cta.action === 'issue_partial_stock';
+                          cta.action === 'issue_partial_stock' ||
+                          cta.action === 'draft_damage_claim' ||
+                          cta.action === 'escalate_procurement';
                         const draftUnavailable =
                           cta.action === 'ask_making_minimum' &&
                           draft !== null &&

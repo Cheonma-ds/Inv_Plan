@@ -168,7 +168,7 @@ def test_update_rop_and_replenishment_validation(db_session: Session) -> None:
 
 
 def test_seeded_hero_part_reproduces_manager_scenario(seeded_session: Session) -> None:
-    sku1 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    sku1 = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert sku1 is not None
     res = consume_stock(seeded_session, sku1.id, 2, note="CNC spindle maintenance")
     assert res.snapshot.on_hand_stock == 2

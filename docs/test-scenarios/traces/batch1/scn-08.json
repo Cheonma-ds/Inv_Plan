@@ -1,0 +1,182 @@
+{
+  "traces": [
+    {
+      "id": 1,
+      "agent_name": "lex",
+      "task_type": "email_triage",
+      "trigger_summary": "Inbound email from Deccan Electro-Spares: Quotation & Confirmation for PO-1038",
+      "linked_entity_type": "communication",
+      "linked_entity_id": 1,
+      "input_summary": "From sup3 | Subject: Quotation & Confirmation for PO-1038",
+      "output_summary": "Intent=PRICE_CHANGE | PO=PO-1038 | Conf=0.95 | Deccan Electro-Spares accepted PO-1038 with a delivery timeframe of 14 days, but has proposed a unit price of 18.50, which is significantly lower than the original PO unit price of 100.00.",
+      "confidence": 0.95,
+      "tool_calls": [],
+      "raw_prompt": "{\n  \"sender_persona\": \"sup3\",\n  \"sender_name\": \"Deccan Electro-Spares\",\n  \"subject\": \"Quotation & Confirmation for PO-1038\",\n  \"body\": \"Hi, please see our attached formal quote for PO-1038 at 18.50 per unit (imported batch, USD billing). Delivery in 14 days.\",\n  \"has_pdf_attachment\": true,\n  \"current_date\": \"2026-11-20\",\n  \"open_pos\": [\n    {\n      \"po_number\": \"PO-1038\",\n      \"part_sku\": \"RLY-901\",\n      \"part_name\": \"PLC Safety Relay Module 24V\",\n      \"qty\": 10,\n      \"unit_price\": 100.0,\n      \"status\": \"SENT_AWAITING_ACK\",\n      \"quoted_lead_time_days\": 14,\n      \"promised_eta\": \"2026-12-03\",\n      \"revised_eta\": null,\n      \"promised_dispatch_date\": null,\n      \"actual_dispatch_date\": null,\n      \"carrier_name\": null,\n      \"tracking_number\": null,\n      \"dispatch_details_status\": \"NONE\"\n    }\n  ],\n  \"thread_history\": [],\n  \"supplier_memory_notes\": [\n    \"Slow to acknowledge POs (frequently misses 48h SLA) and prone to mid-quarter price hikes.\"\n  ]\n}",
+      "raw_response": "{\n  \"matched_po_number\": \"PO-1038\",\n  \"intent\": \"PRICE_CHANGE\",\n  \"confidence\": 0.95,\n  \"proposed_unit_price\": 18.5,\n  \"proposed_qty\": null,\n  \"proposed_eta_date\": \"2026-12-04\",\n  \"promised_dispatch_date\": null,\n  \"actual_dispatch_date\": null,\n  \"carrier_name\": null,\n  \"tracking_number\": null,\n  \"details_promised_later\": false,\n  \"details_promised_by_date\": null,\n  \"delay_reason\": null,\n  \"summary_for_manager\": \"Deccan Electro-Spares accepted PO-1038 with a delivery timeframe of 14 days, but has proposed a unit price of 18.50, which is significantly lower than the original PO unit price of 100.00.\",\n  \"suggested_action\": \"Review the proposed unit price of 18.50 with procurement to ensure it is not a quoting error given the large discrepancy from the original PO unit price.\",\n  \"new_memory_note\": null,\n  \"reasoning\": \"The supplier explicitly references PO-1038 and quotes a unit price of 18.50 alongside a 14-day delivery timeline. Since the original PO unit price was 100.00, this constitutes a price change proposal rather than a standard acknowledgment.\"\n}",
+      "latency_ms": 1790,
+      "input_tokens": 1206,
+      "output_tokens": 344,
+      "cost_inr": 0.016267,
+      "human_feedback": null,
+      "timestamp": "2026-11-20T09:00:00+00:00"
+    }
+  ],
+  "autonomy": [
+    {
+      "id": 2,
+      "agent_name": "lex",
+      "action_category": "ACK_REMINDER",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 11,
+      "agent_name": "lex",
+      "action_category": "DISPATCH_DETAILS_NUDGE",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 10,
+      "agent_name": "lex",
+      "action_category": "DISPATCH_DETAILS_REQUEST",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 6,
+      "agent_name": "lex",
+      "action_category": "EXPEDITE_REQUEST",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 13,
+      "agent_name": "lex",
+      "action_category": "GENERAL",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 5,
+      "agent_name": "lex",
+      "action_category": "INVOICE_DISCREPANCY",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 4,
+      "agent_name": "lex",
+      "action_category": "OVERDUE_CHASE",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 1,
+      "agent_name": "lex",
+      "action_category": "PO_DISPATCH",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 3,
+      "agent_name": "lex",
+      "action_category": "PRE_ETA_CHECKIN",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 12,
+      "agent_name": "lex",
+      "action_category": "PROCUREMENT_ESCALATION",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 7,
+      "agent_name": "lex",
+      "action_category": "REVISED_PO",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 8,
+      "agent_name": "lex",
+      "action_category": "STOCK_REQUEST_CLARIFICATION",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    },
+    {
+      "id": 9,
+      "agent_name": "lex",
+      "action_category": "STOCK_REQUEST_RESPONSE",
+      "mode": "APPROVAL_REQUIRED",
+      "approved_as_is_count": 0,
+      "approved_edited_count": 0,
+      "rejected_count": 0,
+      "total_decisions": 0,
+      "edit_free_approval_rate": null,
+      "updated_at": "2026-11-20T09:00:00+00:00"
+    }
+  ]
+}

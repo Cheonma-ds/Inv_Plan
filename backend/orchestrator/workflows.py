@@ -6,12 +6,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.agents.lex import (
-    CONFIDENCE_THRESHOLD,
     EmailDraftInput,
     EmailIntent,
     EmailTriageInput,
     EmailTriageResult,
-    InvoiceExtractionResult,
     LexAgent,
     OpenPOContext,
     ThreadMessageContext,
@@ -42,9 +40,6 @@ from backend.inventory import (
     ConsumeResult,
     clear_quarantined_stock,
     consume_stock,
-    hold_in_quarantine,
-    receive_stock_direct,
-    release_quarantined_stock,
     update_rop_and_replenishment,
 )
 from backend.mailroom import (
@@ -53,6 +48,7 @@ from backend.mailroom import (
     annotate_triage,
     approve_draft,
     get_thread,
+    inspect_pdf_readability,
     reject_draft,
     save_draft,
     send_email,
@@ -60,6 +56,16 @@ from backend.mailroom import (
 from backend.mailroom.transport import SUPPLIER_PERSONAS
 from backend.observability import record_approval_outcome
 from backend.orchestrator.escalation_workflow import escalate_po_to_procurement_workflow
+from backend.orchestrator.invoice_workflow import (
+    DAMAGED_GOODS_CTA_ACTIONS,
+    NET_SETTLEMENT_CTA_ACTIONS,
+    _draft_supplier_general_email,
+    execute_damaged_goods_cta,
+    execute_net_settlement_cta,
+    handle_damaged_grn_created,
+    handle_invoice_match_outcome,
+    process_pdf_invoice_email,
+)
 from backend.orchestrator.logistics_workflow import (
     create_supplier_memory_alert,
     handle_followup_logistics_update,
@@ -78,7 +84,6 @@ from backend.planning import (
     compute_demand_forecast,
     evaluate_part_recommendation,
     recalculate_all,
-    refresh_supplier_metrics,
 )
 from backend.po import (
     ThreeWayMatchResult,
@@ -88,13 +93,15 @@ from backend.po import (
     create_action_item,
     create_po,
     get_po,
+    is_grn_damaged,
     record_goods_receipt,
     resolve_action_item,
-    submit_invoice_and_match,
     switch_po_to_backup_supplier,
     transition_po,
     update_po_terms,
 )
+
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
 EXCEPTION_INTENTS = {
     EmailIntent.PRICE_CHANGE,
@@ -125,6 +132,16 @@ def _quoted_lead_time_days(session: Session, part_id: int, supplier_id: int) -> 
         )
     )
     return term.quoted_lead_time_days if term is not None else 14
+
+
+def _term_currency(session: Session, part_id: int, supplier_id: int) -> str:
+    term = session.scalar(
+        select(PartSupplierTerm).where(
+            PartSupplierTerm.part_id == part_id,
+            PartSupplierTerm.supplier_id == supplier_id,
+        )
+    )
+    return term.currency if term is not None and term.currency else "INR"
 
 
 def _backup_supplier_info(
@@ -189,8 +206,19 @@ class WorkflowEngine:
         context_facts: dict[str, Any],
         thread_id: str | None = None,
         thread_subject: str | None = None,
+        required_cc_personas: list[str] | None = None,
     ) -> StoredEmail:
         sim_now = clock.now(session)
+        currency = _term_currency(session, part.id, supplier.id)
+        req_cc = list(required_cc_personas or [])
+        if PersonaKey.INVENTORY_MANAGER.value not in req_cc:
+            req_cc.append(PersonaKey.INVENTORY_MANAGER.value)
+        if (
+            category == EmailCategory.EXPEDITE_REQUEST
+            and PersonaKey.PROCUREMENT.value not in req_cc
+        ):
+            req_cc.append(PersonaKey.PROCUREMENT.value)
+
         draft_res = self.lex.draft_email(
             session,
             EmailDraftInput(
@@ -200,12 +228,14 @@ class WorkflowEngine:
                 part_name=part.name,
                 qty=po.qty,
                 unit_price=po.unit_price,
+                currency=currency,
                 recipient_persona=supplier.persona_key,
                 recipient_name=supplier.name,
                 current_date=sim_now.date().isoformat(),
                 thread_subject=thread_subject,
                 supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
-                context_facts=context_facts,
+                required_cc_personas=req_cc,
+                context_facts={"currency": currency, **context_facts},
             ),
             linked_po_id=po.id,
         )
@@ -375,6 +405,7 @@ class WorkflowEngine:
                 continue
             po_by_number[po.po_number] = po
             quoted_lt = _quoted_lead_time_days(session, part.id, supplier.id)
+            currency = _term_currency(session, part.id, supplier.id)
             promised = (
                 clock.ensure_utc(po.promised_eta).date().isoformat() if po.promised_eta else None
             )
@@ -388,6 +419,7 @@ class WorkflowEngine:
                     part_name=part.name,
                     qty=po.qty,
                     unit_price=po.unit_price,
+                    currency=currency,
                     status=po.status,
                     quoted_lead_time_days=quoted_lt,
                     promised_eta=promised,
@@ -420,21 +452,60 @@ class WorkflowEngine:
             if m.id != email.id
         ]
 
-        triage_result: EmailTriageResult = self.lex.triage_email(
-            session,
-            EmailTriageInput(
-                sender_persona=email.from_persona,
-                sender_name=supplier.name,
-                subject=email.subject,
-                body=email.body,
-                has_pdf_attachment=bool(email.attachment_path),
-                current_date=sim_now.date().isoformat(),
-                open_pos=open_po_contexts,
-                thread_history=thread_history,
-                supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
-            ),
-            linked_comm_id=email.id,
+        all_paths = list(email.attachment_paths or [])
+        if email.attachment_path and email.attachment_path not in all_paths:
+            all_paths.insert(0, email.attachment_path)
+        pdf_paths = [p for p in all_paths if p.lower().endswith(".pdf")]
+        image_paths = [p for p in all_paths if Path(p).suffix.lower() in IMAGE_SUFFIXES]
+
+        # Inspect PDF readability before passing to Gemini triage (F-1.2 & F-3.2)
+        triage_pdf_bytes: bytes | None = None
+        unreadable_pdf_detected = False
+        for raw_pdf in pdf_paths:
+            pdf_file = Path(raw_pdf)
+            if not pdf_file.is_file():
+                unreadable_pdf_detected = True
+                break
+            raw_bytes = pdf_file.read_bytes()
+            if inspect_pdf_readability(raw_bytes) is not None:
+                unreadable_pdf_detected = True
+                break
+            if triage_pdf_bytes is None and len(raw_bytes) <= 10 * 1024 * 1024:
+                triage_pdf_bytes = raw_bytes
+
+        triage_input = EmailTriageInput(
+            sender_persona=email.from_persona,
+            sender_name=supplier.name,
+            subject=email.subject,
+            body=email.body,
+            has_pdf_attachment=bool(pdf_paths),
+            has_image_attachment=bool(image_paths),
+            attachment_filenames=[Path(p).name for p in all_paths],
+            current_date=sim_now.date().isoformat(),
+            open_pos=open_po_contexts,
+            thread_history=thread_history,
+            supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
         )
+        try:
+            triage_result: EmailTriageResult = self.lex.triage_email(
+                session,
+                triage_input,
+                linked_comm_id=email.id,
+                pdf_bytes=triage_pdf_bytes,
+            )
+        except AssertionError:
+            raise
+        except Exception:
+            if triage_pdf_bytes is None:
+                raise
+            # Corrupt PDF failed multimodal triage -> escalate via invoice/PDF review safely
+            unreadable_pdf_detected = True
+            triage_result = self.lex.triage_email(
+                session,
+                triage_input,
+                linked_comm_id=email.id,
+                pdf_bytes=None,
+            )
 
         matched_po = (
             po_by_number.get(triage_result.matched_po_number)
@@ -463,16 +534,15 @@ class WorkflowEngine:
                 comm_id=email.id,
             )
 
-        created_alert: ActionItem | None = None
-        created_draft: StoredEmail | None = None
-
-        # If a PDF attachment is present and triage either classified INVOICE_SUBMISSION or
-        # escalated AMBIGUOUS solely because the email body omitted the PO number, run the
-        # multimodal PDF invoice extraction pipeline first so the PDF PO reference can be used.
-        should_run_invoice_pipeline = triage_result.intent == EmailIntent.INVOICE_SUBMISSION or (
-            bool(email.attachment_path)
-            and triage_result.intent == EmailIntent.AMBIGUOUS
-            and matched_po is None
+        # If an attached PDF is locked/corrupt OR email is an invoice submission -> PDF pipeline
+        should_run_invoice_pipeline = (
+            unreadable_pdf_detected
+            or triage_result.intent == EmailIntent.INVOICE_SUBMISSION
+            or (
+                bool(pdf_paths)
+                and triage_result.intent == EmailIntent.AMBIGUOUS
+                and matched_po is None
+            )
         )
         if should_run_invoice_pipeline:
             return self._process_pdf_invoice_email(
@@ -484,41 +554,250 @@ class WorkflowEngine:
                 triage_result=triage_result,
             )
 
+        # Route primary PO triage + any additional PO updates (F-2.3 multi-PO email splitting)
+        triage_items: list[EmailTriageResult] = [triage_result]
+        for add in triage_result.additional_po_updates:
+            triage_items.append(
+                EmailTriageResult(
+                    matched_po_number=add.matched_po_number,
+                    intent=add.intent,
+                    confidence=add.confidence,
+                    proposed_unit_price=add.proposed_unit_price,
+                    proposed_currency=add.proposed_currency,
+                    proposed_qty=add.proposed_qty,
+                    proposed_eta_date=add.proposed_eta_date,
+                    promised_dispatch_date=add.promised_dispatch_date,
+                    actual_dispatch_date=add.actual_dispatch_date,
+                    carrier_name=add.carrier_name,
+                    tracking_number=add.tracking_number,
+                    details_promised_later=add.details_promised_later,
+                    details_promised_by_date=add.details_promised_by_date,
+                    delay_reason=add.delay_reason,
+                    summary_for_manager=(
+                        add.summary_for_manager or triage_result.summary_for_manager
+                    ),
+                    suggested_action=add.suggested_action or triage_result.suggested_action,
+                    reasoning=triage_result.reasoning,
+                )
+            )
+
+        outcomes: list[dict[str, Any]] = []
+        for item_triage in triage_items:
+            item_po = (
+                po_by_number.get(item_triage.matched_po_number)
+                if item_triage.matched_po_number
+                else None
+            )
+            outcomes.append(
+                self._route_single_po_triage(
+                    session,
+                    email=email,
+                    supplier=supplier,
+                    triage_result=item_triage,
+                    matched_po=item_po,
+                    image_paths=image_paths,
+                    sim_now=sim_now,
+                )
+            )
+
+        primary = outcomes[0]
+        session.flush()
+        response: dict[str, Any] = {
+            "triage": triage_result,
+            "matched_po_id": primary["matched_po_id"],
+            "alert_id": primary["alert_id"],
+            "draft_comm_id": primary["draft_comm_id"],
+        }
+        if len(outcomes) > 1:
+            response["additional_outcomes"] = outcomes[1:]
+            response["alert_ids"] = [o["alert_id"] for o in outcomes if o["alert_id"]]
+            response["draft_comm_ids"] = [
+                o["draft_comm_id"] for o in outcomes if o["draft_comm_id"]
+            ]
+        return response
+
+    def _route_single_po_triage(
+        self,
+        session: Session,
+        *,
+        email: StoredEmail,
+        supplier: Supplier,
+        triage_result: EmailTriageResult,
+        matched_po: PurchaseOrder | None,
+        image_paths: list[str],
+        sim_now: datetime,
+    ) -> dict[str, Any]:
+        created_alert: ActionItem | None = None
+        created_draft: StoredEmail | None = None
+        image_names = [Path(p).name for p in image_paths]
+        image_clause = (
+            f" Evidentiary image attachment(s): {', '.join(image_names)}."
+            if image_names
+            else ""
+        )
+
         # Route intent with deterministic guardrails
         if triage_result.intent == EmailIntent.AMBIGUOUS or matched_po is None:
             if triage_result.intent == EmailIntent.GENERAL_REPLY and matched_po is None:
                 created_alert = create_action_item(
                     session,
-                    type="SUPPLIER_MESSAGE",
-                    severity=AlertSeverity.INFO,
-                    title=f"Message from {supplier.name}: {email.subject}",
-                    summary=triage_result.summary_for_manager,
-                    suggested_actions=[],
-                    cta_payload={"comm_id": email.id},
+                    type="SUPPLIER_ATTACHMENT_REVIEW" if image_names else "SUPPLIER_MESSAGE",
+                    severity=AlertSeverity.HIGH if image_names else AlertSeverity.INFO,
+                    title=(
+                        f"Damage / photo attachment from {supplier.name}: {email.subject}"
+                        if image_names
+                        else f"Message from {supplier.name}: {email.subject}"
+                    ),
+                    summary=f"{triage_result.summary_for_manager}{image_clause}",
+                    suggested_actions=(
+                        [{"action": "add_note", "label": "Log Inspection Note"}]
+                        if image_names
+                        else []
+                    ),
+                    cta_payload={"comm_id": email.id, "image_attachments": image_paths},
                 )
             else:
+                # F-4.1: Generate optional clarification draft on AMBIGUOUS escalation
+                part_for_draft = (
+                    session.get(Part, matched_po.part_id) if matched_po is not None else None
+                )
+                try:
+                    created_draft = _draft_supplier_general_email(
+                        session,
+                        self,
+                        supplier=supplier,
+                        po=matched_po,
+                        part=part_for_draft,
+                        thread_id=email.thread_id,
+                        thread_subject=email.subject,
+                        context_facts={
+                            "purpose": "clarification",
+                            "ambiguity_summary": triage_result.summary_for_manager,
+                            "reasoning": triage_result.reasoning,
+                            "requested_action": (
+                                "Please confirm the exact PO number, firm unit price (in INR), "
+                                "quantity, and delivery ETA so we can proceed."
+                            ),
+                        },
+                    )
+                except AssertionError:
+                    raise
+                except Exception:
+                    created_draft = None
+
+                suggested = []
+                if created_draft is not None:
+                    suggested.extend(
+                        [
+                            {"action": "approve_draft", "label": "Approve & Send Clarification"},
+                            {"action": "reject_draft", "label": "Reject Draft"},
+                        ]
+                    )
+                suggested.append({"action": "add_note", "label": "Log Review Note"})
                 created_alert = create_action_item(
                     session,
                     type="AMBIGUOUS_EMAIL",
                     severity=AlertSeverity.HIGH,
                     title=f"Manual review needed: email from {supplier.name}",
                     summary=(
-                        f"{triage_result.summary_for_manager} "
+                        f"{triage_result.summary_for_manager}{image_clause} "
                         f"(Confidence: {triage_result.confidence:.0%}. No PO state was changed.)"
                     ),
                     po_id=matched_po.id if matched_po else None,
-                    suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
-                    cta_payload={"comm_id": email.id, "reasoning": triage_result.reasoning},
+                    part_id=matched_po.part_id if matched_po else None,
+                    draft_comm_id=created_draft.id if created_draft else None,
+                    suggested_actions=suggested,
+                    cta_payload={
+                        "comm_id": email.id,
+                        "reasoning": triage_result.reasoning,
+                        "draft_comm_id": created_draft.id if created_draft else None,
+                        "image_attachments": image_paths,
+                    },
                 )
             return {
-                "triage": triage_result,
                 "matched_po_id": matched_po.id if matched_po else None,
                 "alert_id": created_alert.id if created_alert else None,
-                "draft_comm_id": None,
+                "draft_comm_id": created_draft.id if created_draft else None,
             }
 
         part = session.get(Part, matched_po.part_id)
         assert part is not None
+        po_currency = _term_currency(session, part.id, supplier.id)
+        proposed_curr = (triage_result.proposed_currency or "").strip().upper()
+        currency_mismatch = bool(proposed_curr and proposed_curr != po_currency)
+
+        # F-2.1: Foreign-currency mismatch guardrail (blocks blind INR price overwrite)
+        if currency_mismatch:
+            if matched_po.status in (
+                POStatus.SENT_AWAITING_ACK.value,
+                POStatus.UNRESPONSIVE_ESCALATED.value,
+                POStatus.ACKNOWLEDGED.value,
+                POStatus.DELAYED_CRITICAL.value,
+            ):
+                transition_po(
+                    session,
+                    matched_po,
+                    POStatus.EXCEPTION_REVIEW,
+                    note=(
+                        f"Foreign currency quote ({proposed_curr} vs {po_currency}) raised: "
+                        f"{triage_result.summary_for_manager}"
+                    ),
+                )
+            backup = _backup_supplier_info(session, part.id, supplier.id)
+            suggested = [
+                {"action": "request_inr_quote", "label": f"Request {po_currency} Quote"},
+            ]
+            if backup.get("backup_supplier_id"):
+                suggested.append(
+                    {
+                        "action": "switch_backup_supplier",
+                        "label": f"Switch to {backup['backup_supplier_name']}",
+                    }
+                )
+            suggested.append({"action": "cancel_po", "label": "Cancel PO"})
+            suggested.append({"action": "add_note", "label": "Add Note"})
+
+            quoted_price_str = (
+                f"{triage_result.proposed_unit_price:,.2f} {proposed_curr}"
+                if triage_result.proposed_unit_price is not None
+                else proposed_curr
+            )
+            created_alert = create_action_item(
+                session,
+                type="CURRENCY_MISMATCH",
+                severity=AlertSeverity.HIGH,
+                part_criticality=part.criticality,
+                title=(
+                    f"Currency mismatch ({proposed_curr} vs {po_currency}): "
+                    f"{matched_po.po_number} ({part.sku})"
+                ),
+                summary=(
+                    f"Supplier quoted {quoted_price_str} vs PO currency {po_currency} "
+                    f"(₹{matched_po.unit_price:,.2f}/unit) — FX conversion or {po_currency} "
+                    "re-quote required before updating PO price. "
+                    f"{triage_result.summary_for_manager}{image_clause}"
+                ),
+                po_id=matched_po.id,
+                part_id=part.id,
+                suggested_actions=suggested,
+                cta_payload={
+                    "po_id": matched_po.id,
+                    "comm_id": email.id,
+                    "currency_mismatch": True,
+                    "po_currency": po_currency,
+                    "proposed_currency": proposed_curr,
+                    "proposed_unit_price": triage_result.proposed_unit_price,
+                    "proposed_qty": triage_result.proposed_qty,
+                    "proposed_eta_date": triage_result.proposed_eta_date,
+                    "image_attachments": image_paths,
+                    **backup,
+                },
+            )
+            return {
+                "matched_po_id": matched_po.id,
+                "alert_id": created_alert.id,
+                "draft_comm_id": None,
+            }
 
         if triage_result.intent == EmailIntent.ACKNOWLEDGED:
             if matched_po.status in (
@@ -566,9 +845,12 @@ class WorkflowEngine:
                 created_alert = follow_res["alert"]
 
         elif triage_result.intent in EXCEPTION_INTENTS:
+            # F-2.2: Permit post-ack reversals (ACKNOWLEDGED / DELAYED_CRITICAL -> EXCEPTION_REVIEW)
             if matched_po.status in (
                 POStatus.SENT_AWAITING_ACK.value,
                 POStatus.UNRESPONSIVE_ESCALATED.value,
+                POStatus.ACKNOWLEDGED.value,
+                POStatus.DELAYED_CRITICAL.value,
             ):
                 transition_po(
                     session,
@@ -611,35 +893,52 @@ class WorkflowEngine:
                 days_to_proposed_eta = None
                 days_short_of_eta = 0.0
 
-            if triage_result.proposed_unit_price is not None:
-                price_variance_inr = round(
-                    triage_result.proposed_unit_price - matched_po.unit_price, 2
-                )
-                price_variance_pct = (
-                    round((price_variance_inr / matched_po.unit_price) * 100.0, 2)
-                    if matched_po.unit_price > 0
-                    else 0.0
-                )
-                effective_qty = (
-                    triage_result.proposed_qty
-                    if triage_result.proposed_qty is not None
-                    else matched_po.qty
-                )
-                total_cost_impact_inr = round(price_variance_inr * effective_qty, 2)
-            else:
-                price_variance_inr = 0.0
-                price_variance_pct = 0.0
-                total_cost_impact_inr = 0.0
+            # F-4.2: Accurate unit-price & combined price+qty total spend delta
+            old_price = matched_po.unit_price
+            old_qty = matched_po.qty
+            new_price = (
+                triage_result.proposed_unit_price
+                if triage_result.proposed_unit_price is not None
+                else old_price
+            )
+            new_qty = (
+                triage_result.proposed_qty
+                if triage_result.proposed_qty is not None
+                else old_qty
+            )
+            price_variance_inr = round(new_price - old_price, 2)
+            price_variance_pct = (
+                round((price_variance_inr / old_price) * 100.0, 2) if old_price > 0 else 0.0
+            )
+            price_only_impact_inr = round((new_price - old_price) * new_qty, 2)
+            total_cost_impact_inr = round((new_price * new_qty) - (old_price * old_qty), 2)
 
             impact_notes: list[str] = []
             if triage_result.proposed_unit_price is not None:
                 sign = "+" if price_variance_inr >= 0 else ""
+                tot_sign = "+" if total_cost_impact_inr >= 0 else ""
+                if triage_result.proposed_qty is not None and new_qty != old_qty:
+                    po_sign = "+" if price_only_impact_inr >= 0 else ""
+                    impact_notes.append(
+                        f"Price: ₹{old_price:,.2f} → ₹{new_price:,.2f} "
+                        f"({sign}₹{price_variance_inr:,.2f} / {sign}{price_variance_pct:.1f}%); "
+                        f"Qty: {old_qty} → {new_qty} "
+                        f"(price-only {po_sign}₹{price_only_impact_inr:,.2f}, "
+                        f"total PO spend impact {tot_sign}₹{total_cost_impact_inr:,.2f})."
+                    )
+                else:
+                    impact_notes.append(
+                        f"Price: ₹{old_price:,.2f} → ₹{new_price:,.2f} "
+                        f"({sign}₹{price_variance_inr:,.2f} / {sign}{price_variance_pct:.1f}%, "
+                        f"total impact {tot_sign}₹{total_cost_impact_inr:,.2f})."
+                    )
+            elif triage_result.proposed_qty is not None and new_qty != old_qty:
+                tot_sign = "+" if total_cost_impact_inr >= 0 else ""
                 impact_notes.append(
-                    f"Price: ₹{matched_po.unit_price:,.2f} → "
-                    f"₹{triage_result.proposed_unit_price:,.2f} "
-                    f"({sign}₹{price_variance_inr:,.2f} / {sign}{price_variance_pct:.1f}%, "
-                    f"total impact {sign}₹{total_cost_impact_inr:,.2f})."
+                    f"Qty: {old_qty} → {new_qty} "
+                    f"(total PO spend impact {tot_sign}₹{total_cost_impact_inr:,.2f})."
                 )
+
             if projected_stockout_date is not None:
                 if days_short_of_eta > 0:
                     impact_notes.append(
@@ -654,7 +953,9 @@ class WorkflowEngine:
                         f"({projected_days_of_supply:.1f}d of supply on hand)."
                     )
 
-            full_summary = " ".join([triage_result.summary_for_manager, *impact_notes]).strip()
+            full_summary = " ".join(
+                [triage_result.summary_for_manager + image_clause, *impact_notes]
+            ).strip()
 
             backup = _backup_supplier_info(session, part.id, supplier.id)
             suggested = []
@@ -699,12 +1000,14 @@ class WorkflowEngine:
                     "proposed_eta_date": triage_result.proposed_eta_date,
                     "price_variance_inr": price_variance_inr,
                     "price_variance_pct": price_variance_pct,
+                    "price_only_impact_inr": price_only_impact_inr,
                     "total_cost_impact_inr": total_cost_impact_inr,
                     "avg_daily_demand": avg_daily_demand,
                     "projected_days_of_supply": projected_days_of_supply,
                     "projected_stockout_date": projected_stockout_date,
                     "days_to_proposed_eta": days_to_proposed_eta,
                     "days_short_of_eta": days_short_of_eta,
+                    "image_attachments": image_paths,
                     **backup,
                 },
             )
@@ -777,6 +1080,10 @@ class WorkflowEngine:
                     category=EmailCategory.EXPEDITE_REQUEST,
                     thread_id=email.thread_id,
                     thread_subject=email.subject,
+                    required_cc_personas=[
+                        PersonaKey.INVENTORY_MANAGER.value,
+                        PersonaKey.PROCUREMENT.value,
+                    ],
                     context_facts={
                         "promised_eta": promised_str,
                         "revised_eta": revised_eta.date().isoformat(),
@@ -820,7 +1127,7 @@ class WorkflowEngine:
                     ),
                     summary=(
                         f"{supplier.name} delayed {matched_po.po_number} to "
-                        f"{revised_eta.date().isoformat()} ({stockout_note}). "
+                        f"{revised_eta.date().isoformat()} ({stockout_note}).{image_clause} "
                         "Lex drafted an expedite request for approval."
                     ),
                     po_id=matched_po.id,
@@ -837,6 +1144,7 @@ class WorkflowEngine:
                         "projected_stockout_date": projected_stockout_date,
                         "days_to_new_eta": days_to_new_eta,
                         "days_short_of_eta": days_short_of_eta,
+                        "image_attachments": image_paths,
                         **backup,
                     },
                 )
@@ -850,7 +1158,7 @@ class WorkflowEngine:
                 created_alert = create_action_item(
                     session,
                     type="MINOR_DELAY_ACCEPTED",
-                    severity=AlertSeverity.INFO,
+                    severity=AlertSeverity.HIGH if image_names else AlertSeverity.INFO,
                     part_criticality=part.criticality,
                     days_to_stockout=projected_days_of_supply,
                     title=f"Minor delay noted on {matched_po.po_number} ({part.sku})",
@@ -858,11 +1166,15 @@ class WorkflowEngine:
                         f"{supplier.name} revised ETA for {matched_po.po_number} to "
                         f"{revised_eta.date().isoformat()}. Part is {part.criticality} with "
                         f"sufficient stock ({projected_days_of_supply:.1f}d supply vs "
-                        f"{days_to_new_eta:.1f}d to ETA); no expedite required."
+                        f"{days_to_new_eta:.1f}d to ETA); no expedite required.{image_clause}"
                     ),
                     po_id=matched_po.id,
                     part_id=part.id,
-                    suggested_actions=[],
+                    suggested_actions=(
+                        [{"action": "add_note", "label": "Log Inspection Note"}]
+                        if image_names
+                        else []
+                    ),
                     cta_payload={
                         "po_id": matched_po.id,
                         "revised_eta": revised_eta.date().isoformat(),
@@ -870,6 +1182,7 @@ class WorkflowEngine:
                         "projected_days_of_supply": projected_days_of_supply,
                         "projected_stockout_date": projected_stockout_date,
                         "days_to_new_eta": days_to_new_eta,
+                        "image_attachments": image_paths,
                     },
                 )
 
@@ -885,20 +1198,36 @@ class WorkflowEngine:
                 )
 
         elif triage_result.intent == EmailIntent.GENERAL_REPLY:
-            follow_res = handle_followup_logistics_update(
-                session,
-                po=matched_po,
-                part=part,
-                supplier=supplier,
-                email=email,
-                triage_result=triage_result,
-                create_plain_message_fallback=True,
-            )
-            created_alert = follow_res["alert"]
+            if image_names:
+                created_alert = create_action_item(
+                    session,
+                    type="SUPPLIER_ATTACHMENT_REVIEW",
+                    severity=AlertSeverity.HIGH,
+                    part_criticality=part.criticality,
+                    title=f"Damage / photo attachment on {matched_po.po_number} ({part.sku})",
+                    summary=f"{triage_result.summary_for_manager}{image_clause}",
+                    po_id=matched_po.id,
+                    part_id=part.id,
+                    suggested_actions=[{"action": "add_note", "label": "Log Inspection Note"}],
+                    cta_payload={
+                        "po_id": matched_po.id,
+                        "comm_id": email.id,
+                        "image_attachments": image_paths,
+                    },
+                )
+            else:
+                follow_res = handle_followup_logistics_update(
+                    session,
+                    po=matched_po,
+                    part=part,
+                    supplier=supplier,
+                    email=email,
+                    triage_result=triage_result,
+                    create_plain_message_fallback=True,
+                )
+                created_alert = follow_res["alert"]
 
-        session.flush()
         return {
-            "triage": triage_result,
             "matched_po_id": matched_po.id,
             "alert_id": created_alert.id if created_alert else None,
             "draft_comm_id": created_draft.id if created_draft else None,
@@ -914,202 +1243,16 @@ class WorkflowEngine:
         po_by_number: dict[str, PurchaseOrder],
         triage_result: EmailTriageResult,
     ) -> dict[str, Any]:
-        """Extract PDF invoice via Lex, run 3-way match, and drive quarantine/release."""
-        if not email.attachment_path:
-            alert = create_action_item(
-                session,
-                type="INVOICE_MISSING_PDF",
-                severity=AlertSeverity.MEDIUM,
-                title=(
-                    "Invoice email missing PDF attachment"
-                    + (f" ({matched_po.po_number})" if matched_po else "")
-                ),
-                summary=(
-                    f"{supplier.name} sent an invoice email without a PDF attachment. "
-                    "No PO state was modified; request a PDF invoice before matching."
-                ),
-                po_id=matched_po.id if matched_po else None,
-                part_id=matched_po.part_id if matched_po else None,
-                suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
-                cta_payload={"comm_id": email.id, "po_id": matched_po.id if matched_po else None},
-            )
-            session.flush()
-            return {
-                "triage": triage_result,
-                "matched_po_id": matched_po.id if matched_po else None,
-                "alert_id": alert.id,
-                "draft_comm_id": None,
-                "invoice_extraction": None,
-                "invoice_id": None,
-                "match_result": None,
-            }
-
-        pdf_file = Path(email.attachment_path)
-        if not pdf_file.is_file():
-            alert = create_action_item(
-                session,
-                type="INVOICE_EXTRACTION_REVIEW",
-                severity=AlertSeverity.HIGH,
-                title=f"Unreadable invoice PDF from {supplier.name}",
-                summary=(
-                    f"Attachment '{email.attachment_path}' could not be read from disk. "
-                    "No PO state was modified."
-                ),
-                po_id=matched_po.id if matched_po else None,
-                part_id=matched_po.part_id if matched_po else None,
-                suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
-                cta_payload={"comm_id": email.id, "attachment_path": email.attachment_path},
-            )
-            session.flush()
-            return {
-                "triage": triage_result,
-                "matched_po_id": matched_po.id if matched_po else None,
-                "alert_id": alert.id,
-                "draft_comm_id": None,
-                "invoice_extraction": None,
-                "invoice_id": None,
-                "match_result": None,
-            }
-
-        extraction: InvoiceExtractionResult = self.lex.extract_invoice(
+        """Extract PDF invoice(s) via Lex, run 3-way match, and drive quarantine/release."""
+        return process_pdf_invoice_email(
             session,
-            pdf_file.read_bytes(),
-            filename=pdf_file.name,
-            supplier_name=supplier.name,
-            linked_comm_id=email.id,
-            linked_po_id=matched_po.id if matched_po else None,
-        )
-
-        # Resolve target PO and guard against conflicting PO references between email & PDF
-        target_po = matched_po
-        po_conflict_reason: str | None = None
-        if extraction.po_number:
-            pdf_po = po_by_number.get(extraction.po_number)
-            if target_po is None:
-                target_po = pdf_po
-            elif extraction.po_number != target_po.po_number:
-                po_conflict_reason = (
-                    f"Email referenced {target_po.po_number}, but PDF invoice references "
-                    f"{extraction.po_number}."
-                )
-
-        annotate_triage(
-            session,
-            email.id,
-            classification=EmailIntent.INVOICE_SUBMISSION.value
-            if extraction.confidence >= CONFIDENCE_THRESHOLD and target_po is not None
-            else EmailIntent.AMBIGUOUS.value,
-            extracted_json={
-                "triage": triage_result.model_dump(mode="json"),
-                "invoice_extraction": extraction.model_dump(mode="json"),
-            },
-            confidence=min(triage_result.confidence, extraction.confidence)
-            if matched_po is not None
-            else extraction.confidence,
-            po_id=target_po.id if target_po else email.po_id,
-        )
-
-        # Guardrail: confidence < 0.85, unresolved PO, PO conflict, or empty lines -> zero mutation
-        escalation_reasons: list[str] = []
-        if extraction.confidence < CONFIDENCE_THRESHOLD:
-            escalation_reasons.append(
-                f"PDF extraction confidence {extraction.confidence:.0%} is below "
-                f"{CONFIDENCE_THRESHOLD:.0%}"
-            )
-        if po_conflict_reason:
-            escalation_reasons.append(po_conflict_reason)
-        if target_po is None:
-            escalation_reasons.append(
-                f"Could not match PDF PO ref '{extraction.po_number or 'NONE'}' to an open PO "
-                f"for {supplier.name}"
-            )
-        if not extraction.line_items:
-            escalation_reasons.append("No billable line items were extracted from the PDF")
-
-        if escalation_reasons:
-            alert = create_action_item(
-                session,
-                type="INVOICE_EXTRACTION_REVIEW",
-                severity=AlertSeverity.HIGH,
-                title=f"Manual invoice review needed ({supplier.name})",
-                summary=(
-                    f"Lex could not safely auto-match PDF '{pdf_file.name}': "
-                    f"{'; '.join(escalation_reasons)}. Zero PO state changes were made."
-                ),
-                po_id=target_po.id if target_po else None,
-                part_id=target_po.part_id if target_po else None,
-                suggested_actions=[{"action": "add_note", "label": "Log Review Note"}],
-                cta_payload={
-                    "comm_id": email.id,
-                    "attachment_path": email.attachment_path,
-                    "invoice_number": extraction.invoice_number,
-                    "pdf_po_number": extraction.po_number,
-                    "confidence": extraction.confidence,
-                    "reasons": escalation_reasons,
-                },
-            )
-            session.flush()
-            return {
-                "triage": triage_result,
-                "matched_po_id": target_po.id if target_po else None,
-                "alert_id": alert.id,
-                "draft_comm_id": None,
-                "invoice_extraction": extraction,
-                "invoice_id": None,
-                "match_result": None,
-            }
-
-        assert target_po is not None
-        part = session.get(Part, target_po.part_id)
-        assert part is not None
-
-        if len(extraction.line_items) == 1:
-            extracted_qty = extraction.line_items[0].qty
-            extracted_unit_price = extraction.line_items[0].unit_price
-        else:
-            extracted_qty = sum(li.qty for li in extraction.line_items)
-            unique_prices = {round(li.unit_price, 4) for li in extraction.line_items}
-            if len(unique_prices) == 1:
-                extracted_unit_price = extraction.line_items[0].unit_price
-            elif extracted_qty > 0:
-                computed_lines_sum = sum(
-                    li.qty * li.unit_price for li in extraction.line_items
-                )
-                extracted_unit_price = round(computed_lines_sum / extracted_qty, 2)
-            else:
-                extracted_unit_price = 0.0
-
-        invoice, match_result = submit_invoice_and_match(
-            session,
-            po_id=target_po.id,
-            invoice_number=extraction.invoice_number,
-            extracted_qty=extracted_qty,
-            extracted_unit_price=extracted_unit_price,
-            extracted_total=extraction.subtotal,
-            pdf_path=email.attachment_path,
-            comm_id=email.id,
-        )
-
-        outcome = self._handle_invoice_match_outcome(
-            session,
-            po=target_po,
-            part=part,
+            self,
+            email=email,
             supplier=supplier,
-            invoice=invoice,
-            match_result=match_result,
-            thread_id=email.thread_id,
-            thread_subject=email.subject,
+            matched_po=matched_po,
+            po_by_number=po_by_number,
+            triage_result=triage_result,
         )
-        session.flush()
-        return {
-            "triage": triage_result,
-            "matched_po_id": target_po.id,
-            "alert_id": outcome["alert_id"],
-            "draft_comm_id": outcome["draft_comm_id"],
-            "invoice_extraction": extraction,
-            "invoice_id": invoice.id,
-            "match_result": match_result,
-        }
 
     def _handle_invoice_match_outcome(
         self,
@@ -1123,177 +1266,17 @@ class WorkflowEngine:
         thread_id: str | None = None,
         thread_subject: str | None = None,
     ) -> dict[str, Any]:
-        """Apply inventory stock movement directives, refresh supplier score, and create alerts."""
-        if match_result is None:
-            alert = create_action_item(
-                session,
-                type="INVOICE_PENDING_GRN",
-                severity=AlertSeverity.INFO,
-                part_criticality=part.criticality,
-                title=f"Invoice {invoice.invoice_number} held pending GRN ({po.po_number})",
-                summary=(
-                    f"Extracted invoice {invoice.invoice_number} (v{invoice.version}: "
-                    f"{invoice.extracted_qty} units @ ₹{invoice.extracted_unit_price:,.2f}, "
-                    f"subtotal ₹{invoice.extracted_total:,.2f}) for {po.po_number}. "
-                    "Awaiting physical Goods Receipt before 3-way match."
-                ),
-                po_id=po.id,
-                part_id=part.id,
-                suggested_actions=[],
-                cta_payload={
-                    "po_id": po.id,
-                    "invoice_id": invoice.id,
-                    "invoice_number": invoice.invoice_number,
-                },
-            )
-            return {"alert_id": alert.id, "draft_comm_id": None}
-
-        # Coordinate PO -> Inventory stock mutation strictly in the orchestrator (AGENTS.md §2)
-        if match_result.stock_action == "RELEASE_FROM_QUARANTINE":
-            release_quarantined_stock(
-                session,
-                part.id,
-                match_result.stock_qty,
-                note=match_result.stock_note,
-            )
-        elif match_result.stock_action == "RELEASE_DIRECT":
-            receive_stock_direct(
-                session,
-                part.id,
-                match_result.stock_qty,
-                note=match_result.stock_note,
-            )
-        elif match_result.stock_action == "HOLD_QUARANTINE":
-            hold_in_quarantine(
-                session,
-                part.id,
-                match_result.stock_qty,
-            )
-
-        refresh_supplier_metrics(session, supplier.id, part_id=part.id)
-
-        if match_result.matched:
-            auto_resolve_po_alerts(
-                session,
-                po.id,
-                (
-                    "INVOICE_MISMATCH_QUARANTINE",
-                    "QUARANTINE_REMINDER",
-                    "QUARANTINE_ESCALATED",
-                    "OVERDUE_PO",
-                    "INVOICE_PENDING_GRN",
-                ),
-            )
-            grn = session.scalar(
-                select(GoodsReceipt)
-                .where(GoodsReceipt.po_id == po.id)
-                .order_by(GoodsReceipt.id.desc())
-                .limit(1)
-            )
-            released_qty = grn.received_qty if grn is not None else invoice.extracted_qty
-            alert = create_action_item(
-                session,
-                type="INVOICE_MATCHED_CLOSED",
-                severity=AlertSeverity.INFO,
-                part_criticality=part.criticality,
-                title=f"3-way match passed & stock released: {po.po_number} ({part.sku})",
-                summary=(
-                    f"Invoice {invoice.invoice_number} (v{invoice.version}) matched "
-                    f"PO {po.po_number} and GRN ({released_qty} units @ ₹{po.unit_price:,.2f}). "
-                    f"Released {released_qty} units to usable on-hand stock "
-                    f"(now {part.on_hand_stock} on hand, {part.quarantined_stock} quarantined) "
-                    "and closed PO."
-                ),
-                po_id=po.id,
-                part_id=part.id,
-                suggested_actions=[],
-                cta_payload={
-                    "po_id": po.id,
-                    "invoice_id": invoice.id,
-                    "invoice_number": invoice.invoice_number,
-                    "released_qty": released_qty,
-                },
-            )
-            return {"alert_id": alert.id, "draft_comm_id": None}
-
-        # Match FAILED -> stock is quarantined; draft Lex correction request for manager approval
-        grn = session.scalar(
-            select(GoodsReceipt)
-            .where(GoodsReceipt.po_id == po.id)
-            .order_by(GoodsReceipt.id.desc())
-            .limit(1)
-        )
-        grn_qty = grn.received_qty if grn is not None else po.qty
-        price_diff = match_result.price_diff_per_unit
-        total_price_impact = match_result.total_price_impact
-        qty_diff = match_result.qty_diff
-
-        draft = self._create_lex_draft(
+        return handle_invoice_match_outcome(
             session,
+            self,
             po=po,
             part=part,
             supplier=supplier,
-            category=EmailCategory.INVOICE_DISCREPANCY,
+            invoice=invoice,
+            match_result=match_result,
             thread_id=thread_id,
-            thread_subject=thread_subject or f"[{po.po_number}] Invoice Discrepancy",
-            context_facts={
-                "invoice_number": invoice.invoice_number,
-                "invoice_version": invoice.version,
-                "match_status": match_result.match_status.value,
-                "discrepancy_summary": match_result.discrepancy_summary,
-                "po_qty": po.qty,
-                "po_unit_price": po.unit_price,
-                "grn_received_qty": grn_qty,
-                "invoice_qty": invoice.extracted_qty,
-                "invoice_unit_price": invoice.extracted_unit_price,
-                "invoice_subtotal": invoice.extracted_total,
-                "price_diff_per_unit": price_diff,
-                "total_price_impact": total_price_impact,
-                "qty_diff": qty_diff,
-                "quarantined_qty": grn_qty,
-                "requested_action": (
-                    "Please issue a revised PDF invoice matching the agreed PO quantity and "
-                    "unit price so we can release quarantined stock and process payment."
-                ),
-            },
+            thread_subject=thread_subject,
         )
-        severity = (
-            AlertSeverity.CRITICAL
-            if (part.criticality == Criticality.CRITICAL.value or part.on_hand_stock <= part.rop)
-            else AlertSeverity.HIGH
-        )
-        alert = create_action_item(
-            session,
-            type="INVOICE_MISMATCH_QUARANTINE",
-            severity=severity,
-            part_criticality=part.criticality,
-            title=f"Stock Quarantined — Invoice Mismatch on {po.po_number} ({part.sku})",
-            summary=(
-                f"Invoice {invoice.invoice_number} (v{invoice.version}) from {supplier.name} "
-                f"failed 3-way match ({match_result.match_status.value}): "
-                f"{match_result.discrepancy_summary}. {grn_qty} units are held in quarantine "
-                "(excluded from on-hand stock). Lex drafted a correction request for approval."
-            ),
-            po_id=po.id,
-            part_id=part.id,
-            draft_comm_id=draft.id,
-            suggested_actions=[
-                {"action": "approve_draft", "label": "Approve & Send Correction Request"},
-                {"action": "reject_draft", "label": "Reject Draft"},
-            ],
-            cta_payload={
-                "draft_comm_id": draft.id,
-                "po_id": po.id,
-                "invoice_id": invoice.id,
-                "invoice_number": invoice.invoice_number,
-                "match_status": match_result.match_status.value,
-                "discrepancy_summary": match_result.discrepancy_summary,
-                "price_diff_per_unit": price_diff,
-                "total_price_impact": total_price_impact,
-                "qty_diff": qty_diff,
-            },
-        )
-        return {"alert_id": alert.id, "draft_comm_id": draft.id}
 
     def record_grn(
         self,
@@ -1324,11 +1307,12 @@ class WorkflowEngine:
 
         alert_id: int | None = None
         draft_comm_id: int | None = None
+        po = session.get(PurchaseOrder, po_id)
+        assert po is not None
+        part = session.get(Part, po.part_id)
+        supplier = session.get(Supplier, po.supplier_id)
+
         if match_result is not None:
-            po = session.get(PurchaseOrder, po_id)
-            assert po is not None
-            part = session.get(Part, po.part_id)
-            supplier = session.get(Supplier, po.supplier_id)
             latest_invoice = session.scalar(
                 select(Invoice)
                 .where(Invoice.po_id == po_id)
@@ -1336,8 +1320,9 @@ class WorkflowEngine:
                 .limit(1)
             )
             if part is not None and supplier is not None and latest_invoice is not None:
-                outcome = self._handle_invoice_match_outcome(
+                outcome = handle_invoice_match_outcome(
                     session,
+                    self,
                     po=po,
                     part=part,
                     supplier=supplier,
@@ -1346,6 +1331,14 @@ class WorkflowEngine:
                 )
                 alert_id = outcome["alert_id"]
                 draft_comm_id = outcome["draft_comm_id"]
+        elif is_grn_damaged(grn.condition) and part is not None:
+            damaged_alert = handle_damaged_grn_created(
+                session,
+                po=po,
+                part=part,
+                grn=grn,
+            )
+            alert_id = damaged_alert.id
 
         session.flush()
         return {
@@ -1809,6 +1802,13 @@ class WorkflowEngine:
             return self.reject_lex_draft(session, draft_id)
 
         if action == "update_po":
+            if (
+                item.type == "CURRENCY_MISMATCH" or cta.get("currency_mismatch")
+            ) and params.get("unit_price") is None:
+                raise ValueError(
+                    "Cannot overwrite INR PO unit_price with a foreign-currency quote. "
+                    "Use 'request_inr_quote' or supply an explicit INR unit_price."
+                )
             po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
             if not po_id:
                 raise ValueError("No po_id linked to this alert")
@@ -1891,6 +1891,77 @@ class WorkflowEngine:
                 "draft_comm_id": draft.id if draft else None,
             }
 
+        if action == "request_inr_quote":
+            po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
+            if not po_id:
+                raise ValueError("No po_id linked to currency mismatch alert")
+            po = get_po(session, po_id)
+            part = session.get(Part, po.part_id)
+            supplier = session.get(Supplier, po.supplier_id)
+            assert part is not None and supplier is not None
+            po_curr = str(cta.get("po_currency") or _term_currency(session, part.id, supplier.id))
+            prop_curr = str(cta.get("proposed_currency") or "foreign currency")
+            prop_price = cta.get("proposed_unit_price")
+            draft = _draft_supplier_general_email(
+                session,
+                self,
+                supplier=supplier,
+                po=po,
+                part=part,
+                thread_id=None,
+                thread_subject=f"[{po.po_number}] {po_curr} Quote Required",
+                context_facts={
+                    "purpose": "inr_quote_request",
+                    "po_currency": po_curr,
+                    "quoted_currency": prop_curr,
+                    "quoted_unit_price": prop_price,
+                    "agreed_unit_price_inr": po.unit_price,
+                    "requested_action": (
+                        f"We cannot process {prop_curr} billing for {po.po_number}. "
+                        f"Please confirm pricing in {po_curr} "
+                        f"(agreed PO rate ₹{po.unit_price:,.2f}/unit) "
+                        "or provide an official INR re-quote."
+                    ),
+                },
+            )
+            quote_alert = create_action_item(
+                session,
+                type="INR_QUOTE_REQUEST_DRAFT",
+                severity=AlertSeverity.HIGH,
+                part_criticality=part.criticality,
+                title=f"Approve {po_curr} re-quote request for {po.po_number} ({supplier.name})",
+                summary=(
+                    f"Lex drafted a reply rejecting {prop_curr} billing on {po.po_number} "
+                    f"and requesting an {po_curr} quote."
+                ),
+                po_id=po.id,
+                part_id=part.id,
+                draft_comm_id=draft.id,
+                suggested_actions=[
+                    {"action": "approve_draft", "label": "Approve & Send INR Quote Request"},
+                    {"action": "reject_draft", "label": "Reject Draft"},
+                ],
+                cta_payload={"draft_comm_id": draft.id, "po_id": po.id},
+            )
+            resolve_action_item(session, item.id)
+            return {
+                "po_id": po.id,
+                "draft_comm_id": draft.id,
+                "alert_id": quote_alert.id,
+            }
+
+        if action == "escalate_procurement":
+            po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
+            if not po_id:
+                raise ValueError("po_id is required")
+            reason = str(params.get("note") or params.get("reason") or item.summary or "")
+            outcome = self.escalate_to_procurement(session, po_id, reason=reason)
+            return {
+                "po_id": outcome["po"].id,
+                "comm_id": outcome["email"].id,
+                "alert_id": outcome["alert"].id,
+            }
+
         if action == "switch_backup_supplier":
             po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
             backup_supplier_id = (
@@ -1955,6 +2026,24 @@ class WorkflowEngine:
 
         if action in STOCK_REQUEST_CTA_ACTIONS:
             return execute_stock_request_cta(
+                session,
+                self,
+                item,
+                action=action,
+                params=params,
+            )
+
+        if action in DAMAGED_GOODS_CTA_ACTIONS:
+            return execute_damaged_goods_cta(
+                session,
+                self,
+                item,
+                action=action,
+                params=params,
+            )
+
+        if action in NET_SETTLEMENT_CTA_ACTIONS:
+            return execute_net_settlement_cta(
                 session,
                 self,
                 item,

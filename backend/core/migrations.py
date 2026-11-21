@@ -16,21 +16,33 @@ _PO_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+_COMM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("attachment_paths_json", "JSON NOT NULL DEFAULT '[]'"),
+)
+
+
+def _add_missing_columns(
+    conn, table_name: str, columns: tuple[tuple[str, str], ...]
+) -> list[str]:
+    rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    if not rows:
+        return []
+    existing_cols = {row[1] for row in rows}
+    added: list[str] = []
+    for col_name, col_def in columns:
+        if col_name not in existing_cols:
+            conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}"))
+            added.append(f"{table_name}.{col_name}")
+    return added
+
+
 def ensure_schema_migrations(target_engine: Engine) -> list[str]:
-    """Idempotently add missing Phase 2 columns on existing SQLite databases."""
+    """Idempotently add missing Phase 2 / Fix-pack columns on existing SQLite databases."""
     if target_engine.dialect.name != "sqlite":
         return []
 
     added: list[str] = []
     with target_engine.begin() as conn:
-        rows = conn.execute(text("PRAGMA table_info(purchase_orders)")).fetchall()
-        if not rows:
-            return []
-        existing_cols = {row[1] for row in rows}
-        for col_name, col_def in _PO_ADDITIVE_COLUMNS:
-            if col_name not in existing_cols:
-                conn.execute(
-                    text(f"ALTER TABLE purchase_orders ADD COLUMN {col_name} {col_def}")
-                )
-                added.append(f"purchase_orders.{col_name}")
+        added.extend(_add_missing_columns(conn, "purchase_orders", _PO_ADDITIVE_COLUMNS))
+        added.extend(_add_missing_columns(conn, "po_communications", _COMM_ADDITIVE_COLUMNS))
     return added

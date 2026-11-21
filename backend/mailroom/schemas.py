@@ -16,6 +16,7 @@ class OutboundMessage(BaseModel):
     thread_id: str | None = None
     category: EmailCategory = EmailCategory.GENERAL
     attachment_path: str | None = None
+    attachment_paths: list[str] = Field(default_factory=list)
 
 
 class StoredEmail(BaseModel):
@@ -31,6 +32,7 @@ class StoredEmail(BaseModel):
     subject: str
     body: str
     attachment_path: str | None
+    attachment_paths: list[str] = Field(default_factory=list)
     ai_classification: str | None
     ai_extracted_json: dict[str, Any] | None
     ai_confidence: float | None

@@ -37,8 +37,8 @@ from backend.planning import (
 
 
 def test_ewma_forecast_steady_vs_intermittent_and_manual_override(seeded_session):
-    steady_part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
-    intermittent_part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-005"))
+    steady_part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
+    intermittent_part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-405"))
     assert steady_part is not None and intermittent_part is not None
 
     steady_fc = compute_demand_forecast(seeded_session, steady_part)
@@ -110,7 +110,7 @@ def test_supplier_reliability_scores_rank_sup1_above_sup3_above_sup2(seeded_sess
 
 def test_sup2_late_deliveries_raise_effective_lead_time_and_rop(seeded_session):
     # SKU-002 primary supplier is Sup2 (quotes 15d, actually delivers ~21-26d across 3 closed POs)
-    sku2 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-002"))
+    sku2 = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
     sup2 = seeded_session.scalar(
         select(Supplier).where(Supplier.persona_key == PersonaKey.SUP2.value)
     )
@@ -146,14 +146,14 @@ def test_sup2_late_deliveries_raise_effective_lead_time_and_rop(seeded_session):
     assert term.effective_lead_time_days == lt_res.effective_lead_time_days
     assert term.lead_time_std_dev == lt_res.lead_time_std_dev
 
-    sku2_rec = next(r for r in summary.recommendations if r.sku == "SKU-002")
+    sku2_rec = next(r for r in summary.recommendations if r.sku == "VLV-204")
     assert sku2_rec.effective_lead_time_days > sku2_rec.quoted_lead_time_days
     assert sku2_rec.recommended_rop > optimistic_rec.recommended_rop
     assert sku2_rec.recommended_rop > sku2.rop
     assert sku2_rec.needs_update is True
 
     # SKU-013 has 0 historical closed POs (< 3 deliveries) -> falls back to quoted_lead_time_days
-    sku13 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-013"))
+    sku13 = seeded_session.scalar(select(Part).where(Part.sku == "ORG-112"))
     assert sku13 is not None
     term13 = seeded_session.scalar(
         select(PartSupplierTerm).where(
@@ -167,7 +167,7 @@ def test_sup2_late_deliveries_raise_effective_lead_time_and_rop(seeded_session):
 
 
 def test_z_factor_monotonic_by_criticality(seeded_session):
-    part = seeded_session.scalar(select(Part).where(Part.sku == "SKU-002"))
+    part = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
     assert part is not None
     term = seeded_session.scalar(
         select(PartSupplierTerm).where(
@@ -231,7 +231,7 @@ def test_planning_api_recalculate_alerts_and_apply_recommendation(seeded_session
         assert isinstance(rop_alert["urgency_score"], int)
         assert rop_alert["urgency_score"] >= 35
 
-    sku2_rec = next(r for r in recalc_data["recommendations"] if r["sku"] == "SKU-002")
+    sku2_rec = next(r for r in recalc_data["recommendations"] if r["sku"] == "VLV-204")
     part_id = sku2_rec["part_id"]
 
     # 3. Apply recommendation via dedicated planning endpoint updates Part & resolves alert
@@ -283,7 +283,7 @@ def test_overdue_po_without_grn_penalizes_supplier_otd_and_reliability_score(see
     sup1 = seeded_session.scalar(
         select(Supplier).where(Supplier.persona_key == PersonaKey.SUP1.value)
     )
-    sku1 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-001"))
+    sku1 = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert sup1 is not None and sku1 is not None
 
     baseline_score = compute_supplier_score(seeded_session, sup1)
@@ -421,7 +421,7 @@ def test_evaluate_part_recommendation_matches_overview_even_with_stale_persisted
     get_planning_overview() even when PartSupplierTerm has stale persisted columns before
     /api/planning/recalculate is called.
     """
-    sku2 = seeded_session.scalar(select(Part).where(Part.sku == "SKU-002"))
+    sku2 = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
     assert sku2 is not None
     term = seeded_session.scalar(
         select(PartSupplierTerm).where(

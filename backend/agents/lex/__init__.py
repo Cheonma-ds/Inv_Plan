@@ -1,6 +1,7 @@
 from backend.agents.lex.agent import CONFIDENCE_THRESHOLD, LexAgent
 from backend.agents.lex.eval_adapter import LexEvalExecutor
 from backend.agents.lex.schemas import (
+    AdditionalPOUpdate,
     EmailDraftInput,
     EmailDraftResult,
     EmailIntent,
@@ -9,6 +10,7 @@ from backend.agents.lex.schemas import (
     InvoiceExtractionResult,
     InvoiceLineItem,
     OpenPOContext,
+    PDFDocumentType,
     PendingStockRequestContext,
     StockPartContext,
     StockRequestIntent,
@@ -20,6 +22,7 @@ from backend.agents.lex.schemas import (
 
 __all__ = [
     "CONFIDENCE_THRESHOLD",
+    "AdditionalPOUpdate",
     "EmailDraftInput",
     "EmailDraftResult",
     "EmailIntent",
@@ -30,6 +33,7 @@ __all__ = [
     "LexAgent",
     "LexEvalExecutor",
     "OpenPOContext",
+    "PDFDocumentType",
     "PendingStockRequestContext",
     "StockPartContext",
     "StockRequestIntent",

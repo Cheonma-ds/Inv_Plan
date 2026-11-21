@@ -34,6 +34,23 @@ const PERSONAS: PersonaKey[] = [
 
 type MailboxFolder = 'inbox' | 'sent' | 'drafts';
 
+function emailAttachments(email: Pick<StoredEmail, 'attachment_path' | 'attachment_paths'>): string[] {
+  if (Array.isArray(email.attachment_paths) && email.attachment_paths.length > 0) {
+    return email.attachment_paths;
+  }
+  return email.attachment_path ? [email.attachment_path] : [];
+}
+
+function attachmentBasename(rawPath: string): string {
+  const parts = rawPath.split('/');
+  return parts[parts.length - 1] || rawPath;
+}
+
+function attachmentExtLabel(rawPath: string): string {
+  const ext = rawPath.split('.').pop()?.toUpperCase();
+  return ext || 'FILE';
+}
+
 export function MailroomPage({
   refreshNonce,
   onMutated,
@@ -60,7 +77,7 @@ export function MailroomPage({
   const [composeBody, setComposeBody] = useState('');
   const [composePoId, setComposePoId] = useState<string>('');
   const [composeThreadId, setComposeThreadId] = useState<string>('');
-  const [composeFile, setComposeFile] = useState<File | null>(null);
+  const [composeFiles, setComposeFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
 
   const loadFolder = useCallback(async () => {
@@ -162,7 +179,7 @@ export function MailroomPage({
       setComposePoId('');
       setComposeThreadId('');
     }
-    setComposeFile(null);
+    setComposeFiles([]);
     setComposeOpen(true);
   };
 
@@ -218,8 +235,8 @@ export function MailroomPage({
       if (composePoId) fd.append('po_id', composePoId);
       if (composeThreadId) fd.append('thread_id', composeThreadId);
       fd.append('category', 'GENERAL');
-      if (composeFile) {
-        fd.append('attachment', composeFile);
+      for (const file of composeFiles) {
+        fd.append('attachments', file);
       }
 
       const res = await api.sendEmail(fd);
@@ -439,12 +456,15 @@ export function MailroomPage({
                           PENDING APPROVAL
                         </span>
                       )}
-                      {email.attachment_path && (
-                        <span className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-medium text-[#6E6E73]">
+                      {emailAttachments(email).map((attPath) => (
+                        <span
+                          key={attPath}
+                          className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-medium text-[#6E6E73]"
+                        >
                           <Paperclip className="h-2.5 w-2.5" />
-                          PDF
+                          {attachmentExtLabel(attPath)}
                         </span>
-                      )}
+                      ))}
                       {email.po_id && (
                         <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-medium text-[#6E6E73] tabular-nums">
                           PO #{email.po_id}
@@ -587,10 +607,17 @@ export function MailroomPage({
                       {msg.body}
                     </p>
 
-                    {msg.attachment_path && (
-                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-black/[0.08] bg-[#FBFBFD] px-2.5 py-1 text-[11px] font-medium text-[#6E6E73]">
-                        <Paperclip className="h-3 w-3" />
-                        {msg.attachment_path}
+                    {emailAttachments(msg).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {emailAttachments(msg).map((attPath) => (
+                          <div
+                            key={attPath}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-black/[0.08] bg-[#FBFBFD] px-2.5 py-1 text-[11px] font-medium text-[#6E6E73]"
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            <span>{attachmentBasename(attPath)}</span>
+                          </div>
+                        ))}
                       </div>
                     )}
 
@@ -716,14 +743,55 @@ export function MailroomPage({
 
                 <div>
                   <label className="block font-semibold text-[#1D1D1F] mb-1">
-                    PDF Attachment (optional)
+                    Attachments (.pdf, .csv, .jpg, .png)
                   </label>
                   <input
                     type="file"
-                    accept=".pdf,application/pdf"
-                    onChange={(e) => setComposeFile(e.target.files?.[0] ?? null)}
+                    multiple
+                    accept=".pdf,.csv,.jpg,.jpeg,.png,application/pdf,text/csv,image/jpeg,image/png"
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files ?? []);
+                      if (picked.length > 0) {
+                        setComposeFiles((prev) => {
+                          const existing = new Set(prev.map((f) => `${f.name}:${f.size}`));
+                          const next = [...prev];
+                          for (const f of picked) {
+                            const key = `${f.name}:${f.size}`;
+                            if (!existing.has(key)) {
+                              next.push(f);
+                              existing.add(key);
+                            }
+                          }
+                          return next;
+                        });
+                      }
+                      e.target.value = '';
+                    }}
                     className="w-full text-xs text-[#6E6E73] file:mr-2 file:rounded-full file:border-0 file:bg-black/[0.06] file:px-3 file:py-1 file:text-xs file:font-semibold file:text-[#1D1D1F] hover:file:bg-black/[0.10]"
                   />
+                  {composeFiles.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {composeFiles.map((file, idx) => (
+                        <span
+                          key={`${file.name}-${idx}`}
+                          className="inline-flex items-center gap-1 rounded-full border border-black/[0.08] bg-[#FBFBFD] px-2.5 py-0.5 text-[11px] font-medium text-[#1D1D1F]"
+                        >
+                          <Paperclip className="h-3 w-3 text-[#6E6E73]" />
+                          <span className="max-w-[160px] truncate">{file.name}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${file.name}`}
+                            onClick={() =>
+                              setComposeFiles((prev) => prev.filter((_, i) => i !== idx))
+                            }
+                            className="rounded-full p-0.5 text-[#86868B] hover:bg-black/[0.06] hover:text-[#1D1D1F]"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 

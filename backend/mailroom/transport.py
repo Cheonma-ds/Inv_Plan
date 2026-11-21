@@ -26,7 +26,25 @@ class InvalidDraftStateError(ValueError):
     """Raised when attempting to approve or reject a non-draft communication."""
 
 
+def _normalize_attachment_paths(
+    primary: str | None,
+    paths: list[str] | None,
+) -> tuple[str | None, list[str]]:
+    merged: list[str] = []
+    for p in paths or []:
+        if p and p not in merged:
+            merged.append(p)
+    if primary and primary not in merged:
+        merged.insert(0, primary)
+    first = primary or (merged[0] if merged else None)
+    return first, merged
+
+
 def _to_stored_email(row: POCommunication) -> StoredEmail:
+    primary, paths = _normalize_attachment_paths(
+        row.attachment_path,
+        list(getattr(row, "attachment_paths_json", None) or []),
+    )
     return StoredEmail(
         id=row.id,
         po_id=row.po_id,
@@ -39,7 +57,8 @@ def _to_stored_email(row: POCommunication) -> StoredEmail:
         cc_personas=list(row.cc_personas or []),
         subject=row.subject,
         body=row.body,
-        attachment_path=row.attachment_path,
+        attachment_path=primary,
+        attachment_paths=paths,
         ai_classification=row.ai_classification,
         ai_extracted_json=row.ai_extracted_json,
         ai_confidence=row.ai_confidence,
@@ -113,6 +132,9 @@ class DatabaseEmailTransport:
         status = CommStatus.RECEIVED.value if is_inbound else CommStatus.SENT.value
         thread_id = msg.thread_id or f"thr-{uuid.uuid4().hex[:12]}"
 
+        primary_att, all_atts = _normalize_attachment_paths(
+            msg.attachment_path, msg.attachment_paths
+        )
         row = POCommunication(
             po_id=msg.po_id,
             thread_id=thread_id,
@@ -124,7 +146,8 @@ class DatabaseEmailTransport:
             cc_personas=[p.value for p in msg.cc_personas],
             subject=msg.subject.strip(),
             body=msg.body.strip(),
-            attachment_path=msg.attachment_path,
+            attachment_path=primary_att,
+            attachment_paths_json=all_atts,
             timestamp=clock.now(session),
         )
         session.add(row)
@@ -133,6 +156,9 @@ class DatabaseEmailTransport:
 
     def save_draft(self, session: Session, msg: OutboundMessage) -> StoredEmail:
         thread_id = msg.thread_id or f"thr-{uuid.uuid4().hex[:12]}"
+        primary_att, all_atts = _normalize_attachment_paths(
+            msg.attachment_path, msg.attachment_paths
+        )
         row = POCommunication(
             po_id=msg.po_id,
             thread_id=thread_id,
@@ -144,7 +170,8 @@ class DatabaseEmailTransport:
             cc_personas=[p.value for p in msg.cc_personas],
             subject=msg.subject.strip(),
             body=msg.body.strip(),
-            attachment_path=msg.attachment_path,
+            attachment_path=primary_att,
+            attachment_paths_json=all_atts,
             timestamp=clock.now(session),
         )
         session.add(row)

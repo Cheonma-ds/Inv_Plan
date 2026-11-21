@@ -30,7 +30,7 @@ def test_live_gemini_pdf_invoice_extraction_and_deterministic_match(seeded_sessi
         invoice_date="2026-11-20",
         lines=[
             InvoiceLineSpec(
-                sku="SKU-002",
+                sku="VLV-204",
                 description="Linear Guide Rail 1200mm",
                 qty=6,
                 unit_price=5250.0,

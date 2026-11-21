@@ -1,4 +1,9 @@
-from backend.mailroom.attachments import InvalidAttachmentError, save_pdf_attachment
+from backend.mailroom.attachments import (
+    InvalidAttachmentError,
+    inspect_pdf_readability,
+    save_mailroom_attachment,
+    save_pdf_attachment,
+)
 from backend.mailroom.schemas import OutboundMessage, StoredEmail
 from backend.mailroom.service import (
     CommunicationNotFoundError,
@@ -33,11 +38,13 @@ __all__ = [
     "approve_draft",
     "get_communication",
     "get_thread",
+    "inspect_pdf_readability",
     "list_drafts",
     "list_inbox",
     "list_sent",
     "reject_draft",
     "save_draft",
+    "save_mailroom_attachment",
     "save_pdf_attachment",
     "send_email",
 ]

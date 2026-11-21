@@ -114,7 +114,7 @@ class InvoicePipelineMockLLM:
 
 
 def _setup_delivered_po(
-    seeded_session, *, sku: str = "SKU-002", qty: int = 6, price: float = 4800.0
+    seeded_session, *, sku: str = "VLV-204", qty: int = 6, price: float = 4800.0
 ):
     part = seeded_session.scalar(select(Part).where(Part.sku == sku))
     sup = seeded_session.scalar(
@@ -147,7 +147,7 @@ def test_lex_extract_invoice_logs_trace_and_enforces_empty_lines_guardrail(seede
         invoice_date="2026-11-20",
         lines=[
             InvoiceLineSpec(
-                sku="SKU-002", description="Linear Guide Rail", qty=6, unit_price=4800.0
+                sku="VLV-204", description="Linear Guide Rail", qty=6, unit_price=4800.0
             )
         ],
     )
@@ -174,7 +174,7 @@ def test_lex_extract_invoice_logs_trace_and_enforces_empty_lines_guardrail(seede
 
 
 def test_scenario_1c_price_mismatch_quarantine_draft_then_corrected_v2_release(seeded_session):
-    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-002", qty=6, price=4800.0)
+    part, sup, po = _setup_delivered_po(seeded_session, sku="VLV-204", qty=6, price=4800.0)
     starting_on_hand = part.on_hand_stock
     llm = InvoicePipelineMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -312,7 +312,7 @@ def test_scenario_1c_price_mismatch_quarantine_draft_then_corrected_v2_release(s
 
 
 def test_qty_mismatch_and_invoice_before_grn_triggers_quarantine_on_grn(seeded_session):
-    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-004", qty=10, price=2200.0)
+    part, sup, po = _setup_delivered_po(seeded_session, sku="PMP-701", qty=10, price=2200.0)
     llm = InvoicePipelineMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
     client = _make_client(seeded_session, engine)
@@ -384,7 +384,7 @@ def test_qty_mismatch_and_invoice_before_grn_triggers_quarantine_on_grn(seeded_s
 
 
 def test_low_confidence_pdf_extraction_escalates_with_zero_po_mutation(seeded_session):
-    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-007", qty=8, price=950.0)
+    part, sup, po = _setup_delivered_po(seeded_session, sku="BLT-301", qty=8, price=950.0)
     starting_on_hand = part.on_hand_stock
     llm = InvoicePipelineMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -451,7 +451,7 @@ def test_low_confidence_pdf_extraction_escalates_with_zero_po_mutation(seeded_se
 
 
 def test_clean_match_v1_pdf_releases_stock_and_closes_po_immediately(seeded_session):
-    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-002", qty=4, price=4800.0)
+    part, sup, po = _setup_delivered_po(seeded_session, sku="VLV-204", qty=4, price=4800.0)
     starting_on_hand = part.on_hand_stock
     llm = InvoicePipelineMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
@@ -523,7 +523,7 @@ def test_multiline_invoice_weighted_price_detects_subtotal_math_error_and_match_
     unit price from line items (not subtotal/qty) so subtotal arithmetic errors are caught
     (math_ok=False), and _handle_invoice_match_outcome consumes match_result fields directly.
     """
-    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-002", qty=6, price=2000.0)
+    part, sup, po = _setup_delivered_po(seeded_session, sku="VLV-204", qty=6, price=2000.0)
     llm = InvoicePipelineMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
     client = _make_client(seeded_session, engine)
@@ -606,7 +606,7 @@ def test_cancelling_or_switching_quarantined_po_clears_quarantined_stock_and_res
     (or cancelling it via cancel_po CTA) clears part.quarantined_stock back to 0 and
     auto-resolves open alerts on the cancelled PO.
     """
-    part, sup, po = _setup_delivered_po(seeded_session, sku="SKU-002", qty=6, price=4800.0)
+    part, sup, po = _setup_delivered_po(seeded_session, sku="VLV-204", qty=6, price=4800.0)
     llm = InvoicePipelineMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
     client = _make_client(seeded_session, engine)

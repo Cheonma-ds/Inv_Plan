@@ -200,6 +200,7 @@ class POCommunication(Base):
     subject: Mapped[str] = mapped_column(String(300), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attachment_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    attachment_paths_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     ai_classification: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ai_extracted_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     ai_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

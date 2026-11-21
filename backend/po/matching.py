@@ -25,6 +25,7 @@ class ThreeWayMatchResult(BaseModel):
     total_price_impact: float
     qty_diff: int
     discrepancy_summary: str
+    damaged_hold: bool = False
     stock_action: str = "NONE"
     stock_qty: int = 0
     stock_note: str = ""

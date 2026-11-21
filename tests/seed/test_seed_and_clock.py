@@ -59,7 +59,7 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
     assert summary["suppliers"] == 3
     assert summary["parts"] == 15
     assert summary["closed_pos"] == 36
-    assert summary["open_pos"] == 2
+    assert summary["open_pos"] == 4
 
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with factory() as session:
@@ -108,7 +108,7 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
             )
         )
         assert closed_count == 36
-        assert open_count == 2
+        assert open_count == 4
 
         # Verify distinct lifecycle timestamps and logistics metadata on seeded POs (Slice P2-3)
         all_pos = session.scalars(select(PurchaseOrder)).all()
@@ -184,14 +184,14 @@ def test_fastapi_lifespan_empty_db_and_admin_reset_seed_endpoint(
         assert body["summary"]["suppliers"] == 3
         assert body["summary"]["parts"] == 15
         assert body["summary"]["closed_pos"] == 36
-        assert body["summary"]["open_pos"] == 2
+        assert body["summary"]["open_pos"] == 4
 
         clock_resp = client.get("/api/clock")
         assert clock_resp.status_code == 200
         assert clock_resp.json()["sim_now"] == SEED_START_TIME.isoformat()
 
         parts_after = client.get("/api/parts").json()
-        sku1 = next(p for p in parts_after if p["sku"] == "SKU-001")
+        sku1 = next(p for p in parts_after if p["sku"] == "BRG-402")
         assert sku1["rop"] == 3
 
     test_engine.dispose()
