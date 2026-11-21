@@ -197,12 +197,39 @@ def test_ack_deferred_2d_sla_expiry_nudge_and_followup_completion(seeded_session
     assert deferred_alert.severity == AlertSeverity.INFO.value
     assert "2-day" in deferred_alert.summary
 
-    # 2. Advance +1 day -> 2-day timer must NOT fire early
+    # 2. Advance +1 day, receive an early partial carrier update without tracking ->
+    #    must preserve DEFERRED_2D + original 2-day due_at and emit PO_LOGISTICS_UPDATED
     day1 = engine.advance_clock_and_watch(seeded_session, days=1)
     assert not any(
         e.po_id == po_await.id and e.event_type == "DISPATCH_DETAILS_NUDGE_DRAFTED"
         for e in day1["sla_events"]
     )
+    expected_due_at = clock.ensure_utc(po_await.dispatch_details_due_at)
+    llm.next_triage = EmailTriageResult(
+        matched_po_number=po_await.po_number,
+        intent=EmailIntent.GENERAL_REPLY,
+        confidence=0.94,
+        promised_dispatch_date="2026-11-22",
+        details_promised_later=False,
+        summary_for_manager=f"{po_await.po_number} scheduled for dispatch on 2026-11-22.",
+        suggested_action="Wait for tracking number.",
+        reasoning="Partial logistics update while still within 2-day deferral window.",
+    )
+    partial_res = engine.send_mailroom_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.SUP3,
+            to_personas=[PersonaKey.LEX],
+            subject=f"Re: {po_await.po_number}",
+            body="We plan to dispatch on 2026-11-22; tracking to follow.",
+            po_id=po_await.id,
+        ),
+    )
+    seeded_session.refresh(po_await)
+    assert po_await.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
+    assert clock.ensure_utc(po_await.dispatch_details_due_at) == expected_due_at
+    partial_alert = seeded_session.get(ActionItem, partial_res["triage"]["alert_id"])
+    assert partial_alert is not None and partial_alert.type == "PO_LOGISTICS_UPDATED"
 
     # 3. Advance +1 more day (+2d total) -> TIMED_OUT + DISPATCH_DETAILS_NUDGE draft + HIGH alert
     day2 = engine.advance_clock_and_watch(seeded_session, days=1)
@@ -538,3 +565,41 @@ def test_http_pos_serialization_and_escalate_to_procurement_endpoint(seeded_sess
         json={"reason": "Missing"},
     )
     assert bad_missing.status_code == 404
+
+
+def test_general_reply_on_unacknowledged_po_does_not_mutate_dispatch_status(
+    seeded_session,
+) -> None:
+    po_await = seeded_session.scalar(
+        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
+    )
+    assert po_await is not None
+    assert po_await.dispatch_details_status == DispatchDetailsStatus.NONE.value
+
+    llm = _LogisticsMockLLM(
+        next_triage=EmailTriageResult(
+            matched_po_number=po_await.po_number,
+            intent=EmailIntent.GENERAL_REPLY,
+            confidence=0.92,
+            carrier_name="BlueDart",
+            summary_for_manager=f"Supplier asked a question on {po_await.po_number}.",
+            suggested_action="Reply with GST details.",
+            reasoning="Question prior to PO ack.",
+        )
+    )
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+    res = engine.send_mailroom_email(
+        seeded_session,
+        OutboundMessage(
+            from_persona=PersonaKey.SUP3,
+            to_personas=[PersonaKey.LEX],
+            subject=f"Question on {po_await.po_number}",
+            body="We normally use BlueDart — can you confirm your GSTIN?",
+            po_id=po_await.id,
+        ),
+    )
+    seeded_session.refresh(po_await)
+    assert po_await.status == POStatus.SENT_AWAITING_ACK.value
+    assert po_await.dispatch_details_status == DispatchDetailsStatus.NONE.value
+    alert = seeded_session.get(ActionItem, res["triage"]["alert_id"])
+    assert alert is not None and alert.type == "SUPPLIER_MESSAGE"

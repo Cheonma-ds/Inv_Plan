@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.agents.lex import EmailTriageResult
 from backend.core import clock
-from backend.core.enums import AlertSeverity, DispatchDetailsStatus, EmailCategory
+from backend.core.enums import AlertSeverity, DispatchDetailsStatus, EmailCategory, POStatus
 from backend.core.models import ActionItem, Part, PurchaseOrder, Supplier, SupplierMemoryNote
 from backend.mailroom import StoredEmail
 from backend.orchestrator.sla_watcher import auto_resolve_po_alerts
@@ -291,7 +291,12 @@ def handle_followup_logistics_update(
     create_plain_message_fallback: bool = True,
 ) -> dict[str, Any]:
     """Apply logistics updates from follow-up supplier emails and notify InventoryManager."""
-    if not has_logistics_payload(triage_result):
+    post_ack_statuses = (
+        POStatus.ACKNOWLEDGED.value,
+        POStatus.DELAYED_CRITICAL.value,
+        POStatus.OVERDUE.value,
+    )
+    if po.status not in post_ack_statuses or not has_logistics_payload(triage_result):
         if not create_plain_message_fallback:
             return {"alert": None, "draft": None, "logistics": None}
         alert = create_action_item(
@@ -308,6 +313,7 @@ def handle_followup_logistics_update(
         return {"alert": alert, "draft": None, "logistics": None}
 
     prev_status = po.dispatch_details_status
+    prev_due_at = po.dispatch_details_due_at
     repeated_deferral = (
         triage_result.details_promised_later
         and prev_status
@@ -328,6 +334,19 @@ def handle_followup_logistics_update(
             False if repeated_deferral else triage_result.details_promised_later
         ),
     )
+
+    # Preserve existing DEFERRED_2D deadline on partial updates so the 2-day SLA neither
+    # disappears (early partial info) nor resets endlessly (repeated deferral).
+    if (
+        prev_status == DispatchDetailsStatus.DEFERRED_2D.value
+        and prev_due_at is not None
+        and logistics_res.missing_fields
+    ):
+        po.dispatch_details_status = DispatchDetailsStatus.DEFERRED_2D.value
+        po.dispatch_details_due_at = prev_due_at
+        logistics_res.dispatch_details_status = DispatchDetailsStatus.DEFERRED_2D.value
+        logistics_res.dispatch_details_due_at = prev_due_at
+        session.flush()
 
     # Prevent infinite DEFERRED_2D loop if supplier repeats a deferral while already TIMED_OUT
     if (
@@ -423,7 +442,10 @@ def handle_followup_logistics_update(
         )
         return {"alert": alert, "draft": None, "logistics": logistics_res}
 
-    if logistics_res.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value:
+    if (
+        logistics_res.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
+        and prev_status != DispatchDetailsStatus.DEFERRED_2D.value
+    ):
         assert logistics_res.dispatch_details_due_at is not None
         due_str = clock.ensure_utc(logistics_res.dispatch_details_due_at).date().isoformat()
         missing_text = _format_missing_fields(logistics_res.missing_fields)
@@ -465,11 +487,18 @@ def handle_followup_logistics_update(
 
     if logistics_res.changed_fields:
         missing_text = _format_missing_fields(logistics_res.missing_fields)
+        due_clause = (
+            f" 2-day check-in remains scheduled for "
+            f"{clock.ensure_utc(po.dispatch_details_due_at).date().isoformat()}."
+            if po.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
+            and po.dispatch_details_due_at is not None
+            else ""
+        )
         append_po_note(
             session,
             po,
             f"Logistics updated via email #{email.id} ({changed_text}). "
-            f"Still missing: [{missing_text}].",
+            f"Still missing: [{missing_text}].{due_clause}",
         )
         alert = create_action_item(
             session,
@@ -479,7 +508,7 @@ def handle_followup_logistics_update(
             title=f"Logistics updated on {po.po_number} ({part.sku})",
             summary=(
                 f"Lex updated {po.po_number} from {supplier.name}: {changed_text}. "
-                f"Still missing [{missing_text}]."
+                f"Still missing [{missing_text}].{due_clause}"
             ),
             po_id=po.id,
             part_id=part.id,
