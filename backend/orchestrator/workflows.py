@@ -1665,8 +1665,14 @@ class WorkflowEngine:
             context_facts={
                 "order_qty": new_po.qty,
                 "unit_price": new_po.unit_price,
+                "total_value": round(new_po.qty * new_po.unit_price, 2),
                 "quoted_lead_time_days": quoted_lt,
+                "part_criticality": part.criticality,
                 "backup_failover": True,
+                "instruction": (
+                    "Initial PO placement to backup supplier. Issue this as a brand-new order "
+                    "and request acknowledgement; do NOT check dispatch status."
+                ),
             },
         )
         alert = create_action_item(
@@ -1699,6 +1705,153 @@ class WorkflowEngine:
             "alert_id": alert.id,
             "quarantined_cleared_qty": cleared_qty,
         }
+
+    def _get_part_supplier_term(
+        self, session: Session, *, part_id: int, supplier_id: int
+    ) -> tuple[Part, Supplier, PartSupplierTerm]:
+        part = session.get(Part, part_id)
+        if part is None:
+            raise ValueError(f"Part {part_id} not found")
+        supplier = session.get(Supplier, supplier_id)
+        if supplier is None:
+            raise ValueError(f"Supplier {supplier_id} not found")
+        term = session.scalar(
+            select(PartSupplierTerm).where(
+                PartSupplierTerm.part_id == part_id,
+                PartSupplierTerm.supplier_id == supplier_id,
+            )
+        )
+        if term is None:
+            raise ValueError(
+                f"Supplier {supplier.name} is not configured for part {part.sku}"
+            )
+        return part, supplier, term
+
+    def generate_manual_po_draft(
+        self,
+        session: Session,
+        *,
+        part_id: int,
+        supplier_id: int,
+        qty: int,
+    ) -> dict[str, Any]:
+        """Generate an editable Lex PO_DISPATCH email draft for a user-configured manual PO."""
+        if qty <= 0:
+            raise ValueError("Order quantity must be greater than 0")
+        part, supplier, term = self._get_part_supplier_term(
+            session, part_id=part_id, supplier_id=supplier_id
+        )
+        sim_now = clock.now(session)
+        currency = term.currency or "INR"
+        total_value = round(qty * term.agreed_unit_price, 2)
+        draft_res = self.lex.draft_email(
+            session,
+            EmailDraftInput(
+                category=EmailCategory.PO_DISPATCH,
+                po_number="",
+                part_sku=part.sku,
+                part_name=part.name,
+                qty=qty,
+                unit_price=term.agreed_unit_price,
+                currency=currency,
+                recipient_persona=supplier.persona_key,
+                recipient_name=supplier.name,
+                current_date=sim_now.date().isoformat(),
+                supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
+                required_cc_personas=[PersonaKey.INVENTORY_MANAGER.value, PersonaKey.LEX.value],
+                context_facts={
+                    "currency": currency,
+                    "order_qty": qty,
+                    "unit_price": term.agreed_unit_price,
+                    "total_value": total_value,
+                    "quoted_lead_time_days": term.quoted_lead_time_days,
+                    "effective_lead_time_days": term.effective_lead_time_days,
+                    "part_criticality": part.criticality,
+                    "manual_po": True,
+                    "instruction": (
+                        "Initial PO placement for a new manual order. Do not invent a PO number "
+                        "(the system will assign PO-XXXX on send); request supplier "
+                        "acknowledgement and dispatch timeline."
+                    ),
+                },
+            ),
+        )
+        return {
+            "subject": draft_res.subject,
+            "body": draft_res.body,
+            "to_personas": draft_res.to_personas,
+            "cc_personas": [PersonaKey.LEX.value, PersonaKey.INVENTORY_MANAGER.value],
+            "unit_price": term.agreed_unit_price,
+            "total_amount": total_value,
+            "currency": currency,
+        }
+
+    def create_manual_po(
+        self,
+        session: Session,
+        *,
+        part_id: int,
+        supplier_id: int,
+        qty: int,
+        subject: str,
+        body: str,
+    ) -> dict[str, Any]:
+        """Create a manual PO, dispatch email to supplier (CC lex + manager), and start SLA."""
+        if qty <= 0:
+            raise ValueError("Order quantity must be greater than 0")
+        clean_subject = subject.strip()
+        clean_body = body.strip()
+        if not clean_subject or not clean_body:
+            raise ValueError("Email subject and body are required")
+
+        part, supplier, term = self._get_part_supplier_term(
+            session, part_id=part_id, supplier_id=supplier_id
+        )
+        sim_now = clock.now(session)
+        po = create_po(
+            session,
+            part_id=part.id,
+            supplier_id=supplier.id,
+            qty=qty,
+            unit_price=term.agreed_unit_price,
+            initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
+            notes=(
+                f"Manual PO created via Inventory & Parts "
+                f"({qty} units @ ₹{term.agreed_unit_price:,.2f})."
+            ),
+        )
+        promised_eta = sim_now + timedelta(days=term.quoted_lead_time_days)
+        transition_po(
+            session,
+            po,
+            POStatus.SENT_AWAITING_ACK,
+            promised_eta=promised_eta,
+            note="Manual PO created and dispatched to supplier.",
+        )
+        is_critical = part.criticality == Criticality.CRITICAL.value
+        po.follow_up_count = 0
+        po.next_sla_check_at = sim_now + timedelta(hours=24 if is_critical else 48)
+
+        final_subject = (
+            clean_subject
+            if po.po_number in clean_subject
+            else f"[{po.po_number}] {clean_subject}"
+        )
+        sent_email = send_email(
+            session,
+            OutboundMessage(
+                from_persona=PersonaKey.INVENTORY_MANAGER,
+                to_personas=[PersonaKey(supplier.persona_key)],
+                cc_personas=[PersonaKey.LEX, PersonaKey.INVENTORY_MANAGER],
+                subject=final_subject,
+                body=clean_body,
+                po_id=po.id,
+                category=EmailCategory.PO_DISPATCH,
+            ),
+            allow_agent_send=False,
+        )
+        session.flush()
+        return {"po": po, "email": sent_email}
 
     def escalate_to_procurement(
         self,

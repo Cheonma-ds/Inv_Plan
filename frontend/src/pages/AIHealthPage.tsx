@@ -763,7 +763,7 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                           </>
                         ) : (
                           <>
-                            <ChevronRight className="h-3 w-3" /> Raw Prompt / Output
+                            <ChevronRight className="h-3 w-3" /> Raw Prompt/Output
                           </>
                         )}
                       </button>

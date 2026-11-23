@@ -10,6 +10,8 @@ import type {
   EvalRunReport,
   EvalSuiteMetadata,
   MailroomSendResponse,
+  ManualPOCreateResponse,
+  ManualPODraftResponse,
   ObservabilityStatusResponse,
   PODetail,
   POListItem,
@@ -144,6 +146,19 @@ export const api = {
     jsonPost<EscalateProcurementResponse>(`/api/pos/${poId}/escalate-procurement`, {
       reason,
     }),
+  generateManualPoDraft: (partId: number, supplierId: number, qty: number) =>
+    jsonPost<ManualPODraftResponse>('/api/pos/draft-manual', {
+      part_id: partId,
+      supplier_id: supplierId,
+      qty,
+    }),
+  createManualPo: (payload: {
+    part_id: number;
+    supplier_id: number;
+    qty: number;
+    subject: string;
+    body: string;
+  }) => jsonPost<ManualPOCreateResponse>('/api/pos/manual', payload),
 
   // Mailroom
   listInbox: (persona: PersonaKey) =>

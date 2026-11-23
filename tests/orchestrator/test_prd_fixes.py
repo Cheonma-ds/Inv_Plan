@@ -898,3 +898,83 @@ def test_f4_1_and_f4_3_ambiguous_clarification_draft_and_eta_0900_normalization(
     assert eta_dt is not None
     assert eta_dt.hour == 9 and eta_dt.minute == 0
     assert eta_dt == clock.now(seeded_session) + timedelta(days=2)
+
+
+def test_backup_failover_po_dispatch_prompt_and_facts(seeded_session) -> None:
+    from backend.agents.lex.prompts import DRAFT_SYSTEM_PROMPT
+
+    assert "NEVER say you are checking dispatch status" in DRAFT_SYSTEM_PROMPT
+
+    _, _, po = _setup_po(
+        seeded_session,
+        sku="BRG-402",
+        persona=PersonaKey.SUP1,
+        qty=4,
+        price=450.0,
+        status=POStatus.SENT_AWAITING_ACK,
+    )
+    llm = FixesMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+    out = engine.switch_to_backup_supplier(seeded_session, po.id)
+    assert out["new_po"].status == POStatus.PENDING_DISPATCH_APPROVAL.value
+    from backend.core.models import AgentTrace
+
+    trace = seeded_session.scalar(
+        select(AgentTrace)
+        .where(AgentTrace.task_type == "email_draft")
+        .order_by(AgentTrace.id.desc())
+        .limit(1)
+    )
+    assert trace is not None and trace.raw_prompt is not None
+    assert '"backup_failover": true' in trace.raw_prompt
+    assert '"total_value": 1920.0' in trace.raw_prompt
+
+
+def test_manual_po_draft_and_create_flow(seeded_session) -> None:
+    llm = FixesMockLLM()
+    engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
+    client = _make_client(seeded_session, engine)
+
+    parts_resp = client.get("/api/parts")
+    assert parts_resp.status_code == 200
+    brg = next(p for p in parts_resp.json() if p["sku"] == "BRG-402")
+    sup1 = next(s for s in brg["suppliers"] if s["supplier_persona"] == PersonaKey.SUP1.value)
+    assert sup1["reliability_score"] is not None
+    assert sup1["estimated_arrival_date"] is not None
+    assert sup1["otd_rate"] is not None
+
+    draft_resp = client.post(
+        "/api/pos/draft-manual",
+        json={"part_id": brg["part_id"], "supplier_id": sup1["supplier_id"], "qty": 6},
+    )
+    assert draft_resp.status_code == 200
+    draft_data = draft_resp.json()
+    assert draft_data["total_amount"] == 6 * sup1["agreed_unit_price"]
+    assert set(draft_data["cc_personas"]) == {
+        PersonaKey.LEX.value,
+        PersonaKey.INVENTORY_MANAGER.value,
+    }
+
+    create_resp = client.post(
+        "/api/pos/manual",
+        json={
+            "part_id": brg["part_id"],
+            "supplier_id": sup1["supplier_id"],
+            "qty": 6,
+            "subject": draft_data["subject"],
+            "body": draft_data["body"] + "\nEdited by manager.",
+        },
+    )
+    assert create_resp.status_code == 200
+    po_data = create_resp.json()["po"]
+    assert po_data["status"] == POStatus.SENT_AWAITING_ACK.value
+    assert po_data["qty"] == 6
+
+    inbox_sup1 = client.get("/api/mailroom/sup1/inbox").json()
+    assert any(m["id"] == create_resp.json()["comm_id"] for m in inbox_sup1)
+    sent_mgr = client.get("/api/mailroom/inventory_manager/sent").json()
+    sent_msg = next(m for m in sent_mgr if m["id"] == create_resp.json()["comm_id"])
+    assert set(sent_msg["cc_personas"]) == {
+        PersonaKey.LEX.value,
+        PersonaKey.INVENTORY_MANAGER.value,
+    }

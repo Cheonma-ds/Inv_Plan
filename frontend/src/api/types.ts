@@ -76,6 +76,27 @@ export interface PartSupplierTerm {
   quoted_lead_time_days: number;
   effective_lead_time_days: number;
   moq: number;
+  reliability_score?: number | null;
+  otd_rate?: number | null;
+  response_rate?: number | null;
+  invoice_accuracy_rate?: number | null;
+  estimated_arrival_date?: string | null;
+  latest_memory_note?: string | null;
+}
+
+export interface ManualPODraftResponse {
+  subject: string;
+  body: string;
+  to_personas: string[];
+  cc_personas: string[];
+  unit_price: number;
+  total_amount: number;
+  currency: string;
+}
+
+export interface ManualPOCreateResponse {
+  po: POListItem;
+  comm_id: number;
 }
 
 export interface PartSnapshot {

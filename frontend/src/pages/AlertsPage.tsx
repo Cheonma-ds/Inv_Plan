@@ -508,12 +508,12 @@ export function AlertsPage({
                           recRop !== null &&
                           recS !== null && (
                             <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                              <span className="text-[#6E6E73]">Inv. Position / ROP / S:</span>{' '}
+                              <span className="text-[#6E6E73]">Inv. Position/ROP/S:</span>{' '}
                               <span className="font-semibold text-[#1D1D1F]">
                                 {inventoryPosition}
                               </span>{' '}
                               <span className="text-[#6E6E73]">
-                                (ROP {recRop} / S {recS})
+                                (ROP {recRop}/S {recS})
                               </span>
                             </div>
                           )}
@@ -615,7 +615,7 @@ export function AlertsPage({
                           <span className="ml-1 font-medium text-[#945600]">
                             ({priceVarInr >= 0 ? '+' : ''}
                             {formatInr(priceVarInr)}
-                            {priceVarPct !== null ? ` / ${priceVarPct.toFixed(1)}%` : ''})
+                            {priceVarPct !== null ? `/${priceVarPct.toFixed(1)}%` : ''})
                           </span>
                         )}
                       </div>
@@ -684,9 +684,9 @@ export function AlertsPage({
                     )}
                     {!isStockRequestAlert && recRop !== null && recS !== null && (
                       <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                        <span className="text-[#6E6E73]">Recommended ROP / S:</span>{' '}
+                        <span className="text-[#6E6E73]">Recommended ROP/S:</span>{' '}
                         <span className="font-semibold text-[#0066CC]">
-                          {recRop} / {recS}
+                          {recRop}/{recS}
                         </span>
                       </div>
                     )}

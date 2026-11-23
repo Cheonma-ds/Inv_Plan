@@ -339,7 +339,7 @@ export function POTrackerPage({
       },
       {
         key: 'eta',
-        header: 'Promised / Revised ETA',
+        header: 'Promised/Revised ETA',
         tooltip:
           'Original promised delivery date based on quoted lead time, plus any revised ETA communicated by the supplier in email updates.',
         defaultWidth: 145,

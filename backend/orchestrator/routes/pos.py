@@ -47,6 +47,20 @@ class EscalateProcurementRequest(BaseModel):
     reason: str = ""
 
 
+class ManualPODraftRequest(BaseModel):
+    part_id: int
+    supplier_id: int
+    qty: int = Field(gt=0)
+
+
+class ManualPOCreateRequest(BaseModel):
+    part_id: int
+    supplier_id: int
+    qty: int = Field(gt=0)
+    subject: str = Field(min_length=1)
+    body: str = Field(min_length=1)
+
+
 def _iso_or_none(dt: datetime | None) -> str | None:
     return clock.ensure_utc(dt).isoformat() if dt else None
 
@@ -104,6 +118,52 @@ def list_pos(
     parts = {p.id: p for p in session.scalars(select(Part)).all()}
     suppliers = {s.id: s for s in session.scalars(select(Supplier)).all()}
     return [_serialize_po(po, parts.get(po.part_id), suppliers.get(po.supplier_id)) for po in pos]
+
+
+@router.post("/draft-manual")
+def post_manual_po_draft(
+    payload: ManualPODraftRequest,
+    session: Session = Depends(get_session),
+    engine: WorkflowEngine = Depends(get_workflow_engine),
+) -> dict:
+    try:
+        draft = engine.generate_manual_po_draft(
+            session,
+            part_id=payload.part_id,
+            supplier_id=payload.supplier_id,
+            qty=payload.qty,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return draft
+
+
+@router.post("/manual")
+def post_create_manual_po(
+    payload: ManualPOCreateRequest,
+    session: Session = Depends(get_session),
+    engine: WorkflowEngine = Depends(get_workflow_engine),
+) -> dict:
+    try:
+        outcome = engine.create_manual_po(
+            session,
+            part_id=payload.part_id,
+            supplier_id=payload.supplier_id,
+            qty=payload.qty,
+            subject=payload.subject,
+            body=payload.body,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    po = outcome["po"]
+    part = session.get(Part, po.part_id)
+    supplier = session.get(Supplier, po.supplier_id)
+    return {
+        "po": _serialize_po(po, part, supplier),
+        "comm_id": outcome["email"].id,
+    }
 
 
 @router.get("/{po_id}")

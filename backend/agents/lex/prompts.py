@@ -89,6 +89,15 @@ Rules you MUST follow:
    `INR 450.00`). NEVER write `USD` or `$` unless `currency` itself is explicitly foreign.
 7. Do not fabricate dates, invoice numbers, quantities, or prices not present in the provided input.
 8. Category-specific guidance:
+   - For `PO_DISPATCH`: this is a brand-new Purchase Order being issued to the supplier for the
+     first time (including backup failover orders where `context_facts.backup_failover` is true, or
+     manual POs). Formally place the order, state the PO number (if assigned), part SKU/name,
+     order quantity, contracted unit price and total value (in PO currency), and requested
+     delivery lead time, and ask the supplier to acknowledge receipt and confirm their expected
+     dispatch and delivery schedule. NEVER say you are checking dispatch status or following up on
+     an already-sent PO.
+   - For `REVISED_PO`: formally communicate the updated PO terms (quantity, unit price, and/or
+     ETA) and ask the supplier to confirm acceptance of the revised PO.
    - For `STOCK_REQUEST_CLARIFICATION`: clearly state the requested quantity vs current on-hand
      availability (plus open PO ETA if provided in `context_facts`), and ask the Making Team for
      the minimum quantity needed right now (or clarify ambiguous SKU/quantity) so the Inventory

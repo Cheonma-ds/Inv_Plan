@@ -100,11 +100,11 @@ export function personaLabel(persona: string): string {
     case 'procurement':
       return 'Procurement';
     case 'sup1':
-      return 'Sup1 (Apex Precision)';
+      return 'Apex Precision (Sup1)';
     case 'sup2':
-      return 'Sup2 (Bharat Fasteners)';
+      return 'Bharat Fasteners (Sup2)';
     case 'sup3':
-      return 'Sup3 (Deccan Electro-Spares)';
+      return 'Deccan Electro-Spares (Sup3)';
     case 'lex':
       return 'Lex (AI Agent)';
     default:

@@ -732,7 +732,7 @@ export function MailroomPage({
                     onChange={(e) => setComposePoId(e.target.value)}
                     className="w-full rounded-xl border border-black/[0.12] px-2.5 py-1.5 text-xs text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
                   >
-                    <option value="">Auto-detect / None</option>
+                    <option value="">Auto-detect/None</option>
                     {pos.map((po) => (
                       <option key={po.id} value={String(po.id)}>
                         {po.po_number} · {po.part_sku} ({po.status})

@@ -1,10 +1,13 @@
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.core import clock
 from backend.core.db import get_session
-from backend.core.models import PartSupplierTerm, Supplier
+from backend.core.models import PartSupplierTerm, Supplier, SupplierMemoryNote
 from backend.inventory import (
     InsufficientStockError,
     PartNotFoundError,
@@ -42,10 +45,18 @@ def list_parts(session: Session = Depends(get_session)) -> list[dict]:
         )
     ).all()
     suppliers = {s.id: s for s in session.scalars(select(Supplier)).all()}
+    sim_now = clock.now(session)
+    latest_note_by_sup: dict[int, str] = {}
+    for mem in session.scalars(
+        select(SupplierMemoryNote).order_by(SupplierMemoryNote.id.desc())
+    ).all():
+        latest_note_by_sup.setdefault(mem.supplier_id, mem.note)
 
     terms_by_part: dict[int, list[dict]] = {}
     for t in terms:
         sup = suppliers.get(t.supplier_id)
+        eta_days = max(1, int(round(t.effective_lead_time_days)))
+        estimated_arrival = (sim_now + timedelta(days=eta_days)).date().isoformat()
         terms_by_part.setdefault(t.part_id, []).append(
             {
                 "supplier_id": t.supplier_id,
@@ -56,6 +67,12 @@ def list_parts(session: Session = Depends(get_session)) -> list[dict]:
                 "quoted_lead_time_days": t.quoted_lead_time_days,
                 "effective_lead_time_days": t.effective_lead_time_days,
                 "moq": t.moq,
+                "reliability_score": sup.reliability_score if sup else None,
+                "otd_rate": sup.otd_rate if sup else None,
+                "response_rate": sup.response_rate if sup else None,
+                "invoice_accuracy_rate": sup.invoice_accuracy_rate if sup else None,
+                "estimated_arrival_date": estimated_arrival,
+                "latest_memory_note": latest_note_by_sup.get(t.supplier_id),
             }
         )
 

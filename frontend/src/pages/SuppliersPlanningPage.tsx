@@ -474,7 +474,7 @@ export function SuppliersPlanningPage({
         </div>
       </section>
 
-      {/* Dynamic ROP / S Recommendations */}
+      {/* Dynamic ROP/S Recommendations */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -574,19 +574,19 @@ export function SuppliersPlanningPage({
                 {/* Current vs Recommended */}
                 <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#FBFBFD] p-3 text-xs border border-black/[0.06] tabular-nums">
                   <div>
-                    <span className="text-[#6E6E73]">Current ROP / S:</span>{' '}
+                    <span className="text-[#6E6E73]">Current ROP/S:</span>{' '}
                     <span className="font-bold text-[#1D1D1F]">
-                      {rec.current_rop} / {rec.current_replenishment_point}
+                      {rec.current_rop}/{rec.current_replenishment_point}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[#6E6E73]">Recommended ROP / S:</span>{' '}
+                    <span className="text-[#6E6E73]">Recommended ROP/S:</span>{' '}
                     <span
                       className={`font-bold ${
                         rec.needs_update ? 'text-[#0066CC]' : 'text-[#1B6B43]'
                       }`}
                     >
-                      {rec.recommended_rop} / {rec.recommended_replenishment_point}
+                      {rec.recommended_rop}/{rec.recommended_replenishment_point}
                     </span>
                   </div>
                 </div>
@@ -614,9 +614,9 @@ export function SuppliersPlanningPage({
                     </div>
                   </div>
                   <div className="rounded-lg border border-black/[0.06] bg-[#FBFBFD] px-2.5 py-1.5">
-                    <div className="text-[#86868B]">LT / Demand σ</div>
+                    <div className="text-[#86868B]">LT/Demand σ</div>
                     <div className="font-semibold text-[#1D1D1F]">
-                      {rec.lead_time_std_dev.toFixed(2)}d / {rec.daily_demand_std.toFixed(2)}
+                      {rec.lead_time_std_dev.toFixed(2)}d/{rec.daily_demand_std.toFixed(2)}
                     </div>
                   </div>
                 </div>
