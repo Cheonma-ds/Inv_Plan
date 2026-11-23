@@ -24,6 +24,22 @@ Across SCM discussions, inventory and procurement teams consistently describe th
 
 ---
 
+## 2. How It Works & 3-Minute Guided Tour
+
+Every workflow in InvPlan follows a **human-in-the-loop (HITL)** loop:
+1. **Events Enter:** Stock drops below ROP (via **Inventory & Parts** or a **Making Team** email), time advances (**Simulated Clock**), or a supplier replies/attaches a PDF in **Mailroom**.
+2. **Lex Triages & Drafts:** Agent Lex reads unstructured emails, PDFs, or `.csv` BOMs and returns structured intents/extractions plus a `DRAFT_PENDING_APPROVAL` email—**never mutating POs or stock silently**.
+3. **Manager Decides in 1 Click:** **Actionable Alerts** surfaces exact INR impact, stockout dates, and inline CTAs (*Approve & Send*, *Switch to Backup Supplier*, *Release Usable Qty*, *Approve Net Settlement*).
+
+### What to Click (3-Minute Browser Tour)
+1. **Trigger a Replenishment PO:** Open **Inventory & Parts** → click **Withdraw** on `BRG-402` (`2` units). Because inventory position drops below ROP, InvPlan auto-creates `PO-1041` (`PENDING_DISPATCH_APPROVAL`) and Lex drafts the dispatch email.
+2. **Approve & Send:** Open **Actionable Alerts** → click **Approve & Send PO** on `PO-1041` (`SENT_AWAITING_ACK`).
+3. **Watch the SLA Clock:** Click **`+1d`** in the top **Simulated Clock** bar → Lex automatically drafts a 24h follow-up reminder for the unacknowledged critical PO.
+4. **Test a Supplier Exception:** Open **Mailroom** → switch persona to **`Apex Precision (Sup1)`** → reply to `PO-1041` with *"Unit price is now ₹540/unit and ETA slips to 2026-12-10."* → return to **Actionable Alerts** to see the `+20%` price variance, projected stockout gap, and 1-click **Switch to Backup Supplier**.
+5. **Explore More:** See [`docs/test-scenarios/demo-top-10.md`](docs/test-scenarios/demo-top-10.md) for 10 full click-by-click demo scenarios (including `USD` quote traps, damaged GRN quarantine, and Credit Note net settlement).
+
+---
+
 ## 2. Agentic Engineering Philosophy: Right Tool for Each Job
 
 A central design principle in InvPlan is knowing **where not to use an LLM**. Using generative models for inventory arithmetic, state transitions, or timer math introduces hallucination risk where deterministic code is exact, fast, and auditable. Conversely, rigid parsers break on messy supplier emails and inconsistent PDF invoice layouts.
