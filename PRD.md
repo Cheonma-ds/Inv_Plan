@@ -1,5 +1,4 @@
-# Master PRD: Autonomous Demand-to-Delivery & Inventory Planning System
-
+# PRD
 **Document Status:** Approved Baseline v1.0 (All Product Decisions Locked)  
 **MVP Agent:** **Lex** (first agent on a multi-agent platform, powered by `gemini-3.5-flash-lite` via `$GEMINI_API_KEY`; future agents such as a Manager Query & Visualization Copilot will plug into the same backbone)  
 **Target Users:** Inventory Management Team (`InventoryManager`), Procurement Team  
