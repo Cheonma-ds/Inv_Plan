@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { AlertItem } from '../api/types';
+import { CreateEditPOModal } from '../components/CreateEditPOModal';
+import { FormattedEmailBody } from '../components/FormattedEmailBody';
 import {
   formatInr,
   formatSimDateTime,
@@ -105,6 +107,11 @@ export function AlertsPage({
   const [draftEdits, setDraftEdits] = useState<Record<number, DraftEdits>>({});
   const [noteInputs, setNoteInputs] = useState<Record<number, string>>({});
   const [goodQtyInputs, setGoodQtyInputs] = useState<Record<number, string>>({});
+  const [editPoModal, setEditPoModal] = useState<{
+    poId: number;
+    subject?: string;
+    body?: string;
+  } | null>(null);
 
   const loadAlerts = useCallback(async () => {
     setLoading(true);
@@ -126,7 +133,7 @@ export function AlertsPage({
       setDraftEdits((prev) => {
         const next = { ...prev };
         for (const item of data) {
-          if (item.draft_preview && !next[item.id]) {
+          if (item.status !== 'DISMISSED' && item.draft_preview && !next[item.id]) {
             next[item.id] = {
               subject: item.draft_preview.subject,
               body: item.draft_preview.body,
@@ -294,7 +301,7 @@ export function AlertsPage({
           {alerts.map((item) => {
             const payload = item.cta_payload ?? {};
             const isBusy = busyAlertId === item.id;
-            const draft = item.draft_preview;
+            const draft = item.status === 'DISMISSED' ? null : item.draft_preview;
             const edit = draftEdits[item.id] ?? {
               subject: draft?.subject ?? '',
               body: draft?.body ?? '',
@@ -462,7 +469,7 @@ export function AlertsPage({
                         )}
                         {onHandStock !== null && (
                           <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                            <span className="text-[#6E6E73]">On-Hand:</span>{' '}
+                            <span className="text-[#6E6E73]">On Hand:</span>{' '}
                             <span
                               className={`font-semibold ${
                                 onHandStock === 0 ? 'text-[#B82923]' : 'text-[#1D1D1F]'
@@ -508,12 +515,12 @@ export function AlertsPage({
                           recRop !== null &&
                           recS !== null && (
                             <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                              <span className="text-[#6E6E73]">Inv. Position/ROP/S:</span>{' '}
+                              <span className="text-[#6E6E73]">Inv. Position / ROP/T:</span>{' '}
                               <span className="font-semibold text-[#1D1D1F]">
                                 {inventoryPosition}
                               </span>{' '}
                               <span className="text-[#6E6E73]">
-                                (ROP {recRop}/S {recS})
+                                (ROP {recRop}/T {recS})
                               </span>
                             </div>
                           )}
@@ -684,7 +691,7 @@ export function AlertsPage({
                     )}
                     {!isStockRequestAlert && recRop !== null && recS !== null && (
                       <div className="rounded-lg bg-white px-2.5 py-1.5 border border-black/[0.07]">
-                        <span className="text-[#6E6E73]">Recommended ROP/S:</span>{' '}
+                        <span className="text-[#6E6E73]">Recommended ROP/T:</span>{' '}
                         <span className="font-semibold text-[#0066CC]">
                           {recRop}/{recS}
                         </span>
@@ -752,9 +759,9 @@ export function AlertsPage({
                         />
                       </div>
                     ) : (
-                      <div className="rounded-xl border border-[#5E5CE6]/15 bg-white p-3 text-xs space-y-1">
+                      <div className="rounded-xl border border-[#5E5CE6]/15 bg-white p-3 text-xs space-y-1.5">
                         <p className="font-semibold text-[#1D1D1F]">{draft.subject}</p>
-                        <p className="whitespace-pre-wrap text-[#6E6E73]">{draft.body}</p>
+                        <FormattedEmailBody body={draft.body} className="text-[#3A3A3C]" />
                       </div>
                     )}
                   </div>
@@ -796,7 +803,12 @@ export function AlertsPage({
                         />
                       )}
 
-                      {item.suggested_actions.map((cta) => {
+                      {item.suggested_actions
+                        .filter(
+                          (cta) =>
+                            !(item.type === 'PO_DISPATCH_APPROVAL' && cta.action === 'reject_draft'),
+                        )
+                        .map((cta) => {
                         const isApprove =
                           cta.action === 'approve_draft' ||
                           cta.action === 'approve_rop' ||
@@ -815,6 +827,7 @@ export function AlertsPage({
                           cta.action === 'issue_partial_stock' ||
                           cta.action === 'draft_damage_claim' ||
                           cta.action === 'escalate_procurement';
+                        const isEditPo = cta.action === 'edit_po';
                         const draftUnavailable =
                           cta.action === 'ask_making_minimum' &&
                           draft !== null &&
@@ -826,7 +839,9 @@ export function AlertsPage({
                             ? 'bg-[#B46900] text-white hover:bg-[#945600] border-[#B46900]'
                             : isRejectOrCancel
                               ? 'bg-white text-[#B82923] border-[#C9342D]/25 hover:bg-[#C9342D]/[0.07]'
-                              : 'bg-white text-[#1D1D1F] border-black/[0.10] hover:bg-[#FBFBFD]';
+                              : isEditPo
+                                ? 'bg-white text-[#0058B3] border-[#0066CC]/30 hover:bg-[#0066CC]/[0.07]'
+                                : 'bg-white text-[#1D1D1F] border-black/[0.10] hover:bg-[#FBFBFD]';
 
                         const buttonLabel = draftUnavailable
                           ? draft.status === 'SENT'
@@ -834,12 +849,33 @@ export function AlertsPage({
                             : 'Draft Rejected'
                           : cta.label;
 
+                        const handleClick = () => {
+                          if (isEditPo) {
+                            const targetPoId = asNumber(payload.po_id) ?? item.po_id;
+                            if (targetPoId === null) {
+                              onNotify(
+                                'error',
+                                'Missing PO reference',
+                                `Alert #${item.id} has no linked PO to edit.`,
+                              );
+                              return;
+                            }
+                            setEditPoModal({
+                              poId: targetPoId,
+                              subject: draft?.status === 'DRAFT_PENDING_APPROVAL' ? edit.subject : undefined,
+                              body: draft?.status === 'DRAFT_PENDING_APPROVAL' ? edit.body : undefined,
+                            });
+                            return;
+                          }
+                          void handleExecuteCta(item, cta.action, cta.label);
+                        };
+
                         return (
                           <button
                             key={cta.action}
                             type="button"
                             disabled={isBusy || draftUnavailable}
-                            onClick={() => void handleExecuteCta(item, cta.action, cta.label)}
+                            onClick={handleClick}
                             className={`apple-press inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-1.5 text-xs font-semibold disabled:opacity-45 ${btnClass}`}
                           >
                             {buttonLabel}
@@ -863,6 +899,21 @@ export function AlertsPage({
             );
           })}
         </div>
+      )}
+
+      {editPoModal && (
+        <CreateEditPOModal
+          mode="edit"
+          poId={editPoModal.poId}
+          initialDraftSubject={editPoModal.subject}
+          initialDraftBody={editPoModal.body}
+          onClose={() => setEditPoModal(null)}
+          onNotify={onNotify}
+          onSuccess={async () => {
+            onMutated();
+            await loadAlerts();
+          }}
+        />
       )}
     </div>
   );

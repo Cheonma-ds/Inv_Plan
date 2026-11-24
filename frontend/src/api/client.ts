@@ -7,6 +7,8 @@ import type {
   ClockResponse,
   ConsumeResponse,
   CycleAnalyticsResult,
+  DispatchEditedPORequest,
+  DispatchEditedPOResponse,
   EscalateProcurementResponse,
   EvalRunReport,
   EvalSuiteMetadata,
@@ -175,6 +177,8 @@ export const api = {
     subject: string;
     body: string;
   }) => jsonPost<ManualPOCreateResponse>('/api/pos/manual', payload),
+  dispatchEditedPo: (poId: number, payload: DispatchEditedPORequest) =>
+    jsonPost<DispatchEditedPOResponse>(`/api/pos/${poId}/dispatch-edited`, payload),
 
   // Mailroom
   listInbox: (persona: PersonaKey) =>

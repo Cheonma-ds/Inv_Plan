@@ -82,7 +82,7 @@ export function SuppliersPlanningPage({
       onNotify(
         'success',
         'Planning recalculated',
-        `${res.recommendations_needing_update} ROP/S update(s) flagged · Alerts: +${res.alerts_created} created, ${res.alerts_updated} updated, ${res.alerts_resolved} resolved.`,
+        `${res.recommendations_needing_update} ROP/T update(s) flagged · Alerts: +${res.alerts_created} created, ${res.alerts_updated} updated, ${res.alerts_resolved} resolved.`,
       );
       onMutated();
     } catch (err) {
@@ -106,15 +106,15 @@ export function SuppliersPlanningPage({
       );
       onNotify(
         'success',
-        `Applied ROP/S for ${rec.sku}`,
-        `ROP=${rec.recommended_rop}, S=${rec.recommended_replenishment_point}`,
+        `Applied ROP/T for ${rec.sku}`,
+        `ROP=${rec.recommended_rop}, T=${rec.recommended_replenishment_point}`,
       );
       onMutated();
       await loadData();
     } catch (err) {
       onNotify(
         'error',
-        `Failed to apply ROP/S for ${rec.sku}`,
+        `Failed to apply ROP/T for ${rec.sku}`,
         err instanceof Error ? err.message : String(err),
       );
     } finally {
@@ -194,7 +194,7 @@ export function SuppliersPlanningPage({
             Suppliers &amp; Planning Intelligence
           </h1>
           <p className="text-sm text-[#6E6E73]">
-            Rolling 12-month supplier reliability scorecards, memory notes, and deterministic EWMA + Z-factor ROP/S recommendations.
+            90-day supplier reliability scorecards, memory notes, and deterministic daily EWMA (α = 0.30) + Z-factor ROP/T recommendations.
           </p>
         </div>
 
@@ -231,6 +231,8 @@ export function SuppliersPlanningPage({
             const scoreDetail = overview?.supplier_scores.find(
               (s) => s.supplier_id === sup.id,
             );
+            const avgResponseDays = sup.avg_response_days ?? scoreDetail?.avg_response_days;
+            const cycles90d = sup.cycles_90d ?? scoreDetail?.cycles_90d;
             const terms = (overview?.lead_time_updates ?? []).filter(
               (t) => t.supplier_id === sup.id && t.supplier_rank === 1,
             );
@@ -294,6 +296,23 @@ export function SuppliersPlanningPage({
                       <div className="text-[#86868B] text-[11px]">Response</div>
                       <div className="font-bold text-[#1D1D1F] mt-0.5">
                         {formatPct(sup.response_rate)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-center text-xs tabular-nums">
+                    <div className="rounded-xl bg-[#FBFBFD] p-2.5 border border-black/[0.06]">
+                      <div className="text-[#86868B] text-[11px]">Avg Response</div>
+                      <div className="font-bold text-[#1D1D1F] mt-0.5">
+                        {avgResponseDays !== undefined && avgResponseDays !== null
+                          ? `${avgResponseDays.toFixed(1)}d`
+                          : '—'}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-[#FBFBFD] p-2.5 border border-black/[0.06]">
+                      <div className="text-[#86868B] text-[11px]">Cycles (90d)</div>
+                      <div className="font-bold text-[#1D1D1F] mt-0.5">
+                        {cycles90d !== undefined && cycles90d !== null ? cycles90d : '—'}
                       </div>
                     </div>
                   </div>
@@ -474,14 +493,19 @@ export function SuppliersPlanningPage({
         </div>
       </section>
 
-      {/* Dynamic ROP/S Recommendations */}
+      {/* Dynamic ROP/T Recommendations */}
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-xs font-bold uppercase tracking-wider text-[#86868B] flex items-center gap-1.5">
-              <TrendingUp className="h-4 w-4 text-[#0066CC]" />
-              Dynamic ROP &amp; Order-Up-To (S) Recommendations
-            </h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-[#86868B] flex items-center gap-1.5">
+                <TrendingUp className="h-4 w-4 text-[#0066CC]" />
+                Dynamic ROP/T (Order-Up-To T) Recommendations
+              </h2>
+              <span className="rounded-full border border-[#0066CC]/22 bg-[#0066CC]/[0.07] px-2.5 py-0.5 text-[10px] font-semibold text-[#0058B3]">
+                90d Daily Burn EWMA α = 0.30
+              </span>
+            </div>
             {overview && (
               <p className="text-xs text-[#6E6E73] tabular-nums mt-0.5">
                 Evaluated {overview.parts_evaluated} parts at{' '}
@@ -566,7 +590,7 @@ export function SuppliersPlanningPage({
                       className="apple-press inline-flex items-center gap-1 rounded-full bg-[#0066CC] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                     >
                       <Check className="h-3.5 w-3.5" />
-                      Apply ROP/S
+                      Apply ROP/T
                     </button>
                   )}
                 </div>
@@ -574,13 +598,13 @@ export function SuppliersPlanningPage({
                 {/* Current vs Recommended */}
                 <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#FBFBFD] p-3 text-xs border border-black/[0.06] tabular-nums">
                   <div>
-                    <span className="text-[#6E6E73]">Current ROP/S:</span>{' '}
+                    <span className="text-[#6E6E73]">Current ROP/T:</span>{' '}
                     <span className="font-bold text-[#1D1D1F]">
                       {rec.current_rop}/{rec.current_replenishment_point}
                     </span>
                   </div>
                   <div>
-                    <span className="text-[#6E6E73]">Recommended ROP/S:</span>{' '}
+                    <span className="text-[#6E6E73]">Recommended ROP/T:</span>{' '}
                     <span
                       className={`font-bold ${
                         rec.needs_update ? 'text-[#0066CC]' : 'text-[#1B6B43]'

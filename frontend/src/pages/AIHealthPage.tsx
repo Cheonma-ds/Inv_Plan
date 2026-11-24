@@ -10,6 +10,7 @@ import {
   Play,
   RefreshCw,
   ShieldCheck,
+  Wrench,
   XCircle,
 } from 'lucide-react';
 import { api } from '../api/client';
@@ -731,6 +732,12 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                         <span className="text-[11px] text-[#86868B] tabular-nums">
                           {formatSimDateTime(t.timestamp)}
                         </span>
+                        {t.tool_calls.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-[#0066CC]/24 bg-[#0066CC]/10 px-2 py-0.5 text-[10px] font-semibold text-[#0058B3] tabular-nums">
+                            <Wrench className="h-2.5 w-2.5" />
+                            {t.tool_calls.length} tool call{t.tool_calls.length === 1 ? '' : 's'}
+                          </span>
+                        )}
                       </div>
 
                       <div className="text-xs font-semibold text-[#1D1D1F]">
@@ -759,11 +766,12 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                       >
                         {expanded ? (
                           <>
-                            <ChevronDown className="h-3 w-3" /> Hide Raw
+                            <ChevronDown className="h-3 w-3" /> Hide Details
                           </>
                         ) : (
                           <>
-                            <ChevronRight className="h-3 w-3" /> Raw Prompt/Output
+                            <ChevronRight className="h-3 w-3" />{' '}
+                            {t.tool_calls.length > 0 ? 'Tools & Raw' : 'Raw Prompt/Output'}
                           </>
                         )}
                       </button>
@@ -771,18 +779,112 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
                   </div>
 
                   {expanded && (
-                    <div className="anim-page-enter mt-3 grid md:grid-cols-2 gap-3 text-[11px]">
-                      <div>
-                        <div className="font-semibold text-[#1D1D1F] mb-1">Raw Prompt</div>
-                        <pre className="max-h-64 overflow-auto rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-[10px] text-[#1D1D1F] whitespace-pre-wrap">
-                          {t.raw_prompt || '—'}
-                        </pre>
-                      </div>
-                      <div>
-                        <div className="font-semibold text-[#1D1D1F] mb-1">Raw Response</div>
-                        <pre className="max-h-64 overflow-auto rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-[10px] text-[#1D1D1F] whitespace-pre-wrap">
-                          {t.raw_response || '—'}
-                        </pre>
+                    <div className="anim-page-enter mt-3 space-y-3 text-[11px]">
+                      {t.tool_calls.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="font-semibold text-[#1D1D1F] flex items-center gap-1.5">
+                            <Wrench className="h-3.5 w-3.5 text-[#0066CC]" />
+                            Tool Execution Steps ({t.tool_calls.length})
+                          </div>
+                          <div className="space-y-2">
+                            {t.tool_calls.map((tc, idx) => {
+                              const toolName =
+                                typeof tc.tool === 'string'
+                                  ? tc.tool
+                                  : typeof tc.tool_name === 'string'
+                                    ? tc.tool_name
+                                    : typeof tc.name === 'string'
+                                      ? tc.name
+                                      : 'unknown_tool';
+                              const durationMs =
+                                typeof tc.duration_ms === 'number' ? tc.duration_ms : null;
+                              const errorText =
+                                typeof tc.error === 'string' && tc.error.trim().length > 0
+                                  ? tc.error
+                                  : null;
+                              const argsObj =
+                                tc.args && typeof tc.args === 'object' ? tc.args : {};
+                              const resultSummary =
+                                typeof tc.result_summary === 'string'
+                                  ? tc.result_summary
+                                  : tc.result !== undefined
+                                    ? JSON.stringify(tc.result)
+                                    : '—';
+
+                              return (
+                                <div
+                                  key={`${t.id}-tc-${idx}`}
+                                  className={`rounded-xl border p-3 space-y-1.5 ${
+                                    errorText
+                                      ? 'border-[#C9342D]/25 bg-[#C9342D]/[0.04]'
+                                      : 'border-black/[0.08] bg-[#FBFBFD]'
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[10px] font-bold text-[#6E6E73] tabular-nums">
+                                        #{idx + 1}
+                                      </span>
+                                      <span className="font-mono font-bold text-[#1D1D1F]">
+                                        {toolName}
+                                      </span>
+                                      {errorText && (
+                                        <span className="rounded-full border border-[#C9342D]/30 bg-[#C9342D]/10 px-2 py-0.5 text-[10px] font-bold text-[#B82923]">
+                                          ERROR
+                                        </span>
+                                      )}
+                                    </div>
+                                    {durationMs !== null && (
+                                      <span className="text-[10px] font-medium text-[#6E6E73] tabular-nums">
+                                        {durationMs} ms
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="grid md:grid-cols-2 gap-2 text-[10px]">
+                                    <div>
+                                      <div className="font-semibold text-[#6E6E73] mb-0.5">
+                                        Args
+                                      </div>
+                                      <pre className="overflow-x-auto rounded-lg border border-black/[0.06] bg-white px-2.5 py-1.5 text-[#1D1D1F] whitespace-pre-wrap break-words">
+                                        {JSON.stringify(argsObj, null, 2)}
+                                      </pre>
+                                    </div>
+                                    <div>
+                                      <div className="font-semibold text-[#6E6E73] mb-0.5">
+                                        {errorText ? 'Error' : 'Result Summary'}
+                                      </div>
+                                      <pre
+                                        className={`overflow-x-auto rounded-lg border px-2.5 py-1.5 whitespace-pre-wrap break-words ${
+                                          errorText
+                                            ? 'border-[#C9342D]/20 bg-white text-[#B82923]'
+                                            : 'border-black/[0.06] bg-white text-[#1D1D1F]'
+                                        }`}
+                                      >
+                                        {errorText ?? resultSummary}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid md:grid-cols-2 gap-3">
+                        <div>
+                          <div className="font-semibold text-[#1D1D1F] mb-1">Raw Prompt</div>
+                          <pre className="max-h-64 overflow-auto rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-[10px] text-[#1D1D1F] whitespace-pre-wrap">
+                            {t.raw_prompt || '—'}
+                          </pre>
+                        </div>
+                        <div>
+                          <div className="font-semibold text-[#1D1D1F] mb-1">Raw Response</div>
+                          <pre className="max-h-64 overflow-auto rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-[10px] text-[#1D1D1F] whitespace-pre-wrap">
+                            {t.raw_response || '—'}
+                          </pre>
+                        </div>
                       </div>
                     </div>
                   )}

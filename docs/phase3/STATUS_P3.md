@@ -1,6 +1,6 @@
 # STATUS_P3.md — Phase 3 Live Session Baton
 
-**Current Stage:** **Slice P3-6 Complete** — Ready to Start **Slice P3-7**  
+**Current Stage:** **Slice P3-7 Complete** — Ready to Start **Slice P3-8**  
 **Last Updated:** 2026-11-24  
 **Baseline Reference:** `HEAD` (`099474f`), [`STATUS.md`](../../STATUS.md), [`STATUS_P2.md`](../phase2/STATUS_P2.md)  
 **Planning Docs:** [`PRD_P3.md`](PRD_P3.md) · [`DESIGN_P3.md`](DESIGN_P3.md) · [`SLICES_P3.md`](SLICES_P3.md)
@@ -15,7 +15,7 @@
 - [x] **Slice P3-4:** Lex Resilience (Retries/Fallbacks), Multimodal Image Triage & Enforced Email Formatting
 - [x] **Slice P3-5:** Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory Alerts
 - [x] **Slice P3-6:** Frontend Core (IST Clock, Sidebar Cleanup, `FormattedEmailBody`, `InventoryPage` Revamp & `StockoutCycleDrawer`)
-- [ ] **Slice P3-7:** Frontend `CreateEditPOModal` (Suggested Qty + Reasoning), `AlertsPage`, `SuppliersPlanningPage` & `AIHealthPage` Traces
+- [x] **Slice P3-7:** Frontend `CreateEditPOModal` (Suggested Qty + Reasoning), `AlertsPage`, `SuppliersPlanningPage` & `AIHealthPage` Traces
 - [ ] **Slice P3-8:** Full Phase 3 E2E Verification, Live Gemini Eval Sweep & Documentation Parity Gate
 
 ---
@@ -117,17 +117,31 @@
 
 ---
 
-## Next Session Handoff Prompt — Start Slice `P3-7`
+## Completed Slice Summary — `P3-7`
 
-> Implement **Slice P3-7** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
-> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-7)`, and target frontend files: `frontend/src/api/{types,client}.ts`, `frontend/src/components/FormattedEmailBody.tsx`, and `frontend/src/pages/{InventoryPage,AlertsPage,POTrackerPage,SuppliersPlanningPage,AIHealthPage}.tsx`.
-> - **Leave Untouched:** `backend/` (all Phase 3 backend APIs are already implemented and verified).
+- **Files Added:**
+  - `frontend/src/components/CreateEditPOModal.tsx` (portaled shared modal supporting `mode="create"` and `mode="edit"`: dynamically queries `GET /api/parts/{part_id}/po-suggestion?supplier_id=...` on open and supplier switch, renders the **Suggestion & Reasoning** card with `Inventory Position`, `Daily Burn (EWMA α=0.30)`, `Effective LT + Comm Buffer`, `MOQ`, `Safety Stock`, `Target Stock T (ROP)`, and plain-English `reasoning`; pre-fills suggested qty in `create` mode and offers 1-click **"Use Suggested Qty"** without clobbering user edits in `edit` mode; generates/regenerates Lex drafts via `POST /api/pos/draft-manual`; dispatches new POs via `POST /api/pos/manual` or edits & dispatches `PENDING_DISPATCH_APPROVAL` POs via `POST /api/pos/{po_id}/dispatch-edited`).
+- **Files Modified:**
+  - `frontend/src/api/types.ts` & `frontend/src/api/client.ts` (added `DispatchEditedPORequest`, `DispatchEditedPOResponse`, `api.dispatchEditedPo()`, and `avg_response_days?` / `cycles_90d?` on `SupplierItem` and `SupplierScoreResult`).
+  - `frontend/src/pages/InventoryPage.tsx` (replaced inline `create_po` modal and state with `<CreateEditPOModal mode="create" ... />`, preserving `withdraw` modal and `StockoutCycleDrawer` integration).
+  - `frontend/src/pages/POTrackerPage.tsx` (added `[Edit & Dispatch PO]` banner & button in the slide-over drawer when `poDetail.status === 'PENDING_DISPATCH_APPROVAL'`, wired to `<CreateEditPOModal mode="edit" ... />`).
+  - `frontend/src/pages/AlertsPage.tsx` (handled `edit_po` CTA directly via `<CreateEditPOModal mode="edit" ... />` without premature `executeAlertCta`, filtered `[Reject Draft]` defensively on `PO_DISPATCH_APPROVAL`, added defensive UI guard hiding `draft_preview` on `DISMISSED` alerts, rendered read-only draft bodies through `FormattedEmailBody`, and replaced all `ROP/S` strings with `ROP/T` / `T`).
+  - `frontend/src/pages/SuppliersPlanningPage.tsx` (added `Avg Response` in days and `Cycles (90d)` tiles on supplier scorecards, added explicit `EWMA α = 0.30` note in the page subtitle and Dynamic `ROP/T` header, and replaced all `ROP/S` / `Order-Up-To (S)` / `S=` labels with `ROP/T` / `Order-Up-To (T)` / `T=`).
+  - `frontend/src/pages/AIHealthPage.tsx` (added tool-call count badge on `AgentTrace` header rows and structured **Tool Execution Steps** cards inside expanded traces rendering tool name, step index, duration, `ERROR` badge, JSON `Args`, and `Result Summary` / error details).
+- **Verification:** Global `rg` confirmed zero remaining `ROP/S` / `ROP / S` / `rop_s` / `Order-Up-To (S)` strings in `frontend/src/`; `cd frontend && npm run build` (`tsc -b && vite build`, `✓ built in 1.69s`, 0 TypeScript/Vite errors); `uv run pytest -q` (`138 passed, 8 skipped` — 8 live-Gemini tests skipped offline); `uv run ruff check backend tests` (`All checks passed!`). `backend/`, `format.ts`, `ClockBar.tsx`, `StockoutCycleDrawer.tsx`, and `MailroomPage.tsx` left untouched.
+
+---
+
+## Next Session Handoff Prompt — Start Slice `P3-8`
+
+> Execute **Slice P3-8** (Final Phase 3 Verification & Documentation Parity Gate) per `docs/phase3/SLICES_P3.md`, `docs/phase3/PRD_P3.md §3`, and `AGENTS.md §5`:
+> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md (§3 Acceptance Criteria)`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-8)`, `STATUS.md`, and `README.md`.
+> - **Scope:** Verification & documentation parity only (fix any genuine E2E/live-eval bug discovered during verification if needed, keeping changes minimal and re-running full checks). Leave untracked `demo_recordings/` unstaged.
 > - **Acceptance Criteria:**
->   1. Extract `frontend/src/components/CreateEditPOModal.tsx` with live per-supplier **Suggested Qty + Reasoning** (calling `GET /api/parts/{part_id}/po-suggestion?supplier_id=...` when switching suppliers); wire it into `InventoryPage` (`Create PO`), `AlertsPage` (`edit_po` CTA on `PO_DISPATCH_APPROVAL` calling `POST /api/pos/{po_id}/dispatch-edited`), and `POTrackerPage` (`PENDING_DISPATCH_APPROVAL` drawer).
->   2. Update `frontend/src/pages/AlertsPage.tsx`: remove `[Reject Draft]` on PO dispatch alerts (`edit_po` replaces it), ensure `DISMISSED` alerts hide `draft_preview`, render read-only email bodies via `FormattedEmailBody`, and replace any `ROP/S` / `ROP / S` strings with `ROP/T`.
->   3. Update `frontend/src/pages/SuppliersPlanningPage.tsx`: display `Cycles (90d)` (`cycles_90d`) and `Avg Response (days)` (`avg_response_days`) on supplier scorecards, include the `EWMA α = 0.30` note, and replace all `ROP/S` strings with `ROP/T`.
->   4. Update `frontend/src/pages/AIHealthPage.tsx`: render `trace.tool_calls` (tool name, args, sandbox output, reminder scheduling) cleanly inside expandable trace detail cards.
->   5. Run `cd frontend && npm run build`, `uv run pytest`, and `uv run ruff check backend tests`, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
+>   1. Run full offline `uv run pytest -v`, `uv run ruff check backend tests`, and `cd frontend && npm run build`.
+>   2. Run live Gemini verification (`RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/`) and execute the `lex` eval suite in `mode: "live"` via `POST /api/evals/lex/run`, verifying 100% pass rate.
+>   3. Run a full headless Playwright/Chromium browser walkthrough against the running backend + frontend across all 6 acceptance criteria in `PRD_P3.md §3` (Oct 1 13:00 IST seed & 0 open POs, same-day withdraw vs `+1d` EWMA rollover & `ROP/T` freeze/recalc invariants, `Stockout In` urgency badges & 90d cycle drawer, `[Create PO]` suggested qty + `[View PO]` jump, `[Edit PO]` modal from Alerts + `DISMISSED` draft hiding & inventory warning badge, formatted emails & Lex tool-call traces in `AIHealthPage`).
+>   4. Sync `docs/phase3/STATUS_P3.md`, `STATUS.md`, and `README.md` with exact verified outputs and commit cleanly.
 
 ---
 

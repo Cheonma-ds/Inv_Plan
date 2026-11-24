@@ -8,6 +8,7 @@ import {
   FileText,
   Mail,
   PackageCheck,
+  Pencil,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -20,6 +21,7 @@ import type {
   PODetail,
   POListItem,
 } from '../api/types';
+import { CreateEditPOModal } from '../components/CreateEditPOModal';
 import { DataTable, type ColumnDef } from '../components/DataTable';
 import { FormattedEmailBody } from '../components/FormattedEmailBody';
 import { OrderTrackingStepper } from '../components/OrderTrackingStepper';
@@ -68,6 +70,7 @@ export function POTrackerPage({
   const [noteInput, setNoteInput] = useState('');
   const [busyAction, setBusyAction] = useState(false);
   const [showEscalationModal, setShowEscalationModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
 
   const loadPos = useCallback(async () => {
     setLoading(true);
@@ -120,6 +123,7 @@ export function POTrackerPage({
 
   useEffect(() => {
     setShowEscalationModal(false);
+    setShowEditModal(false);
   }, [selectedPoId]);
 
   useEffect(() => {
@@ -131,7 +135,7 @@ export function POTrackerPage({
   }, [selectedPoId, loadDetail, refreshNonce]);
 
   useEffect(() => {
-    if (selectedPoId === null || showEscalationModal) return;
+    if (selectedPoId === null || showEscalationModal || showEditModal) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSelectedPoId(null);
@@ -139,7 +143,7 @@ export function POTrackerPage({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedPoId, showEscalationModal]);
+  }, [selectedPoId, showEscalationModal, showEditModal]);
 
   const statusOptions = useMemo(() => {
     const distinct = Array.from(new Set(pos.map((p) => p.status))).sort();
@@ -549,6 +553,27 @@ export function POTrackerPage({
                   </div>
                 </div>
 
+                {poDetail.status === 'PENDING_DISPATCH_APPROVAL' && (
+                  <div className="rounded-2xl border border-[#B46900]/28 bg-[#B46900]/[0.06] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs">
+                      <div className="font-bold text-[#945600]">
+                        Draft PO Pending Dispatch Approval
+                      </div>
+                      <p className="text-[#6E6E73] mt-0.5">
+                        Review suggested quantity, switch supplier, or edit terms and dispatch directly without creating a duplicate PO.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowEditModal(true)}
+                      className="apple-press inline-flex items-center gap-1.5 rounded-xl bg-[#0066CC] px-3.5 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] shadow-2xs"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit &amp; Dispatch PO
+                    </button>
+                  </div>
+                )}
+
                 {/* Horizontal Order Tracking Stepper & Shipment Logistics Details */}
                 <section className="space-y-3">
                   <div className="flex items-center justify-between gap-2">
@@ -947,6 +972,20 @@ export function POTrackerPage({
           po={poDetail}
           onClose={() => setShowEscalationModal(false)}
           onEscalated={(res) => void handleEscalated(res)}
+        />
+      )}
+
+      {showEditModal && poDetail && (
+        <CreateEditPOModal
+          mode="edit"
+          poId={poDetail.id}
+          initialPo={poDetail}
+          onClose={() => setShowEditModal(false)}
+          onNotify={onNotify}
+          onSuccess={async () => {
+            onMutated();
+            await Promise.all([loadPos(), loadDetail(poDetail.id)]);
+          }}
         />
       )}
     </div>

@@ -112,6 +112,22 @@ export interface ManualPOCreateResponse {
   comm_id: number;
 }
 
+export interface DispatchEditedPORequest {
+  supplier_id?: number;
+  qty?: number;
+  unit_price?: number;
+  subject?: string;
+  body?: string;
+  note?: string;
+}
+
+export interface DispatchEditedPOResponse {
+  po: POListItem;
+  comm_id: number;
+  resolved_alerts: number;
+  superseded_comm_ids: number[];
+}
+
 export interface PartSnapshot {
   part_id: number;
   sku: string;
@@ -441,6 +457,8 @@ export interface SupplierItem {
   otd_rate: number;
   invoice_accuracy_rate: number;
   response_rate: number;
+  avg_response_days?: number;
+  cycles_90d?: number;
   memory_notes: SupplierMemoryNote[];
 }
 
@@ -472,6 +490,8 @@ export interface SupplierScoreResult {
   invoice_accuracy_component: number;
   response_rate: number;
   responsiveness_component: number;
+  avg_response_days?: number;
+  cycles_90d?: number;
   reliability_score: number;
 }
 

@@ -11,11 +11,11 @@ import {
   RotateCcw,
   Search,
   ShoppingCart,
-  Sparkles,
   X,
 } from 'lucide-react';
 import { api } from '../api/client';
-import type { PartItem, PartSupplierTerm } from '../api/types';
+import type { PartItem } from '../api/types';
+import { CreateEditPOModal } from '../components/CreateEditPOModal';
 import { DataTable, type ColumnDef } from '../components/DataTable';
 import { StockoutCycleDrawer } from '../components/StockoutCycleDrawer';
 import {
@@ -23,7 +23,6 @@ import {
   formatBurnRate,
   formatInr,
   formatSimDateTime,
-  personaLabel,
   severityBadgeClass,
   stockoutUrgencyBadgeClass,
 } from '../utils/format';
@@ -37,10 +36,7 @@ interface InventoryPageProps {
   onNavigatePo: (poId: number) => void;
 }
 
-type ModalState =
-  | { kind: 'withdraw'; part: PartItem }
-  | { kind: 'create_po'; part: PartItem }
-  | null;
+type ModalState = { kind: 'withdraw'; part: PartItem } | null;
 
 interface DismissedPopoverState {
   partId: number;
@@ -95,13 +91,8 @@ export function InventoryPage({
   const [withdrawQtyInput, setWithdrawQtyInput] = useState('1');
   const [withdrawNoteInput, setWithdrawNoteInput] = useState('');
 
-  // Create PO form fields
-  const [poSupplierId, setPoSupplierId] = useState<number | null>(null);
-  const [poQtyInput, setPoQtyInput] = useState('');
-  const [poDraftGenerating, setPoDraftGenerating] = useState(false);
-  const [poDraftReady, setPoDraftReady] = useState(false);
-  const [poSubject, setPoSubject] = useState('');
-  const [poBody, setPoBody] = useState('');
+  // Create PO modal target
+  const [createPoPart, setCreatePoPart] = useState<PartItem | null>(null);
 
   const loadParts = useCallback(async () => {
     setLoading(true);
@@ -182,18 +173,6 @@ export function InventoryPage({
     if (next.kind === 'withdraw') {
       setWithdrawQtyInput(next.part.on_hand_stock > 0 ? '1' : '0');
       setWithdrawNoteInput('');
-    } else if (next.kind === 'create_po') {
-      const primary =
-        next.part.suppliers.find((s) => s.supplier_rank === 1) ?? next.part.suppliers[0] ?? null;
-      setPoSupplierId(primary ? primary.supplier_id : null);
-      const suggestedQty = Math.max(
-        primary?.moq ?? 1,
-        next.part.replenishment_point - next.part.inventory_position,
-      );
-      setPoQtyInput(String(suggestedQty > 0 ? suggestedQty : 1));
-      setPoDraftReady(false);
-      setPoSubject('');
-      setPoBody('');
     }
   }, []);
 
@@ -276,89 +255,6 @@ export function InventoryPage({
       );
     } finally {
       setBusyDismissedId(null);
-    }
-  };
-
-  const selectedPoSupplier: PartSupplierTerm | null =
-    modal?.kind === 'create_po'
-      ? modal.part.suppliers.find((s) => s.supplier_id === poSupplierId) ?? null
-      : null;
-  const parsedPoQty = Number.parseInt(poQtyInput, 10);
-  const canGeneratePoDraft =
-    modal?.kind === 'create_po' &&
-    selectedPoSupplier !== null &&
-    Number.isFinite(parsedPoQty) &&
-    parsedPoQty > 0 &&
-    !poDraftGenerating &&
-    !submitting;
-  const canCreatePo =
-    modal?.kind === 'create_po' &&
-    poDraftReady &&
-    selectedPoSupplier !== null &&
-    Number.isFinite(parsedPoQty) &&
-    parsedPoQty > 0 &&
-    poSubject.trim().length > 0 &&
-    poBody.trim().length > 0 &&
-    !submitting;
-
-  const handleGeneratePoDraft = async () => {
-    if (
-      modal?.kind !== 'create_po' ||
-      !selectedPoSupplier ||
-      !Number.isFinite(parsedPoQty) ||
-      parsedPoQty <= 0
-    ) {
-      return;
-    }
-    setPoDraftGenerating(true);
-    try {
-      const draft = await api.generateManualPoDraft(
-        modal.part.part_id,
-        selectedPoSupplier.supplier_id,
-        parsedPoQty,
-      );
-      setPoSubject(draft.subject);
-      setPoBody(draft.body);
-      setPoDraftReady(true);
-    } catch (err) {
-      onNotify(
-        'error',
-        'Failed to generate PO draft',
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setPoDraftGenerating(false);
-    }
-  };
-
-  const handleCreateManualPo = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canCreatePo || modal?.kind !== 'create_po' || !selectedPoSupplier) return;
-    setSubmitting(true);
-    try {
-      const res = await api.createManualPo({
-        part_id: modal.part.part_id,
-        supplier_id: selectedPoSupplier.supplier_id,
-        qty: parsedPoQty,
-        subject: poSubject.trim(),
-        body: poBody.trim(),
-      });
-      onNotify(
-        'success',
-        `Created & dispatched ${res.po.po_number}`,
-        `${parsedPoQty} units of ${modal.part.sku} ordered from ${selectedPoSupplier.supplier_name}.`,
-      );
-      setModal(null);
-      onMutated();
-      await loadParts();
-    } catch (err) {
-      onNotify(
-        'error',
-        'Failed to create PO',
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -627,7 +523,7 @@ export function InventoryPage({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  openModal({ kind: 'create_po', part });
+                  setCreatePoPart(part);
                 }}
                 disabled={part.suppliers.length === 0}
                 className="apple-press inline-flex items-center gap-1 rounded-lg border border-[#0066CC]/30 bg-[#0066CC]/[0.06] px-2.5 py-1 text-xs font-semibold text-[#0058B3] hover:bg-[#0066CC]/[0.12] disabled:opacity-40"
@@ -840,24 +736,31 @@ export function InventoryPage({
         onCreatePo={(id) => {
           const target = parts.find((p) => p.part_id === id);
           if (target && target.active_po_id === null) {
-            openModal({ kind: 'create_po', part: target });
+            setCreatePoPart(target);
           }
         }}
       />
 
+      {createPoPart && (
+        <CreateEditPOModal
+          mode="create"
+          part={createPoPart}
+          onClose={() => setCreatePoPart(null)}
+          onNotify={onNotify}
+          onSuccess={async () => {
+            onMutated();
+            await loadParts();
+          }}
+        />
+      )}
+
       {modal && (
         <div className="anim-backdrop fixed inset-0 z-40 flex items-center justify-center bg-black/30 backdrop-blur-xs p-4">
-          <div
-            className={`anim-modal-pop w-full ${
-              modal.kind === 'create_po' ? 'max-w-2xl max-h-[90vh] overflow-y-auto' : 'max-w-md'
-            } rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_18px_48px_rgba(0,0,0,0.14)]`}
-          >
+          <div className="anim-modal-pop w-full max-w-md rounded-2xl border border-black/[0.08] bg-white p-5 shadow-[0_18px_48px_rgba(0,0,0,0.14)]">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h2 className="text-base font-bold tracking-tight text-[#1D1D1F]">
-                  {modal.kind === 'withdraw'
-                    ? `Withdraw Stock — ${modal.part.sku}`
-                    : `Create PO — ${modal.part.sku}`}
+                  {`Withdraw Stock — ${modal.part.sku}`}
                 </h2>
                 <p className="text-xs text-[#6E6E73] mt-0.5">{modal.part.name}</p>
               </div>
@@ -918,198 +821,6 @@ export function InventoryPage({
                     className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
                   >
                     {submitting ? 'Withdrawing...' : 'Withdraw'}
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {modal.kind === 'create_po' && (
-              <form onSubmit={handleCreateManualPo} className="mt-4 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1.5">
-                    Select Supplier (ranked by configured priority &amp; performance)
-                  </label>
-                  <div className="grid grid-cols-1 gap-2">
-                    {modal.part.suppliers.map((sup) => {
-                      const isSelected = sup.supplier_id === poSupplierId;
-                      const score = sup.reliability_score;
-                      const scoreColor =
-                        score !== null && score !== undefined
-                          ? score >= 80
-                            ? 'text-[#1B6B43] bg-[#1B6B43]/10 border-[#1B6B43]/25'
-                            : score >= 60
-                              ? 'text-[#945600] bg-[#B46900]/10 border-[#B46900]/25'
-                              : 'text-[#B82923] bg-[#C9342D]/10 border-[#C9342D]/25'
-                          : 'text-[#6E6E73] bg-black/[0.04] border-black/[0.08]';
-                      return (
-                        <button
-                          key={sup.supplier_id}
-                          type="button"
-                          onClick={() => {
-                            setPoSupplierId(sup.supplier_id);
-                            setPoDraftReady(false);
-                          }}
-                          className={`text-left rounded-xl border p-3 transition-colors ${
-                            isSelected
-                              ? 'border-[#0066CC] bg-[#0066CC]/[0.05] ring-1 ring-[#0066CC]'
-                              : 'border-black/[0.10] bg-[#FBFBFD] hover:border-black/[0.20]'
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <span className="rounded-md bg-black/[0.06] px-1.5 py-0.5 text-[10px] font-bold text-[#1D1D1F]">
-                                {sup.supplier_rank}°
-                              </span>
-                              <span className="text-sm font-semibold text-[#1D1D1F]">
-                                {sup.supplier_persona
-                                  ? personaLabel(sup.supplier_persona)
-                                  : sup.supplier_name}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 tabular-nums">
-                              {score !== null && score !== undefined && (
-                                <span
-                                  className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${scoreColor}`}
-                                >
-                                  Score {score.toFixed(1)}/100
-                                </span>
-                              )}
-                              <span className="text-sm font-bold text-[#1D1D1F]">
-                                {formatInr(sup.agreed_unit_price)}/unit
-                              </span>
-                            </div>
-                          </div>
-                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#6E6E73] tabular-nums">
-                            <span>
-                              Lead Time:{' '}
-                              <strong className="text-[#1D1D1F]">
-                                {sup.effective_lead_time_days.toFixed(1)}d eff
-                              </strong>{' '}
-                              (quoted {sup.quoted_lead_time_days}d)
-                            </span>
-                            {sup.estimated_arrival_date && (
-                              <span>
-                                Est. Arrival:{' '}
-                                <strong className="text-[#1D1D1F]">
-                                  {sup.estimated_arrival_date}
-                                </strong>
-                              </span>
-                            )}
-                            <span>MOQ: {sup.moq}</span>
-                            {sup.otd_rate !== null && sup.otd_rate !== undefined && (
-                              <span>OTD: {Math.round(sup.otd_rate * 100)}%</span>
-                            )}
-                            {sup.response_rate !== null && sup.response_rate !== undefined && (
-                              <span>Resp: {Math.round(sup.response_rate * 100)}%</span>
-                            )}
-                          </div>
-                          {sup.latest_memory_note && (
-                            <div className="mt-1 text-[11px] text-[#86868B] italic truncate">
-                              Note: {sup.latest_memory_note}
-                            </div>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                      Order Quantity
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={poQtyInput}
-                      onChange={(e) => {
-                        setPoQtyInput(e.target.value);
-                        setPoDraftReady(false);
-                      }}
-                      required
-                      className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
-                    />
-                  </div>
-                  <div className="rounded-xl border border-black/[0.08] bg-[#FBFBFD] px-3 py-2 flex items-center justify-between text-xs tabular-nums">
-                    <span className="text-[#6E6E73]">Total PO Value:</span>
-                    <span className="text-sm font-bold text-[#1D1D1F]">
-                      {selectedPoSupplier && Number.isFinite(parsedPoQty) && parsedPoQty > 0
-                        ? formatInr(selectedPoSupplier.agreed_unit_price * parsedPoQty)
-                        : '—'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-black/[0.06] bg-[#FBFBFD] px-3 py-2.5">
-                  <span className="text-xs text-[#6E6E73]">
-                    {poDraftReady
-                      ? 'Lex draft ready below. Review or edit before dispatching.'
-                      : 'Set supplier & quantity, then ask Lex to draft the initial PO email.'}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={!canGeneratePoDraft}
-                    onClick={() => void handleGeneratePoDraft()}
-                    className="apple-press shrink-0 inline-flex items-center gap-1.5 rounded-xl bg-[#1D1D1F] px-3.5 py-2 text-xs font-semibold text-white hover:bg-black disabled:opacity-35 disabled:cursor-not-allowed"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    {poDraftGenerating ? 'Generating...' : 'Generate PO draft'}
-                  </button>
-                </div>
-
-                {poDraftReady && (
-                  <div className="space-y-2.5 rounded-xl border border-[#0066CC]/25 bg-[#0066CC]/[0.03] p-3">
-                    <div className="text-[11px] font-medium text-[#6E6E73]">
-                      To:{' '}
-                      <strong className="text-[#1D1D1F]">
-                        {selectedPoSupplier?.supplier_persona
-                          ? personaLabel(selectedPoSupplier.supplier_persona)
-                          : selectedPoSupplier?.supplier_name}
-                      </strong>{' '}
-                      · CC: <strong className="text-[#1D1D1F]">Lex (AI Agent), Inventory Manager</strong>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                        Subject
-                      </label>
-                      <input
-                        type="text"
-                        value={poSubject}
-                        onChange={(e) => setPoSubject(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-black/[0.12] bg-white px-3 py-1.5 text-sm text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                        Email Body
-                      </label>
-                      <textarea
-                        rows={6}
-                        value={poBody}
-                        onChange={(e) => setPoBody(e.target.value)}
-                        required
-                        className="w-full rounded-xl border border-black/[0.12] bg-white px-3 py-2 text-sm text-[#1D1D1F] focus:border-[#0066CC] focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setModal(null)}
-                    className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!canCreatePo}
-                    className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {submitting ? 'Creating PO...' : 'Create PO'}
                   </button>
                 </div>
               </form>
