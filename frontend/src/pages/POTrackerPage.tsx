@@ -484,7 +484,7 @@ export function POTrackerPage({
         createPortal(
           <div
             onClick={() => setSelectedPoId(null)}
-            className="anim-backdrop fixed inset-0 z-40 flex justify-end bg-black/28 backdrop-blur-xs"
+            className="anim-backdrop fixed top-0 bottom-0 left-0 right-0 lg:right-[var(--copilot-offset,0px)] z-40 flex justify-end bg-black/28 backdrop-blur-xs"
           >
             <div
               role="dialog"

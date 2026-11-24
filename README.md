@@ -1,6 +1,6 @@
 # InvPlan — Demand-to-Delivery & Inventory Planning Prototype
 
-> **Project Status:** Phase 1 MVP (Slices 1–5) + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) + Phase 3 (`P3-1`–`P3-8`) Complete & Verified  
+> **Project Status:** Phase 1 MVP (Slices 1–5) + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) + Phase 3 (`P3-1`–`P3-8`) + Phase 4 Manager Copilot (`P4-1`–`P4-4`) Complete & Verified  
 > **Context:** A portfolio project built to practice **Product Management** and **Agentic Engineering**—translating recurring operational pain points gathered from Supply Chain Management (SCM) communities into a working, guardrailed prototype built with **Google Antigravity CLI**.
 >
 > *Note: This repository is an architectural and product prototype meant to demonstrate problem framing, system design, and agentic engineering practices rather than a packaged, end-user runnable distribution.*
@@ -123,6 +123,9 @@ This prototype was developed iteratively using **Google Antigravity CLI** (`agy`
 5. **Phase 3 (`docs/phase3/`, Slices `P3-1`–`P3-8`):**
    - Reset simulated clock & seed baseline to **Oct 1, 2026 1:00 PM IST** with a 90-day causal Jul–Sep simulation (**0 open POs** on seed), daily EWMA (`alpha = 0.30`) + cycle analytics, `ROP/T` standardization, `Edit PO` + unresolved dismissed-alert inventory warnings, and **Lex v2** (13 tools, AST-sandboxed calculation executor, dynamic N-day `LexReminder` scheduling, multimodal image/PDF triage, and `COPILOT_SYSTEM_PROMPT`).
    - Verified with **`124 passed, 25 skipped`** offline tests, **`43/43`** in `tests/agents/` (`RUN_LIVE_GEMINI=1`, **25/25 live Gemini tests**), **`34/34` (`100.0%`)** live YAML evals, and full headless Chromium E2E across all 6 `PRD_P3.md §3` acceptance criteria.
+6. **Phase 4 — Manager Copilot (`docs/phase4/`, Slices `P4-1`–`P4-4`):**
+   - Built a persistent, multi-turn **Manager Copilot** drawer (`Ctrl+L` shortcut & `ClockBar` **Ask Lex** launcher) backed by strictly read-only LLM reasoning (`read_only_only=True`), deterministic supply-chain statistics (`run_statistical_analysis`), interactive SVG charts & diagrams (`render_chart` / `render_diagram`), zero-asterisk Markdown rendering (`CopilotMarkdown`), side-by-side non-closing SKU/PO/Alert deep links (`--copilot-offset`), and an in-chat **[Confirm & Execute]** / **[Revise / Clarify Intent]** / **[Cancel]** human-in-the-loop action workflow (`copilot_actions.py`), plus `copilot_query` traces in `AIHealthPage`.
+   - Verified with **`132 passed, 27 skipped`** offline tests (incl. 5 AST checks), **`9/9`** live Copilot Gemini tests, **`36/36` (`100.0%`)** live YAML evals, `ruff` & `npm run build` clean, and headless Chromium Playwright E2E across the built Vite bundle + live FastAPI backend.
 
 ---
 
@@ -138,11 +141,11 @@ This prototype was developed iteratively using **Google Antigravity CLI** (`agy`
 ## 6. Quick Start (Local Development)
 
 ```bash
-# 1. Install backend dependencies & run offline tests (124 passed, 25 live Gemini skipped)
+# 1. Install backend dependencies & run offline tests (132 passed, 27 live Gemini skipped)
 uv sync
 uv run pytest -q
 
-# Optional: run full 25-test live Gemini suite + 18 tool/sandbox tests (43 passed)
+# Optional: run full live Gemini suite + tool/sandbox/copilot unit tests
 export GEMINI_API_KEY="your-api-key"
 RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/
 
@@ -169,6 +172,7 @@ inv_plan/
 │   ├── resolved_problems.md      # Pre-Slice 4 audit & resolution ledger (P1–P18)
 │   ├── phase2/                   # Phase 2 PRD, design & status (logistics, Making, procurement)
 │   ├── phase3/                   # Phase 3 PRD, design, slices & status (EWMA, Lex v2, UX)
+│   ├── phase4/                   # Phase 4 PRD, design, slices & status (Manager Copilot)
 │   └── test-scenarios/           # 50 live scenarios, top-10 demo playbook, fixtures & reports
 ├── backend/
 │   ├── core/                     # Config, DB models, idempotent migrations, SimulatedClock (IST)
@@ -178,12 +182,12 @@ inv_plan/
 │   ├── planning/                 # 90d EWMA daily burn (α=0.30), cycle analytics, supplier scoring, ROP/T
 │   ├── agents/                   # BaseAgent, ToolRegistry, AST sandbox, GeminiLLMClient, Lex
 │   ├── observability/            # AgentTracer (tool_calls), AutonomyPolicy tracking, YAML EvalRunner
-│   ├── orchestrator/             # Cross-domain WorkflowEngine, lex_tools (13 tools), SLA & LexReminder watcher
+│   ├── orchestrator/             # Cross-domain WorkflowEngine, lex_tools, copilot_actions, SLA watcher
 │   ├── seed/                     # 15-part, 3-supplier, 90-day causal Jul–Sep seed generator (0 open POs)
-│   └── evals/                    # Golden YAML evaluation suite (lex.yaml — 34 cases)
-├── frontend/                     # React + TypeScript + Tailwind operations & AI health UI
-└── tests/                        # Unit, integration, 25 live Gemini, and AST architecture tests
+│   └── evals/                    # Golden YAML evaluation suite (lex.yaml — 36 cases)
+├── frontend/                     # React + TypeScript + Tailwind operations, Copilot & AI health UI
+└── tests/                        # Unit, integration, 27 live Gemini, and AST architecture tests
 ```
 
 ### Next-Stage Direction
-Phases 1–3 (`P3-1`–`P3-8`) are complete and verified. Next-stage work includes exposing the interactive **Manager Copilot** chat/query UI (using Lex's 13-tool `COPILOT_SYSTEM_PROMPT` backend readiness), progressive autonomy graduation per email category (`AutonomyPolicy`), and external IMAP/Gmail `EmailTransport` integration.
+Phases 1–4 (`P4-1`–`P4-4`) are complete and verified. Optional next-stage work includes progressive autonomy graduation per email category (`AutonomyPolicy`) and external IMAP/Gmail `EmailTransport` integration.

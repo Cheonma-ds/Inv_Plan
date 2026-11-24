@@ -1,24 +1,28 @@
-import { Bell, CalendarClock, FastForward, RotateCcw } from 'lucide-react';
+import { Bell, CalendarClock, FastForward, RotateCcw, Sparkles } from 'lucide-react';
 import { formatSimDateTime } from '../utils/format';
 
 interface ClockBarProps {
   simNow: string | null;
   openAlertsCount: number;
   alertsActive?: boolean;
+  copilotOpen?: boolean;
   busy: boolean;
   onAdvance: (params: { days?: number; hours?: number }) => void;
   onResetSeed: () => void;
   onGoToAlerts: () => void;
+  onToggleCopilot: () => void;
 }
 
 export function ClockBar({
   simNow,
   openAlertsCount,
   alertsActive = false,
+  copilotOpen = false,
   busy,
   onAdvance,
   onResetSeed,
   onGoToAlerts,
+  onToggleCopilot,
 }: ClockBarProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-black/[0.08] bg-white/82 backdrop-blur-xl">
@@ -73,6 +77,30 @@ export function ClockBar({
         </div>
 
         <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={onToggleCopilot}
+            aria-pressed={copilotOpen}
+            title="Toggle Lex Manager Copilot (Ctrl+L)"
+            className={`apple-press inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs shadow-2xs ${
+              copilotOpen
+                ? 'border-[#5E5CE6] bg-[#5E5CE6] font-semibold text-white shadow-[0_1px_4px_rgba(94,92,230,0.32)]'
+                : 'border-[#5E5CE6]/28 bg-[#5E5CE6]/[0.07] font-semibold text-[#4B48C4] hover:bg-[#5E5CE6]/[0.14]'
+            }`}
+          >
+            <Sparkles className={`h-3.5 w-3.5 ${copilotOpen ? 'text-white' : 'text-[#5E5CE6]'}`} />
+            <span>Ask Lex</span>
+            <kbd
+              className={`hidden sm:inline-block rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                copilotOpen
+                  ? 'bg-white/20 text-white'
+                  : 'bg-[#5E5CE6]/12 text-[#4B48C4]'
+              }`}
+            >
+              Ctrl+L
+            </kbd>
+          </button>
+
           <button
             type="button"
             onClick={onGoToAlerts}

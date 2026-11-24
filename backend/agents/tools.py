@@ -79,6 +79,7 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, RegisteredTool] = {}
+        self._visual_artifacts: list[dict[str, Any]] = []
 
     def register(self, spec: ToolDefinition, handler: ToolHandler) -> None:
         clean_name = spec.name.strip()
@@ -114,11 +115,33 @@ class ToolRegistry:
     def has(self, name: str) -> bool:
         return name in self._tools
 
-    def names(self) -> list[str]:
-        return list(self._tools.keys())
+    def names(self, *, read_only_only: bool = False) -> list[str]:
+        return [
+            name
+            for name, entry in self._tools.items()
+            if not read_only_only or entry.spec.read_only
+        ]
 
-    def list_definitions(self) -> list[ToolDefinition]:
-        return [entry.spec for entry in self._tools.values()]
+    def list_definitions(self, *, read_only_only: bool = False) -> list[ToolDefinition]:
+        return [
+            entry.spec
+            for entry in self._tools.values()
+            if not read_only_only or entry.spec.read_only
+        ]
+
+    def read_only_view(self) -> "ToolRegistry":
+        """Return a shallow-filtered ToolRegistry exposing only read_only=True tools."""
+        filtered = ToolRegistry()
+        for entry in self._tools.values():
+            if entry.spec.read_only:
+                filtered.register(entry.spec, entry.handler)
+        return filtered
+
+    def pop_visual_artifacts(self) -> list[dict[str, Any]]:
+        """Return and clear any validated chart/diagram specs emitted during execution."""
+        items = list(self._visual_artifacts)
+        self._visual_artifacts.clear()
+        return items
 
     def execute(self, name: str, args: dict[str, Any] | None = None) -> ToolResult:
         start = time.perf_counter()
@@ -147,6 +170,17 @@ class ToolRegistry:
                     }
                 )
             safe_data = _to_json_safe(raw_output)
+            if (
+                isinstance(safe_data, dict)
+                and safe_data.get("rendered") is True
+                and isinstance(safe_data.get("spec"), dict)
+            ):
+                self._visual_artifacts.append(
+                    {
+                        "kind": str(safe_data.get("kind") or "chart"),
+                        "spec": safe_data["spec"],
+                    }
+                )
             return ToolResult(
                 tool_name=name,
                 ok=True,

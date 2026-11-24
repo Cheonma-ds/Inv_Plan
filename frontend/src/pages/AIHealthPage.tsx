@@ -42,6 +42,12 @@ function taskBadgeClass(taskType: string): string {
       return 'bg-[#5E5CE6]/10 text-[#4B48C4] border-[#5E5CE6]/22';
     case 'email_draft':
       return 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/24';
+    case 'copilot_query':
+      return 'bg-[#0D9488]/10 text-[#0F766E] border-[#0D9488]/25';
+    case 'stock_request_triage':
+      return 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22';
+    case 'reminder_wakeup':
+      return 'bg-[#6E6E73]/10 text-[#1D1D1F] border-black/[0.14]';
     default:
       return 'bg-black/[0.05] text-[#6E6E73] border-black/[0.10]';
   }
@@ -686,9 +692,12 @@ export function AIHealthPage({ refreshNonce, onMutated, onNotify }: AIHealthPage
             className="rounded-xl border border-black/[0.08] bg-white px-3 py-1.5 text-xs font-medium text-[#1D1D1F] shadow-2xs focus:border-[#0066CC] focus:outline-none"
           >
             <option value="ALL">All Task Types</option>
+            <option value="copilot_query">copilot_query</option>
             <option value="email_triage">email_triage</option>
             <option value="invoice_extraction">invoice_extraction</option>
             <option value="email_draft">email_draft</option>
+            <option value="stock_request_triage">stock_request_triage</option>
+            <option value="reminder_wakeup">reminder_wakeup</option>
           </select>
         </div>
 

@@ -58,7 +58,7 @@ def _add_missing_columns(
 
 
 def ensure_schema_migrations(target_engine: Engine) -> list[str]:
-    """Idempotently add missing Phase 2 / Fix-pack columns on existing SQLite databases."""
+    """Idempotently add missing Phase 2 / Fix-pack / Phase 4 schema updates on SQLite DBs."""
     if target_engine.dialect.name != "sqlite":
         return []
 
@@ -70,4 +70,34 @@ def ensure_schema_migrations(target_engine: Engine) -> list[str]:
         added.extend(_add_missing_columns(conn, "suppliers", _SUPPLIER_ADDITIVE_COLUMNS))
         added.extend(_add_missing_columns(conn, "inventory_transactions", _INV_TX_ADDITIVE_COLUMNS))
         added.extend(_add_missing_columns(conn, "action_items", _ACTION_ITEM_ADDITIVE_COLUMNS))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS copilot_sessions (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    title VARCHAR(200) NOT NULL DEFAULT 'New Copilot Chat',
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS copilot_messages (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL,
+                    role VARCHAR(16) NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    structured_json JSON,
+                    tool_calls_json JSON NOT NULL DEFAULT '[]',
+                    confidence FLOAT,
+                    trace_id INTEGER,
+                    created_at DATETIME NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES copilot_sessions (id) ON DELETE CASCADE
+                )
+                """
+            )
+        )
     return added

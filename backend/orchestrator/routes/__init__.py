@@ -4,6 +4,7 @@ from backend.orchestrator.routes import (
     admin,
     alerts,
     clock,
+    copilot,
     mailroom,
     observability,
     parts,
@@ -22,5 +23,6 @@ api_router.include_router(suppliers.router)
 api_router.include_router(planning.router)
 api_router.include_router(observability.router)
 api_router.include_router(admin.router)
+api_router.include_router(copilot.router)
 
 __all__ = ["api_router"]

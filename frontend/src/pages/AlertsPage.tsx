@@ -22,6 +22,8 @@ import {
 
 interface AlertsPageProps {
   refreshNonce: number;
+  focusAlertId?: number | null;
+  onClearFocus?: () => void;
   onMutated: () => void;
   onNotify: (kind: 'success' | 'error' | 'info', title: string, detail?: string) => void;
   onNavigatePo: (poId: number) => void;
@@ -95,12 +97,15 @@ function SupplierTermSuffix({
 
 export function AlertsPage({
   refreshNonce,
+  focusAlertId = null,
+  onClearFocus,
   onMutated,
   onNotify,
   onNavigatePo,
   onNavigatePart,
 }: AlertsPageProps) {
   const [filter, setFilter] = useState<StatusFilter>('OPEN');
+  const [highlightedAlertId, setHighlightedAlertId] = useState<number | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyAlertId, setBusyAlertId] = useState<number | null>(null);
@@ -156,6 +161,20 @@ export function AlertsPage({
   useEffect(() => {
     void loadAlerts();
   }, [loadAlerts, refreshNonce]);
+
+  useEffect(() => {
+    if (focusAlertId !== null) {
+      setFilter('ALL');
+      setHighlightedAlertId(focusAlertId);
+      window.setTimeout(() => {
+        document.getElementById(`alert-card-${focusAlertId}`)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      }, 150);
+      onClearFocus?.();
+    }
+  }, [focusAlertId, onClearFocus]);
 
   const handleExecuteCta = async (item: AlertItem, action: string, label: string) => {
     setBusyAlertId(item.id);
@@ -388,8 +407,13 @@ export function AlertsPage({
 
             return (
               <article
+                id={`alert-card-${item.id}`}
                 key={item.id}
-                className="apple-card rounded-2xl p-5 transition-all duration-200 hover:border-black/[0.14] hover:shadow-[0_4px_18px_rgba(0,0,0,0.05)]"
+                className={`apple-card rounded-2xl p-5 transition-all duration-200 hover:border-black/[0.14] hover:shadow-[0_4px_18px_rgba(0,0,0,0.05)] ${
+                  highlightedAlertId === item.id
+                    ? 'ring-2 ring-[#0066CC] bg-[#0066CC]/[0.02]'
+                    : ''
+                }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1.5">

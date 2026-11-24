@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.agents.lex.agent import LexAgent
 from backend.agents.lex.schemas import (
+    CopilotQueryInput,
     EmailDraftInput,
     EmailTriageInput,
     ReminderWakeupInput,
@@ -147,11 +148,73 @@ def _build_standalone_eval_registry(case_input: dict[str, Any]) -> ToolRegistry:
         open_pos = list(case_input.get("open_pos") or [])
         return {"count": len(open_pos), "open_pos": open_pos}
 
+    def _list_parts_summary(urgency_filter: str | None = None) -> dict[str, Any]:
+        del urgency_filter
+        parts = list(case_input.get("parts_summary") or [])
+        return {"total_parts": len(parts), "parts": parts}
+
+    def _list_alerts(
+        status: str = "ALL",
+        include_unresolved_dismissed: bool = True,
+        part_sku_or_id: str | int | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        del status, include_unresolved_dismissed, part_sku_or_id, limit
+        alerts = list(case_input.get("alerts") or [])
+        return {"open_count": len(alerts), "alerts": alerts}
+
+    def _render_chart(
+        chart_type: str,
+        title: str,
+        labels: list[str],
+        series: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return {
+            "rendered": True,
+            "kind": "chart",
+            "title": title,
+            "spec": {
+                "chart_type": chart_type,
+                "title": title,
+                "labels": labels,
+                "series": series,
+                **kwargs,
+            },
+        }
+
     registry.register_function(
         name="list_open_pos",
         description="List currently open PurchaseOrders.",
         parameters_schema={"type": "object", "properties": {}},
         handler=_list_open_pos,
+    )
+    registry.register_function(
+        name="list_parts_summary",
+        description="List inventory parts summary.",
+        parameters_schema={"type": "object", "properties": {}},
+        handler=_list_parts_summary,
+    )
+    registry.register_function(
+        name="list_alerts",
+        description="List ActionItem alerts.",
+        parameters_schema={"type": "object", "properties": {}},
+        handler=_list_alerts,
+    )
+    registry.register_function(
+        name="render_chart",
+        description="Render a chart from verified data.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "chart_type": {"type": "string"},
+                "title": {"type": "string"},
+                "labels": {"type": "array", "items": {"type": "string"}},
+                "series": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["chart_type", "title", "labels", "series"],
+        },
+        handler=_render_chart,
     )
     registry.register_function(
         name="run_sandbox_calc",
@@ -325,14 +388,23 @@ class LexEvalExecutor:
         self,
         *,
         tool_registry_factory: Callable[[Session], ToolRegistry] | None = None,
+        copilot_tool_registry_factory: Callable[[Session], ToolRegistry] | None = None,
     ) -> None:
         self.tool_registry_factory = tool_registry_factory
+        self.copilot_tool_registry_factory = copilot_tool_registry_factory
 
-    def _resolve_registry(self, session: Session, case_input: dict[str, Any]) -> ToolRegistry:
+    def _resolve_registry(
+        self, session: Session, case_input: dict[str, Any], *, task: str = ""
+    ) -> ToolRegistry:
         # Synthetic YAML cases supply isolated open_pos / part_snapshot / po_status inputs;
         # bind tools to those synthetic fixtures so live runs don't collide with seeded POs.
-        if any(k in case_input for k in ("open_pos", "part_snapshot", "po_status")):
+        if any(
+            k in case_input
+            for k in ("open_pos", "part_snapshot", "po_status", "parts_summary", "alerts")
+        ):
             return _build_standalone_eval_registry(case_input)
+        if task == "copilot_query" and self.copilot_tool_registry_factory is not None:
+            return self.copilot_tool_registry_factory(session)
         if self.tool_registry_factory is not None:
             return self.tool_registry_factory(session)
         return _build_standalone_eval_registry(case_input)
@@ -357,7 +429,7 @@ class LexEvalExecutor:
             raise ValueError(f"Unsupported eval mode: {mode}")
 
         lex = LexAgent(llm_client=llm_client)
-        tool_registry = self._resolve_registry(session, case_input)
+        tool_registry = self._resolve_registry(session, case_input, task=task)
 
         if task == "email_triage":
             triage_input = EmailTriageInput.model_validate(case_input)
@@ -421,6 +493,20 @@ class LexEvalExecutor:
                 tcalls = list(latest[0].tool_calls_json or [])
                 out["tool_calls"] = tcalls
                 out["tool_names"] = [str(tc.get("tool", "")) for tc in tcalls]
+            return out
+
+        if task == "copilot_query":
+            query_input = CopilotQueryInput.model_validate(case_input)
+            outcome = lex.answer_copilot_query(
+                session,
+                query_input,
+                tool_registry=tool_registry,
+            )
+            out = outcome.result.model_dump(mode="json")
+            out["degraded"] = outcome.degraded
+            out["visuals"] = outcome.visuals
+            out["tool_calls"] = outcome.tool_calls
+            out["tool_names"] = [str(tc.get("tool", "")) for tc in outcome.tool_calls]
             return out
 
         raise ValueError(f"Unsupported Lex eval task '{task}'.")

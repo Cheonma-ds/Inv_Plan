@@ -390,3 +390,40 @@ class StockRequest(Base):
     analysis_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CopilotSession(Base):
+    __tablename__ = "copilot_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="New Copilot Chat")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+    messages: Mapped[list["CopilotMessage"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="CopilotMessage.id.asc()",
+    )
+
+
+class CopilotMessage(Base):
+    __tablename__ = "copilot_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("copilot_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    structured_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    tool_calls_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    session: Mapped["CopilotSession"] = relationship(back_populates="messages")

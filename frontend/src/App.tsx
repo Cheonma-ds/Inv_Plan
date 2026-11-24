@@ -9,6 +9,7 @@ import {
 import { api } from './api/client';
 import type { NavTab } from './api/types';
 import { ClockBar } from './components/ClockBar';
+import { CopilotDrawer } from './components/CopilotDrawer';
 import { ToastContainer, type ToastMessage } from './components/ToastContainer';
 import { AIHealthPage } from './pages/AIHealthPage';
 import { AlertsPage } from './pages/AlertsPage';
@@ -37,6 +38,8 @@ export default function App() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [focusPoId, setFocusPoId] = useState<number | null>(null);
   const [focusPartId, setFocusPartId] = useState<number | null>(null);
+  const [focusAlertId, setFocusAlertId] = useState<number | null>(null);
+  const [copilotOpen, setCopilotOpen] = useState(false);
 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const toastSeq = useRef(1);
@@ -76,6 +79,24 @@ export default function App() {
   useEffect(() => {
     void refreshGlobalHeader();
   }, [refreshGlobalHeader, refreshNonce]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setCopilotOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--copilot-offset', copilotOpen ? '460px' : '0px');
+    return () => {
+      document.documentElement.style.setProperty('--copilot-offset', '0px');
+    };
+  }, [copilotOpen]);
 
   const bumpRefresh = useCallback(() => {
     setRefreshNonce((n) => n + 1);
@@ -130,10 +151,12 @@ export default function App() {
         simNow={simNow}
         openAlertsCount={openAlertsCount}
         alertsActive={activeTab === 'alerts'}
+        copilotOpen={copilotOpen}
         busy={clockBusy}
         onAdvance={(p) => void handleAdvanceClock(p)}
         onResetSeed={() => void handleResetSeed()}
         onGoToAlerts={() => setActiveTab('alerts')}
+        onToggleCopilot={() => setCopilotOpen((prev) => !prev)}
       />
 
       <div className="flex flex-1 flex-col md:flex-row min-w-0">
@@ -172,11 +195,13 @@ export default function App() {
           </nav>
         </aside>
 
-        <main className="flex-1 min-w-0 px-5 md:px-7 py-5 max-w-[1640px] w-full mx-auto">
+        <main className="flex-1 min-w-0 px-5 md:px-7 py-5 max-w-[1640px] w-full mx-auto lg:pr-[calc(1.75rem+var(--copilot-offset,0px))] transition-[padding] duration-200">
           <div key={activeTab} className="anim-page-enter">
             {activeTab === 'alerts' && (
               <AlertsPage
                 refreshNonce={refreshNonce}
+                focusAlertId={focusAlertId}
+                onClearFocus={() => setFocusAlertId(null)}
                 onMutated={bumpRefresh}
                 onNotify={notify}
                 onNavigatePo={(poId) => {
@@ -240,6 +265,26 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      <CopilotDrawer
+        open={copilotOpen}
+        refreshNonce={refreshNonce}
+        onClose={() => setCopilotOpen(false)}
+        onMutated={bumpRefresh}
+        onNotify={notify}
+        onNavigatePart={(partId) => {
+          setFocusPartId(partId);
+          setActiveTab('inventory');
+        }}
+        onNavigatePo={(poId) => {
+          setFocusPoId(poId);
+          setActiveTab('pos');
+        }}
+        onNavigateAlert={(alertId) => {
+          setFocusAlertId(alertId);
+          setActiveTab('alerts');
+        }}
+      />
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>

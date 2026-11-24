@@ -33,6 +33,11 @@ from backend.core.models import (
 )
 from backend.inventory import get_part_snapshot
 from backend.mailroom import get_thread
+from backend.orchestrator.copilot_analytics_tools import (
+    run_statistical_analysis,
+    validate_and_build_chart,
+    validate_and_build_diagram,
+)
 from backend.planning import (
     build_cycle_analytics,
     compute_part_planning_metrics,
@@ -665,9 +670,15 @@ def build_lex_tool_registry(
     *,
     context_comm_id: int | None = None,
     tracker: LexToolTracker | None = None,
+    read_only_only: bool = False,
+    include_analytics_tools: bool | None = None,
 ) -> ToolRegistry:
-    """Bind all 13 domain DB, inventory, alert, planning, sandbox, and memory tools for Lex."""
+    """Bind domain DB, inventory, alert, planning, sandbox, and optional Copilot visual tools."""
     registry = ToolRegistry()
+    enable_analytics = (
+        read_only_only if include_analytics_tools is None else include_analytics_tools
+    )
+    persist_dismiss_res = not read_only_only
 
     def _list_parts_summary(urgency_filter: str | None = None) -> dict[str, Any]:
         sim_now = clock.now(session)
@@ -695,7 +706,9 @@ def build_lex_tool_registry(
         rows: list[dict[str, Any]] = []
 
         for part in parts:
-            snap = get_part_snapshot(session, part.id)
+            snap = get_part_snapshot(
+                session, part.id, persist_dismiss_resolution=persist_dismiss_res
+            )
             metrics = compute_part_planning_metrics(session, part, sim_now=sim_now)
             counts[metrics.stockout_urgency] = counts.get(metrics.stockout_urgency, 0) + 1
             if wanted_urgencies is not None and metrics.stockout_urgency not in wanted_urgencies:
@@ -807,7 +820,9 @@ def build_lex_tool_registry(
             if pid is not None
         }
         for pid in sorted(dismissed_part_ids):
-            get_part_snapshot(session, pid)
+            get_part_snapshot(
+                session, pid, persist_dismiss_resolution=persist_dismiss_res
+            )
 
         resolved_part: Part | None = None
         if part_sku_or_id is not None and str(part_sku_or_id).strip():
@@ -957,7 +972,9 @@ def build_lex_tool_registry(
         if part is None:
             return {"found": False, "error": f"Part '{sku_or_part_id}' not found"}
         sim_now = clock.now(session)
-        snap = get_part_snapshot(session, part.id)
+        snap = get_part_snapshot(
+            session, part.id, persist_dismiss_resolution=persist_dismiss_res
+        )
         metrics = compute_part_planning_metrics(session, part, sim_now=sim_now)
         terms = list(
             session.scalars(
@@ -1573,65 +1590,254 @@ def build_lex_tool_registry(
         handler=_run_sandbox_calc,
         read_only=True,
     )
-    registry.register_function(
-        name="schedule_lex_reminder",
-        description=(
-            "Schedule a future LexReminder wakeup (PENDING) for a PO when dispatch details "
-            "are deferred and runway is safe, syncing PO dispatch_details_due_at."
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "po_id": {"type": "integer"},
-                "remind_at_iso": {"type": "string"},
-                "reason": {"type": "string"},
-                "suggested_action": {"type": "string"},
-            },
-            "required": ["po_id", "remind_at_iso", "reason"],
-        },
-        handler=_schedule_lex_reminder,
-        read_only=False,
-    )
-    registry.register_function(
-        name="propose_memory_note",
-        description=(
-            "Deduplicate/consolidate a durable supplier habit against existing memory notes "
-            "before saving to SupplierMemoryNote."
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "supplier_id": {"type": "integer"},
-                "note": {"type": "string"},
-                "reasoning": {"type": "string"},
-            },
-            "required": ["supplier_id", "note"],
-        },
-        handler=_propose_memory_note,
-        read_only=False,
-    )
-    registry.register_function(
-        name="create_advisory_alert",
-        description=(
-            "Raise a grounded Manager advisory alert when supplier memory or runway math "
-            "reveals a concrete operational risk."
-        ),
-        parameters_schema={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "summary": {"type": "string"},
-                "severity": {
-                    "type": "string",
-                    "enum": ["CRITICAL", "HIGH", "MEDIUM", "INFO"],
+    def _run_statistical_analysis(
+        mode: str,
+        part_sku_or_id: str | int | None = None,
+        days: int = 90,
+        urgency_filter: str | None = None,
+        values: list[float] | None = None,
+        labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return run_statistical_analysis(
+            session,
+            mode=mode,
+            part_sku_or_id=part_sku_or_id,
+            days=days,
+            urgency_filter=urgency_filter,
+            values=values,
+            labels=labels,
+        )
+
+    def _render_chart(
+        chart_type: str,
+        title: str,
+        labels: list[str],
+        series: list[dict[str, Any]],
+        subtitle: str = "",
+        x_label: str = "",
+        y_label: str = "",
+        unit: str = "",
+        reference_lines: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return validate_and_build_chart(
+            chart_type=chart_type,
+            title=title,
+            labels=labels,
+            series=series,
+            subtitle=subtitle,
+            x_label=x_label,
+            y_label=y_label,
+            unit=unit,
+            reference_lines=reference_lines,
+        )
+
+    def _render_diagram(
+        diagram_type: str,
+        title: str,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]] | None = None,
+        subtitle: str = "",
+    ) -> dict[str, Any]:
+        return validate_and_build_diagram(
+            diagram_type=diagram_type,
+            title=title,
+            nodes=nodes,
+            edges=edges,
+            subtitle=subtitle,
+        )
+
+    if enable_analytics:
+        registry.register_function(
+            name="run_statistical_analysis",
+            description=(
+                "Run deterministic supply-chain statistical analysis: 'part_demand_stats' "
+                "(mean, median, stdev, CV, p25-p95 percentiles, IQR outliers, 7/14/30d MAs, "
+                "OLS trend slope/R^2, weekday vs weekend), 'inventory_abc_pareto' (daily & 30d "
+                "spend Pareto & ABC classes), 'supplier_benchmark', or 'series_stats'."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "part_demand_stats",
+                            "inventory_abc_pareto",
+                            "supplier_benchmark",
+                            "series_stats",
+                        ],
+                    },
+                    "part_sku_or_id": {"type": "string"},
+                    "days": {"type": "integer"},
+                    "urgency_filter": {"type": "string"},
+                    "values": {"type": "array", "items": {"type": "number"}},
+                    "labels": {"type": "array", "items": {"type": "string"}},
                 },
-                "po_id": {"type": "integer"},
-                "part_id": {"type": "integer"},
+                "required": ["mode"],
             },
-            "required": ["title", "summary"],
-        },
-        handler=_create_advisory_alert,
-        read_only=False,
-    )
+            handler=_run_statistical_analysis,
+            read_only=True,
+        )
+        registry.register_function(
+            name="render_chart",
+            description=(
+                "Render an interactive SVG chart inside the Copilot chat window using exact "
+                "verified tool data (bar, grouped_bar, line, area, donut, scatter) with optional "
+                "threshold reference_lines (e.g., ROP, Target T, Effective LT)."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "chart_type": {
+                        "type": "string",
+                        "enum": ["bar", "grouped_bar", "line", "area", "donut", "scatter"],
+                    },
+                    "title": {"type": "string"},
+                    "subtitle": {"type": "string"},
+                    "x_label": {"type": "string"},
+                    "y_label": {"type": "string"},
+                    "unit": {"type": "string"},
+                    "labels": {"type": "array", "items": {"type": "string"}},
+                    "series": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "values": {"type": "array", "items": {"type": "number"}},
+                                "color": {"type": "string"},
+                            },
+                            "required": ["name", "values"],
+                        },
+                    },
+                    "reference_lines": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "value": {"type": "number"},
+                                "color": {"type": "string"},
+                            },
+                            "required": ["label", "value"],
+                        },
+                    },
+                },
+                "required": ["chart_type", "title", "labels", "series"],
+            },
+            handler=_render_chart,
+            read_only=True,
+        )
+        registry.register_function(
+            name="render_diagram",
+            description=(
+                "Render a structured node-edge operational diagram (flow, decision, timeline) "
+                "inside the Copilot chat window."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "diagram_type": {
+                        "type": "string",
+                        "enum": ["flow", "decision", "timeline"],
+                    },
+                    "title": {"type": "string"},
+                    "subtitle": {"type": "string"},
+                    "nodes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "detail": {"type": "string"},
+                                "tone": {
+                                    "type": "string",
+                                    "enum": ["neutral", "info", "success", "warning", "danger"],
+                                },
+                            },
+                            "required": ["id", "label"],
+                        },
+                    },
+                    "edges": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string"},
+                                "target": {"type": "string"},
+                                "label": {"type": "string"},
+                            },
+                            "required": ["source", "target"],
+                        },
+                    },
+                },
+                "required": ["diagram_type", "title", "nodes"],
+            },
+            handler=_render_diagram,
+            read_only=True,
+        )
+
+    if not read_only_only:
+        registry.register_function(
+            name="schedule_lex_reminder",
+            description=(
+                "Schedule a future LexReminder wakeup (PENDING) for a PO when dispatch details "
+                "are deferred and runway is safe, syncing PO dispatch_details_due_at."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "po_id": {"type": "integer"},
+                    "remind_at_iso": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "suggested_action": {"type": "string"},
+                },
+                "required": ["po_id", "remind_at_iso", "reason"],
+            },
+            handler=_schedule_lex_reminder,
+            read_only=False,
+        )
+        registry.register_function(
+            name="propose_memory_note",
+            description=(
+                "Deduplicate/consolidate a durable supplier habit against existing memory notes "
+                "before saving to SupplierMemoryNote."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "supplier_id": {"type": "integer"},
+                    "note": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["supplier_id", "note"],
+            },
+            handler=_propose_memory_note,
+            read_only=False,
+        )
+        registry.register_function(
+            name="create_advisory_alert",
+            description=(
+                "Raise a grounded Manager advisory alert when supplier memory or runway math "
+                "reveals a concrete operational risk."
+            ),
+            parameters_schema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["CRITICAL", "HIGH", "MEDIUM", "INFO"],
+                    },
+                    "po_id": {"type": "integer"},
+                    "part_id": {"type": "integer"},
+                },
+                "required": ["title", "summary"],
+            },
+            handler=_create_advisory_alert,
+            read_only=False,
+        )
 
     return registry

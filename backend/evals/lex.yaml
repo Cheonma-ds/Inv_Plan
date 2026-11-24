@@ -1268,3 +1268,111 @@ cases:
       should_draft_followup: false
       reasoning:
         contains_any_ci: ["Guardrail Override", "CLOSED", "GRN"]
+
+  # ---------------------------------------------------------------------------
+  # 8. Phase 4 Manager Copilot Cases
+  # ---------------------------------------------------------------------------
+  - id: copilot_critical_urgency_and_chart
+    name: "Copilot inspects inventory urgency and renders a runway comparison chart"
+    task: copilot_query
+    tags: [copilot, phase4, chart]
+    input:
+      question: "Which SKUs have the tightest stockout runway right now? Show a bar chart comparing days to stockout."
+      current_date: "2026-10-01"
+      parts_summary:
+        - sku: VLV-204
+          name: Hydraulic Servo Solenoid Valve HV-40
+          criticality: CRITICAL
+          on_hand_stock: 12
+          days_to_stockout: 4.2
+          primary_effective_lt: 22.1
+          comm_buffer_days: 1.5
+          stockout_urgency: CRITICAL
+        - sku: BRG-402
+          name: Deep Groove Ball Bearing 6208
+          criticality: CRITICAL
+          on_hand_stock: 60
+          days_to_stockout: 19.0
+          primary_effective_lt: 10.0
+          comm_buffer_days: 0.4
+          stockout_urgency: HEALTHY
+    mock_response:
+      mock_tool_calls:
+        - tool: list_parts_summary
+          args: {}
+        - tool: render_chart
+          args:
+            chart_type: bar
+            title: "Days to Stockout by SKU"
+            labels: ["VLV-204", "BRG-402"]
+            unit: "days"
+            series:
+              - name: "Days to Stockout"
+                values: [4.2, 19.0]
+      answer: "VLV-204 is currently in CRITICAL urgency with 4.2 days of stockout runway vs 22.1d effective lead time + 1.5d communication delay buffer, while BRG-402 has 19.0 days of runway."
+      cited_skus: ["VLV-204", "BRG-402"]
+      cited_po_numbers: []
+      cited_alert_ids: []
+      cited_metrics:
+        - name: "VLV-204 Runway"
+          value: "4.2d"
+      proposed_actions: []
+      recommended_actions: ["Create an expedited PO for VLV-204 via Backup Sup1 (12d LT)."]
+      cannot_verify_or_missing_tools: []
+      confidence: 0.96
+    expect:
+      degraded: false
+      cited_skus:
+        contains: "VLV-204"
+      tool_names:
+        contains_all: ["list_parts_summary", "render_chart"]
+      visuals.length:
+        min: 1
+      min_confidence: 0.85
+
+  - id: copilot_action_proposal_create_po_for_approval
+    name: "Copilot proposes CREATE_MANUAL_PO for manager confirmation without mutating DB"
+    task: copilot_query
+    tags: [copilot, phase4, actions]
+    input:
+      question: "Please place an urgent PO for 20 units of VLV-204 from Sup1."
+      current_date: "2026-10-01"
+      part_snapshot:
+        part_id: 2
+        sku: VLV-204
+        name: Hydraulic Servo Solenoid Valve HV-40
+        on_hand_stock: 12
+        rop: 65
+        replenishment_point: 140
+    mock_response:
+      mock_tool_calls:
+        - tool: get_part_snapshot
+          args:
+            sku_or_part_id: VLV-204
+      answer: "I have prepared a PO proposal for 20 units of VLV-204 from Apex Precision Components (Sup1). Please review and confirm to execute."
+      cited_skus: ["VLV-204"]
+      cited_po_numbers: []
+      cited_alert_ids: []
+      proposed_actions:
+        - action_type: CREATE_MANUAL_PO
+          title: "Create & dispatch PO for 20u VLV-204 from Sup1"
+          summary: "Creates a new PO for 20 units of VLV-204 from Apex Precision Components (Sup1) and dispatches the PO email."
+          target_ref: VLV-204
+          params:
+            - key: sku_or_part_id
+              value: VLV-204
+            - key: supplier_key_or_id
+              value: sup1
+            - key: qty
+              value: "20"
+      recommended_actions: ["Click Confirm & Execute to create and dispatch the PO."]
+      cannot_verify_or_missing_tools: []
+      confidence: 0.95
+    expect:
+      degraded: false
+      proposed_actions.length:
+        min: 1
+      proposed_actions.0.action_type: CREATE_MANUAL_PO
+      tool_names:
+        contains_all: ["get_part_snapshot"]
+      min_confidence: 0.85

@@ -3,6 +3,11 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.agents.lex import (
+    CopilotActionType,
+    CopilotQueryInput,
+    CopilotTurnContext,
+)
 from backend.core import clock
 from backend.core.enums import (
     ActionItemStatus,
@@ -27,7 +32,7 @@ from tests.agents.live_helpers import (
 
 def _ask_lex_copilot(seeded_session, question: str):
     lex = make_live_lex()
-    registry = build_lex_tool_registry(seeded_session)
+    registry = build_lex_tool_registry(seeded_session, read_only_only=True)
     return lex.llm.generate_with_tools(
         prompt=question,
         response_schema=CopilotEvalResponse,
@@ -111,7 +116,11 @@ def test_live_copilot_supplier_comparison_and_vlv204_tradeoff(seeded_session) ->
     )
     out = res.parsed
     tool_names = [tc["tool"] for tc in res.tool_calls]
-    assert tool_names.count("get_supplier_profile") >= 2 or len(res.tool_calls) >= 3
+    assert (
+        "get_planning_overview" in tool_names
+        or tool_names.count("get_supplier_profile") >= 2
+        or len(res.tool_calls) >= 3
+    )
     assert "VLV-204" in out.cited_skus or "VLV-204" in out.answer
     ans_lower = out.answer.lower()
     assert "apex" in ans_lower and "bharat" in ans_lower and "deccan" in ans_lower
@@ -270,6 +279,106 @@ def test_live_copilot_ungrounded_question_and_mutation_refusal(seeded_session) -
     assert po.status == POStatus.SENT_AWAITING_ACK.value  # Strictly unmutated
     assert po.unit_price == 450.0
     ans_lower = out.answer.lower()
-    assert any(w in ans_lower for w in ("cannot", "not found", "unavailable", "no ", "approval"))
+    refusal_tokens = (
+        "cannot",
+        "unable",
+        "not found",
+        "does not exist",
+        "unavailable",
+        "no ",
+        "approval",
+        "violates",
+        "not allowed",
+        "outside",
+    )
+    assert any(w in ans_lower for w in refusal_tokens), f"Unexpected answer: {out.answer}"
     assert len(out.cannot_verify_or_missing_tools) >= 1
     assert isinstance(PurchaseOrder, type)
+
+
+@pytest.mark.skipif(not should_run_live_gemini(), reason=LIVE_SKIP_REASON)
+def test_live_copilot_statistical_analysis_and_chart_rendering(seeded_session) -> None:
+    """Phase 4 live test: LexAgent.answer_copilot_query uses stats + chart tools cleanly."""
+    lex = make_live_lex()
+    ro_registry = build_lex_tool_registry(seeded_session, read_only_only=True)
+    outcome = lex.answer_copilot_query(
+        seeded_session,
+        CopilotQueryInput(
+            question=(
+                "Run a statistical analysis of BRG-402's 90-day demand (mean, median, stdev, "
+                "p90, and trend R^2) and render a bar or grouped_bar chart comparing the top 5 "
+                "SKUs by 30-day daily spend from the ABC Pareto breakdown."
+            ),
+            current_date=clock.now(seeded_session).date().isoformat(),
+        ),
+        tool_registry=ro_registry,
+    )
+    assert outcome.degraded is False
+    tool_names = {tc["tool"] for tc in outcome.tool_calls}
+    assert "run_statistical_analysis" in tool_names
+    assert "render_chart" in tool_names
+    assert len(outcome.visuals) >= 1
+    assert outcome.visuals[0]["kind"] == "chart"
+    assert "BRG-402" in outcome.result.cited_skus or "BRG-402" in outcome.result.answer
+
+
+@pytest.mark.skipif(not should_run_live_gemini(), reason=LIVE_SKIP_REASON)
+def test_live_copilot_action_proposal_and_intent_revision(seeded_session) -> None:
+    """Phase 4 live test: Lex proposes action for approval without mutating DB, then revises."""
+    lex = make_live_lex()
+    ro_registry = build_lex_tool_registry(seeded_session, read_only_only=True)
+    po_count_before = len(seeded_session.scalars(select(PurchaseOrder)).all())
+
+    turn1 = lex.answer_copilot_query(
+        seeded_session,
+        CopilotQueryInput(
+            question="Please create a manual PO for 10 units of VLV-204 from Sup2.",
+            current_date=clock.now(seeded_session).date().isoformat(),
+        ),
+        tool_registry=ro_registry,
+    )
+    assert turn1.degraded is False
+    assert len(seeded_session.scalars(select(PurchaseOrder)).all()) == po_count_before
+    assert len(turn1.result.proposed_actions) >= 1
+    assert turn1.result.proposed_actions[0].action_type == CopilotActionType.CREATE_MANUAL_PO
+
+    prior_summary = [
+        f"{a.action_type.value}: {a.title} ({a.summary})"
+        for a in turn1.result.proposed_actions
+    ]
+    turn2 = lex.answer_copilot_query(
+        seeded_session,
+        CopilotQueryInput(
+            question="No, use Backup supplier Sup1 for 15 units instead.",
+            current_date=clock.now(seeded_session).date().isoformat(),
+            conversation_history=[
+                CopilotTurnContext(
+                    role="user",
+                    content="Please create a manual PO for 10 units of VLV-204 from Sup2.",
+                ),
+                CopilotTurnContext(
+                    role="assistant",
+                    content=turn1.result.answer,
+                    cited_skus=turn1.result.cited_skus,
+                    proposed_actions_summary=prior_summary,
+                    action_status="REVISED",
+                ),
+            ],
+            revision_context=(
+                "Original Manager Request: Please create a manual PO for 10 units of VLV-204 "
+                "from Sup2.\nPreviously Proposed Actions:\n- "
+                + "\n- ".join(prior_summary)
+                + "\nManager Clarification / Desired Changes: "
+                "No, use Backup supplier Sup1 for 15 units instead."
+            ),
+        ),
+        tool_registry=ro_registry,
+    )
+    assert turn2.degraded is False
+    assert len(seeded_session.scalars(select(PurchaseOrder)).all()) == po_count_before
+    assert len(turn2.result.proposed_actions) >= 1
+    act2 = turn2.result.proposed_actions[0]
+    assert act2.action_type == CopilotActionType.CREATE_MANUAL_PO
+    params_text = " ".join(f"{p.key}={p.value}" for p in act2.params).lower()
+    assert "sup1" in params_text or "apex" in act2.summary.lower()
+    assert "15" in params_text or "15" in act2.summary

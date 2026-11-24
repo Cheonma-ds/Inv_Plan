@@ -33,7 +33,12 @@ def _get_agent_eval_config(agent_name: str) -> tuple[AgentEvalExecutor, Path]:
     if agent_name == LexAgent.agent_name:
         suite_rel = LexAgent.eval_suite_path or "backend/evals/lex.yaml"
         return (
-            LexEvalExecutor(tool_registry_factory=build_lex_tool_registry),
+            LexEvalExecutor(
+                tool_registry_factory=build_lex_tool_registry,
+                copilot_tool_registry_factory=lambda s: build_lex_tool_registry(
+                    s, read_only_only=True
+                ),
+            ),
             PROJECT_ROOT / suite_rel,
         )
     raise HTTPException(

@@ -114,6 +114,12 @@ export function InventoryPage({
     void loadParts();
   }, [loadParts, refreshNonce]);
 
+  useEffect(() => {
+    if (focusPartId !== null) {
+      setCyclePartId(focusPartId);
+    }
+  }, [focusPartId]);
+
   const activePopoverPart = useMemo(() => {
     if (!dismissedPopover) return null;
     const found = parts.find((p) => p.part_id === dismissedPopover.partId);

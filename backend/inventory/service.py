@@ -114,6 +114,7 @@ def _evaluate_unresolved_dismissed_alerts(
     part: Part,
     *,
     inventory_position: int,
+    persist_resolution: bool = True,
 ) -> list[UnresolvedDismissedAlert]:
     dismissed_items = list(
         session.scalars(
@@ -160,16 +161,21 @@ def _evaluate_unresolved_dismissed_alerts(
                     resolved_at=clock.ensure_utc(item.resolved_at) if item.resolved_at else None,
                 )
             )
-        else:
+        elif persist_resolution:
             item.dismiss_resolved_at = sim_now
             changed = True
 
-    if changed:
+    if changed and persist_resolution:
         session.flush()
     return unresolved
 
 
-def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
+def get_part_snapshot(
+    session: Session,
+    part_id: int,
+    *,
+    persist_dismiss_resolution: bool = True,
+) -> PartSnapshot:
     part = _get_part_or_raise(session, part_id)
     on_order = get_on_order_stock(session, part.id)
     inventory_position = part.on_hand_stock + on_order + part.quarantined_stock
@@ -177,7 +183,10 @@ def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
         _get_active_po_summary(session, part.id)
     )
     unresolved_dismissed = _evaluate_unresolved_dismissed_alerts(
-        session, part, inventory_position=inventory_position
+        session,
+        part,
+        inventory_position=inventory_position,
+        persist_resolution=persist_dismiss_resolution,
     )
     return PartSnapshot(
         part_id=part.id,

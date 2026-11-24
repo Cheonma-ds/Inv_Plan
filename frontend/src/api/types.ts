@@ -645,3 +645,154 @@ export interface EvalRunReport {
   results: EvalCaseResult[];
   timestamp: string;
 }
+
+export interface CopilotMetric {
+  name: string;
+  value: string;
+}
+
+export interface CopilotActionParam {
+  key: string;
+  value: string;
+}
+
+export interface CopilotProposedAction {
+  action_type: string;
+  title: string;
+  summary: string;
+  target_ref: string;
+  params: CopilotActionParam[];
+}
+
+export interface CopilotActionReceipt {
+  action_type: string;
+  title: string;
+  status: string;
+  summary: string;
+  po_id?: number | null;
+  po_number?: string | null;
+  part_id?: number | null;
+  alert_id?: number | null;
+}
+
+export interface CopilotPartRef {
+  part_id: number;
+  sku: string;
+  name: string;
+  criticality: string;
+}
+
+export interface CopilotPORef {
+  po_id: number;
+  po_number: string;
+  status: string;
+  part_id: number;
+}
+
+export interface CopilotAlertRef {
+  alert_id: number;
+  title: string;
+  status: string;
+  severity: string;
+  po_id: number | null;
+  part_id: number | null;
+}
+
+export interface CopilotChartSeries {
+  name: string;
+  values: number[];
+  color?: string;
+}
+
+export interface CopilotChartRefLine {
+  label: string;
+  value: number;
+  color?: string;
+}
+
+export interface CopilotChartSpec {
+  chart_type: 'bar' | 'grouped_bar' | 'line' | 'area' | 'donut' | 'scatter' | string;
+  title: string;
+  subtitle?: string;
+  x_label?: string;
+  y_label?: string;
+  unit?: string;
+  labels: string[];
+  series: CopilotChartSeries[];
+  reference_lines?: CopilotChartRefLine[];
+}
+
+export interface CopilotDiagramNode {
+  id: string;
+  label: string;
+  detail?: string;
+  tone?: 'neutral' | 'info' | 'success' | 'warning' | 'danger' | string;
+}
+
+export interface CopilotDiagramEdge {
+  source: string;
+  target: string;
+  label?: string;
+}
+
+export interface CopilotDiagramSpec {
+  diagram_type: 'flow' | 'decision' | 'timeline' | string;
+  title: string;
+  subtitle?: string;
+  nodes: CopilotDiagramNode[];
+  edges: CopilotDiagramEdge[];
+}
+
+export type CopilotVisual =
+  | { kind: 'chart'; spec: CopilotChartSpec }
+  | { kind: 'diagram'; spec: CopilotDiagramSpec };
+
+export interface CopilotMessageItem {
+  id: number;
+  session_id: number;
+  role: 'user' | 'assistant' | string;
+  content: string;
+  cited_skus: string[];
+  cited_po_numbers: string[];
+  cited_alert_ids: number[];
+  cited_metrics: CopilotMetric[];
+  proposed_actions: CopilotProposedAction[];
+  action_status: 'PENDING_CONFIRMATION' | 'EXECUTED' | 'REVISED' | 'DECLINED' | null | string;
+  action_execution_results: CopilotActionReceipt[];
+  recommended_actions: string[];
+  cannot_verify_or_missing_tools: string[];
+  visuals: CopilotVisual[];
+  degraded: boolean;
+  error_code: string | null;
+  error_detail: string | null;
+  tool_calls: Array<Record<string, unknown>>;
+  confidence: number | null;
+  trace_id: number | null;
+  created_at: string;
+  resolved_parts: CopilotPartRef[];
+  resolved_pos: CopilotPORef[];
+  resolved_alerts: CopilotAlertRef[];
+}
+
+export interface CopilotSessionSummary {
+  id: number;
+  title: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CopilotSessionDetail extends CopilotSessionSummary {
+  messages: CopilotMessageItem[];
+}
+
+export interface CopilotQueryResponse {
+  session: CopilotSessionSummary;
+  user_message: CopilotMessageItem;
+  assistant_message: CopilotMessageItem;
+}
+
+export interface CopilotConfirmResponse {
+  message: CopilotMessageItem;
+  execution_results: CopilotActionReceipt[];
+}

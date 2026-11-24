@@ -6,6 +6,11 @@ import type {
   AutonomyPolicyItem,
   ClockResponse,
   ConsumeResponse,
+  CopilotConfirmResponse,
+  CopilotMessageItem,
+  CopilotQueryResponse,
+  CopilotSessionDetail,
+  CopilotSessionSummary,
   CycleAnalyticsResult,
   DispatchEditedPORequest,
   DispatchEditedPOResponse,
@@ -265,4 +270,31 @@ export const api = {
     ),
   runEvalSuite: (agentName: string, mode: 'offline' | 'live' = 'offline') =>
     jsonPost<EvalRunReport>(`/api/evals/${encodeURIComponent(agentName)}/run`, { mode }),
+
+  // Manager Copilot
+  listCopilotSessions: () => requestJson<CopilotSessionSummary[]>('/api/copilot/sessions'),
+  createCopilotSession: (title?: string) =>
+    jsonPost<CopilotSessionDetail>('/api/copilot/sessions', title ? { title } : {}),
+  getCopilotSession: (sessionId: number) =>
+    requestJson<CopilotSessionDetail>(`/api/copilot/sessions/${sessionId}`),
+  deleteCopilotSession: (sessionId: number) =>
+    requestJson<{ deleted: boolean; session_id: number }>(`/api/copilot/sessions/${sessionId}`, {
+      method: 'DELETE',
+    }),
+  queryCopilot: (payload: {
+    question: string;
+    sessionId?: number | null;
+    reviseMessageId?: number | null;
+  }) =>
+    jsonPost<CopilotQueryResponse>('/api/copilot/query', {
+      question: payload.question,
+      session_id: payload.sessionId ?? null,
+      revise_message_id: payload.reviseMessageId ?? null,
+    }),
+  confirmCopilotActions: (messageId: number) =>
+    jsonPost<CopilotConfirmResponse>(`/api/copilot/messages/${messageId}/confirm-actions`),
+  declineCopilotActions: (messageId: number) =>
+    jsonPost<{ message: CopilotMessageItem }>(
+      `/api/copilot/messages/${messageId}/decline-actions`,
+    ),
 };

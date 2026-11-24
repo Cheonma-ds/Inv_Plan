@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.agents.base import BaseAgent
 from backend.agents.lex.prompts import (
+    COPILOT_SYSTEM_PROMPT,
     DRAFT_SYSTEM_PROMPT,
     INVOICE_EXTRACTION_SYSTEM_PROMPT,
     REMINDER_WAKEUP_SYSTEM_PROMPT,
@@ -12,6 +13,9 @@ from backend.agents.lex.prompts import (
 )
 from backend.agents.lex.schemas import (
     AdditionalPOUpdate,
+    CopilotQueryInput,
+    CopilotQueryOutcome,
+    CopilotQueryResult,
     EmailDraftInput,
     EmailDraftResult,
     EmailIntent,
@@ -591,3 +595,117 @@ class LexAgent(BaseAgent):
             span.cost_inr = llm_res.cost_inr
 
         return result
+
+    def answer_copilot_query(
+        self,
+        session: Session,
+        query_input: CopilotQueryInput,
+        *,
+        tool_registry: ToolRegistry,
+        linked_session_id: int | None = None,
+        max_steps: int = 10,
+    ) -> CopilotQueryOutcome:
+        """Answer a Manager Copilot query using strictly read-only tools & graceful fallback."""
+        trimmed_history = list(query_input.conversation_history[-8:])
+        payload = {
+            "current_date": query_input.current_date,
+            "conversation_history": [t.model_dump(mode="json") for t in trimmed_history],
+            "revision_context": query_input.revision_context,
+            "question": query_input.question,
+        }
+        prompt = json.dumps(payload, indent=2)
+        trigger = f"Copilot: {query_input.question.strip()[:120]}"
+
+        read_only_registry = tool_registry.read_only_view()
+        read_only_registry.pop_visual_artifacts()
+
+        with AgentTracer.span(
+            session,
+            agent_name=self.agent_name,
+            task_type="copilot_query",
+            trigger_summary=trigger,
+            linked_entity_type="copilot_session" if linked_session_id else None,
+            linked_entity_id=linked_session_id,
+        ) as span:
+            span.input_summary = (
+                f"Turns={len(trimmed_history)} | Question={query_input.question.strip()[:140]}"
+            )
+            span.raw_prompt = prompt
+
+            try:
+                if hasattr(self.llm, "generate_with_tools"):
+                    llm_res = self.llm.generate_with_tools(
+                        prompt=prompt,
+                        response_schema=CopilotQueryResult,
+                        tool_registry=read_only_registry,
+                        system_instruction=COPILOT_SYSTEM_PROMPT,
+                        temperature=0.0,
+                        max_steps=max_steps,
+                    )
+                    span.tool_calls.extend(llm_res.tool_calls)
+                else:
+                    llm_res = self.llm.generate_structured(
+                        prompt=prompt,
+                        response_schema=CopilotQueryResult,
+                        system_instruction=COPILOT_SYSTEM_PROMPT,
+                        temperature=0.0,
+                    )
+                result = llm_res.parsed
+                visuals = read_only_registry.pop_visual_artifacts()
+                span.output_summary = (
+                    f"Conf={result.confidence:.2f} | SKUs={len(result.cited_skus)} | "
+                    f"POs={len(result.cited_po_numbers)} | Actions={len(result.proposed_actions)}"
+                )
+                span.confidence = result.confidence
+                span.raw_response = llm_res.raw_text
+                span.input_tokens = llm_res.input_tokens
+                span.output_tokens = llm_res.output_tokens
+                span.cost_inr = llm_res.cost_inr
+                outcome = CopilotQueryOutcome(
+                    result=result,
+                    tool_calls=list(span.tool_calls),
+                    visuals=visuals,
+                    degraded=False,
+                )
+            except Exception as exc:
+                msg = str(exc)
+                is_missing_key = (
+                    "GEMINI_API_KEY" in msg
+                    or (isinstance(exc, RuntimeError) and "api_key" in msg.lower())
+                )
+                err_code = "MISSING_API_KEY" if is_missing_key else "LLM_UNAVAILABLE"
+                reason_phrase = (
+                    "GEMINI_API_KEY is not configured."
+                    if is_missing_key
+                    else f"the Gemini service could not complete ({type(exc).__name__})."
+                )
+                fallback_answer = (
+                    "Lex Copilot is currently in offline degraded mode because "
+                    + reason_phrase
+                    + "\n\nNo inventory, purchase order, or alert records were modified. "
+                    "You can inspect live balances in **Inventory & Parts**, active orders in "
+                    "**PO Tracker**, pending approvals in **Open Alerts**, and supplier scorecards "
+                    "in **Suppliers & Planning**."
+                )
+                degraded_result = CopilotQueryResult(
+                    answer=fallback_answer,
+                    cannot_verify_or_missing_tools=[
+                        "gemini_llm_client (unavailable)"
+                        if not is_missing_key
+                        else "GEMINI_API_KEY (not configured)"
+                    ],
+                    confidence=0.0,
+                )
+                span.output_summary = f"DEGRADED ({err_code}): {msg[:180]}"
+                span.confidence = 0.0
+                span.raw_response = msg
+                outcome = CopilotQueryOutcome(
+                    result=degraded_result,
+                    tool_calls=list(span.tool_calls),
+                    visuals=[],
+                    degraded=True,
+                    error_code=err_code,
+                    error_detail=msg,
+                )
+
+        return outcome.model_copy(update={"trace_id": span.trace_id})

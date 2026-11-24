@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -259,3 +259,78 @@ class ReminderWakeupResult(BaseModel):
     summary_for_manager: str
     followup_context_note: str = ""
     reasoning: str
+
+
+class CitedMetric(BaseModel):
+    name: str
+    value: str
+
+
+class CopilotActionType(StrEnum):
+    CREATE_MANUAL_PO = "CREATE_MANUAL_PO"
+    APPROVE_DRAFT_EMAIL = "APPROVE_DRAFT_EMAIL"
+    REJECT_DRAFT_EMAIL = "REJECT_DRAFT_EMAIL"
+    DISPATCH_EDITED_PO = "DISPATCH_EDITED_PO"
+    SWITCH_BACKUP_SUPPLIER = "SWITCH_BACKUP_SUPPLIER"
+    CANCEL_PO = "CANCEL_PO"
+    UPDATE_PO_NOTES_OR_ETA = "UPDATE_PO_NOTES_OR_ETA"
+    WITHDRAW_STOCK = "WITHDRAW_STOCK"
+    RECORD_GRN = "RECORD_GRN"
+    DISMISS_ALERT = "DISMISS_ALERT"
+    REOPEN_ALERT = "REOPEN_ALERT"
+    APPLY_ROP_RECOMMENDATION = "APPLY_ROP_RECOMMENDATION"
+    RECALCULATE_PLANNING = "RECALCULATE_PLANNING"
+    ADD_SUPPLIER_MEMORY_NOTE = "ADD_SUPPLIER_MEMORY_NOTE"
+    SCHEDULE_LEX_REMINDER = "SCHEDULE_LEX_REMINDER"
+
+
+class CopilotActionParam(BaseModel):
+    key: str
+    value: str
+
+
+class CopilotProposedAction(BaseModel):
+    action_type: CopilotActionType
+    title: str
+    summary: str
+    target_ref: str = ""
+    params: list[CopilotActionParam] = Field(default_factory=list)
+
+
+class CopilotTurnContext(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    cited_skus: list[str] = Field(default_factory=list)
+    cited_po_numbers: list[str] = Field(default_factory=list)
+    proposed_actions_summary: list[str] = Field(default_factory=list)
+    action_status: str | None = None
+    timestamp: str | None = None
+
+
+class CopilotQueryInput(BaseModel):
+    question: str
+    current_date: str
+    conversation_history: list[CopilotTurnContext] = Field(default_factory=list)
+    revision_context: str | None = None
+
+
+class CopilotQueryResult(BaseModel):
+    answer: str
+    cited_skus: list[str] = Field(default_factory=list)
+    cited_po_numbers: list[str] = Field(default_factory=list)
+    cited_alert_ids: list[int] = Field(default_factory=list)
+    cited_metrics: list[CitedMetric] = Field(default_factory=list)
+    proposed_actions: list[CopilotProposedAction] = Field(default_factory=list)
+    recommended_actions: list[str] = Field(default_factory=list)
+    cannot_verify_or_missing_tools: list[str] = Field(default_factory=list)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class CopilotQueryOutcome(BaseModel):
+    result: CopilotQueryResult
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    visuals: list[dict[str, Any]] = Field(default_factory=list)
+    trace_id: int | None = None
+    degraded: bool = False
+    error_code: str | None = None
+    error_detail: str | None = None
