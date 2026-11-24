@@ -116,6 +116,26 @@ from backend.po import (
 )
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+_IMAGE_MIME_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+}
+
+
+def _build_llm_failure_triage_fallback(exc: Exception) -> EmailTriageResult:
+    """Graceful AMBIGUOUS fallback when LLM triage fails after retries."""
+    return EmailTriageResult(
+        matched_po_number=None,
+        intent=EmailIntent.AMBIGUOUS,
+        confidence=0.0,
+        summary_for_manager=(
+            "Automated AI triage failed after retries; email escalated for manual "
+            "Inventory Manager review."
+        ),
+        suggested_action="Review the email and attachments manually; no PO state was modified.",
+        reasoning=f"[LLM Failure Fallback: {type(exc).__name__}: {exc}]",
+    )
 
 EXCEPTION_INTENTS = {
     EmailIntent.PRICE_CHANGE,
@@ -628,6 +648,16 @@ class WorkflowEngine:
             if triage_pdf_bytes is None and len(raw_bytes) <= 10 * 1024 * 1024:
                 triage_pdf_bytes = raw_bytes
 
+        triage_image_attachments: list[tuple[str, bytes]] = []
+        for raw_img in image_paths:
+            img_file = Path(raw_img)
+            if not img_file.is_file():
+                continue
+            img_bytes = img_file.read_bytes()
+            if img_bytes and len(img_bytes) <= 10 * 1024 * 1024:
+                mime = _IMAGE_MIME_TYPES.get(img_file.suffix.lower(), "image/jpeg")
+                triage_image_attachments.append((mime, img_bytes))
+
         triage_input = EmailTriageInput(
             sender_persona=email.from_persona,
             sender_name=supplier.name,
@@ -647,20 +677,28 @@ class WorkflowEngine:
                 triage_input,
                 linked_comm_id=email.id,
                 pdf_bytes=triage_pdf_bytes,
+                image_attachments=triage_image_attachments or None,
             )
         except AssertionError:
             raise
-        except Exception:
-            if triage_pdf_bytes is None:
-                raise
-            # Corrupt PDF failed multimodal triage -> escalate via invoice/PDF review safely
-            unreadable_pdf_detected = True
-            triage_result = self.lex.triage_email(
-                session,
-                triage_input,
-                linked_comm_id=email.id,
-                pdf_bytes=None,
-            )
+        except Exception as exc:
+            if triage_pdf_bytes is not None:
+                # Corrupt PDF failed multimodal triage -> retry text/image triage safely
+                unreadable_pdf_detected = True
+                try:
+                    triage_result = self.lex.triage_email(
+                        session,
+                        triage_input,
+                        linked_comm_id=email.id,
+                        pdf_bytes=None,
+                        image_attachments=triage_image_attachments or None,
+                    )
+                except AssertionError:
+                    raise
+                except Exception as retry_exc:
+                    triage_result = _build_llm_failure_triage_fallback(retry_exc)
+            else:
+                triage_result = _build_llm_failure_triage_fallback(exc)
 
         matched_po = (
             po_by_number.get(triage_result.matched_po_number)

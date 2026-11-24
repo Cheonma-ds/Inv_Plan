@@ -30,6 +30,7 @@ class OfflineCaseLLMClient:
         system_instruction: str | None = None,
         temperature: float = 0.0,
         pdf_bytes: bytes | None = None,
+        image_attachments: list[tuple[str, bytes]] | None = None,
     ) -> LLMResult[T]:
         parsed = response_schema.model_validate(self._mock_response)
         return LLMResult(

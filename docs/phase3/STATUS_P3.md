@@ -1,6 +1,6 @@
 # STATUS_P3.md — Phase 3 Live Session Baton
 
-**Current Stage:** **Slice P3-3 Complete** — Ready to Start **Slice P3-4**  
+**Current Stage:** **Slice P3-4 Complete** — Ready to Start **Slice P3-5**  
 **Last Updated:** 2026-11-24  
 **Baseline Reference:** `HEAD` (`099474f`), [`STATUS.md`](../../STATUS.md), [`STATUS_P2.md`](../phase2/STATUS_P2.md)  
 **Planning Docs:** [`PRD_P3.md`](PRD_P3.md) · [`DESIGN_P3.md`](DESIGN_P3.md) · [`SLICES_P3.md`](SLICES_P3.md)
@@ -12,7 +12,7 @@
 - [x] **Slice P3-1:** Core Clock (`Oct 1 13:00 IST`), Schema Migrations, `on_order` Draft Exclusion, Partial GRN Match & Overdue Fixes
 - [x] **Slice P3-2:** 90-Day Causal Seed Simulator (`Jul–Sep`, 0 Open POs), Daily Burn EWMA ($\alpha=0.3$), Clock Rollover & Cycle Analytics
 - [x] **Slice P3-3:** Alerting Overhaul (`Edit PO`, Non-Resolving `Reject`, `DISMISSED` Hiding + Inventory Warning) & `ROP/T` Sweep
-- [ ] **Slice P3-4:** Lex Resilience (Retries/Fallbacks), Multimodal Image Triage & Enforced Email Formatting
+- [x] **Slice P3-4:** Lex Resilience (Retries/Fallbacks), Multimodal Image Triage & Enforced Email Formatting
 - [ ] **Slice P3-5:** Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory Alerts
 - [ ] **Slice P3-6:** Frontend Core (IST Clock, Sidebar Cleanup, `FormattedEmailBody`, `InventoryPage` Revamp & `StockoutCycleDrawer`)
 - [ ] **Slice P3-7:** Frontend `CreateEditPOModal` (Suggested Qty + Reasoning), `AlertsPage`, `SuppliersPlanningPage` & `AIHealthPage` Traces
@@ -65,16 +65,32 @@
 
 ---
 
-## Next Session Handoff Prompt — Start Slice `P3-4`
+## Completed Slice Summary — `P3-4`
 
-> Implement **Slice P3-4** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
-> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md §2 (Pillar 5 & Pillar 6 item 6)`, `docs/phase3/DESIGN_P3.md §5.3`, `docs/phase3/SLICES_P3.md (Slice P3-4)`, and target files: `backend/agents/llm_client.py`, `backend/agents/lex/{prompts,agent,eval_adapter}.py`, `backend/orchestrator/workflows.py`, `backend/evals/lex.yaml`.
-> - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`, `backend/po/`.
+- **Files Added:**
+  - `tests/agents/test_lex_formatting_and_resilience.py` (6 tests covering `GeminiLLMClient` exponential-backoff retries on transient errors, fail-fast on non-transient errors, multimodal `image_attachments` + `pdf_bytes` part construction, `LexAgent.draft_email()` structured Markdown/PO#/SKU/currency/sign-off enforcement, `additional_po_updates` `PRICE_CHANGE` guardrail, and `WorkflowEngine.process_inbound_supplier_email()` image passing + graceful `AMBIGUOUS_EMAIL` fallback on LLM failure).
+- **Files Modified:**
+  - `backend/agents/llm_client.py` (added `image_attachments: list[tuple[str, bytes]] | None = None` to `LLMClientProtocol.generate_structured` & `GeminiLLMClient.generate_structured`; added configurable `timeout_seconds`, `max_retries`, `backoff_base_seconds`, `HttpOptions(timeout=...)`, and exponential-backoff retry loop on transient API/network errors).
+  - `backend/agents/lex/prompts.py` (upgraded `TRIAGE_SYSTEM_PROMPT` for multimodal image inspection and `DRAFT_SYSTEM_PROMPT` with mandatory business-email Markdown structure, `\n\n` paragraphs, `**bold**` PO#/SKU/currency, and standard Lex sign-off).
+  - `backend/agents/lex/agent.py` (added `image_attachments` support in `triage_email()`, closed `additional_po_updates` `PRICE_CHANGE` guardrail gap, and added `_format_and_verify_email_body()` deterministic normalization/grounding in `draft_email()`).
+  - `backend/agents/lex/eval_adapter.py` (added `image_attachments` parameter to `OfflineCaseLLMClient.generate_structured`).
+  - `backend/orchestrator/workflows.py` (reads `.jpg`/`.jpeg`/`.png` image attachments into `(mime_type, bytes)` for `triage_email()`, and falls back gracefully to `AMBIGUOUS_EMAIL` via `_build_llm_failure_triage_fallback()` on LLM failure with zero `500` crashes or PO state mutations).
+  - `backend/evals/lex.yaml` (added structured formatting assertions on outbound draft cases and added `draft_po_dispatch_structured_markdown`).
+- **Verification:** `uv run pytest -v` (`116 passed, 3 skipped` — 3 live-Gemini tests skipped offline) and `uv run ruff check backend tests` (`All checks passed!`), including all 5 AST checks in `tests/test_architecture.py`. `frontend/`, `backend/inventory/`, `backend/planning/`, `backend/po/`, and `backend/seed/data.py` left untouched.
+
+---
+
+## Next Session Handoff Prompt — Start Slice `P3-5`
+
+> Implement **Slice P3-5** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
+> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md §2 (Pillar 6 items 1–5)`, `docs/phase3/DESIGN_P3.md (§1.2, §5.1–§5.2)`, `docs/phase3/SLICES_P3.md (Slice P3-5)`, and target files: `backend/agents/llm_client.py`, `backend/agents/lex/{schemas,prompts,agent,eval_adapter}.py`, `backend/orchestrator/{logistics_workflow,sla_watcher,workflows}.py`, `backend/evals/lex.yaml`, `tests/test_architecture.py`.
+> - **Leave Untouched:** `frontend/`, `backend/inventory/service.py`, `backend/planning/*`.
 > - **Acceptance Criteria:**
->   1. Harden `GeminiLLMClient` with configurable timeout, exponential-backoff retries on transient errors, and `image_attachments` multimodal input support in `LLMClientProtocol`.
->   2. Upgrade `DRAFT_SYSTEM_PROMPT` & `LexAgent.draft_email()` with structured paragraph/bullet/`**bold**`/sign-off formatting enforcement + deterministic cleanup & currency/PO verification.
->   3. Pass image attachments and multi-PDF context cleanly from `workflows.py`, add graceful fallback to `AMBIGUOUS_EMAIL` on LLM failure (zero `500` crashes), and close any `additional_po_updates` `PRICE_CHANGE` guardrail gap in `agent.py`.
->   4. Update `backend/evals/lex.yaml`, add `tests/agents/test_lex_formatting_and_resilience.py`, run `uv run pytest -v` and `uv run ruff check backend tests`, verify `tests/test_architecture.py` passes, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
+>   1. Create `backend/agents/tools.py` (`ToolDefinition`, `ToolRegistry`) and `backend/agents/sandbox.py` (AST-validated safe Python calculation sandbox with timeout blocking unsafe imports/I/O/network/eval).
+>   2. Implement `generate_with_tools()` in `backend/agents/llm_client.py` logging every tool invocation into `AgentTracer.span.tool_calls` (`tool_calls_json`).
+>   3. Create `backend/orchestrator/lex_tools.py` binding DB read tools (`get_part_snapshot`, `get_consumption_history`, `get_po_details`, `list_open_pos`, `get_supplier_profile`, `get_mailroom_thread`), `run_sandbox_calc`, `schedule_lex_reminder`, `propose_memory_note`, and `create_advisory_alert` while passing all AST boundary rules in `tests/test_architecture.py`.
+>   4. Upgrade `LexAgent` + `logistics_workflow.py` + `sla_watcher.py` to support variable deferral days (`details_promised_days` / `details_promised_by_date`), schedule `LexReminder` instead of nagging immediately when supplier promises details later and stockout runway is safe, wake Lex on clock advance when `remind_at <= sim_now`, and deduplicate + contextualize memory-triggered alerts.
+>   5. Update `eval_adapter.py` + `backend/evals/lex.yaml`, add `tests/agents/test_sandbox_and_tools.py` & `tests/orchestrator/test_lex_v2_workflows.py`, run `uv run pytest -v` and `uv run ruff check backend tests`, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
 
 ---
 

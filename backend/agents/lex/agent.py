@@ -1,4 +1,5 @@
 import json
+import re
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,84 @@ from backend.observability.tracer import AgentTracer
 
 CONFIDENCE_THRESHOLD = 0.85
 VALID_PERSONA_VALUES = {p.value for p in PersonaKey}
+_STANDARD_SIGNATURE = "Best regards,\n**Lex**\nAI Supply Chain Assistant"
+_GREETING_RE = re.compile(r"^(dear|hello|hi|greetings)\b[^\n,]*,\s*(.+)$", re.IGNORECASE)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*₹])")
+
+
+def _bold_token(text: str, token: str) -> str:
+    clean = token.strip()
+    if not clean:
+        return text
+    pattern = re.compile(rf"(?<!\*)\b{re.escape(clean)}\b(?!\*)")
+    return pattern.sub(f"**{clean}**", text)
+
+
+def _format_and_verify_email_body(body: str, draft_input: EmailDraftInput) -> str:
+    """Enforce structured Markdown business-email formatting, PO/SKU bolding, and currency."""
+    text = (body or "").replace("\r\n", "\n").strip()
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    if not text:
+        recipient = draft_input.recipient_name.strip() or "Team"
+        text = f"Dear {recipient},\n\nPlease find the update below."
+
+    # Ensure standalone salutation line followed by blank line
+    lines = text.split("\n")
+    first_line = lines[0].strip()
+    if not re.match(r"^(dear|hello|hi|greetings)\b", first_line, re.IGNORECASE):
+        recipient = draft_input.recipient_name.strip() or "Team"
+        text = f"Dear {recipient},\n\n{text}"
+    else:
+        m = _GREETING_RE.match(first_line)
+        if m and m.group(2).strip():
+            salutation = first_line[: first_line.index(",") + 1].strip()
+            rest_first = m.group(2).strip()
+            if rest_first and rest_first[0].islower():
+                rest_first = rest_first[0].upper() + rest_first[1:]
+            remaining = "\n".join(lines[1:]).strip()
+            rest_block = f"{rest_first}\n{remaining}".strip() if remaining else rest_first
+            text = f"{salutation}\n\n{rest_block}"
+        elif len(lines) > 1 and lines[1].strip() != "":
+            text = f"{first_line}\n\n" + "\n".join(lines[1:]).strip()
+
+    # Break single wall-of-text paragraphs into readable \n\n paragraphs
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    expanded: list[str] = []
+    for para in paragraphs:
+        if len(para) > 180 and "\n" not in para and not para.startswith("- "):
+            sentences = _SENTENCE_SPLIT_RE.split(para)
+            if len(sentences) >= 2:
+                mid = max(1, len(sentences) // 2)
+                expanded.append(" ".join(sentences[:mid]).strip())
+                expanded.append(" ".join(sentences[mid:]).strip())
+                continue
+        expanded.append(para)
+    text = "\n\n".join(expanded)
+
+    # Currency grounding: prevent USD/$ leakage on INR POs
+    if draft_input.currency.strip().upper() == "INR":
+        text = re.sub(r"\bUSD\s*", "INR ", text, flags=re.IGNORECASE)
+        text = text.replace("$", "₹")
+
+    # Bold PO number & SKU; ensure PO number is grounded if provided
+    po_ref = draft_input.po_number.strip()
+    if po_ref and po_ref.upper() != "N/A":
+        if po_ref not in text:
+            text = f"{text}\n\n- **PO Reference:** **{po_ref}**"
+        else:
+            text = _bold_token(text, po_ref)
+
+    sku = draft_input.part_sku.strip()
+    if sku and sku.upper() != "GENERAL":
+        text = _bold_token(text, sku)
+
+    # Ensure standard sign-off block
+    tail_lower = text.split("\n\n")[-1].lower()
+    if not any(sig in tail_lower for sig in ("best regards", "regards,", "sincerely,", "lex")):
+        text = f"{text}\n\n{_STANDARD_SIGNATURE}"
+
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 class LexAgent(BaseAgent):
@@ -45,6 +124,7 @@ class LexAgent(BaseAgent):
         *,
         linked_comm_id: int | None = None,
         pdf_bytes: bytes | None = None,
+        image_attachments: list[tuple[str, bytes]] | None = None,
     ) -> EmailTriageResult:
         prompt = json.dumps(triage_input.model_dump(mode="json"), indent=2)
         trigger = f"Inbound email from {triage_input.sender_name}: {triage_input.subject}"
@@ -57,18 +137,22 @@ class LexAgent(BaseAgent):
             linked_entity_type="communication" if linked_comm_id else None,
             linked_entity_id=linked_comm_id,
         ) as span:
+            img_note = f" | Images={len(image_attachments)}" if image_attachments else ""
             span.input_summary = (
-                f"From {triage_input.sender_persona} | Subject: {triage_input.subject}"
+                f"From {triage_input.sender_persona} | Subject: {triage_input.subject}{img_note}"
             )
             span.raw_prompt = prompt
 
-            llm_res = self.llm.generate_structured(
-                prompt=prompt,
-                response_schema=EmailTriageResult,
-                system_instruction=TRIAGE_SYSTEM_PROMPT,
-                temperature=0.0,
-                pdf_bytes=pdf_bytes,
-            )
+            llm_kwargs: dict[str, object] = {
+                "prompt": prompt,
+                "response_schema": EmailTriageResult,
+                "system_instruction": TRIAGE_SYSTEM_PROMPT,
+                "temperature": 0.0,
+                "pdf_bytes": pdf_bytes,
+            }
+            if image_attachments:
+                llm_kwargs["image_attachments"] = image_attachments
+            llm_res = self.llm.generate_structured(**llm_kwargs)  # type: ignore[arg-type]
             result = llm_res.parsed
 
             # Normalize additional_po_updates if top-level matched_po_number was omitted
@@ -120,6 +204,11 @@ class LexAgent(BaseAgent):
                 if (
                     upd.confidence < CONFIDENCE_THRESHOLD
                     or po_ref not in open_po_numbers
+                    or (
+                        upd_intent == EmailIntent.PRICE_CHANGE
+                        and upd.proposed_unit_price is None
+                        and upd.proposed_qty is None
+                    )
                 ):
                     upd_intent = EmailIntent.AMBIGUOUS
                 clean_additional.append(
@@ -265,11 +354,14 @@ class LexAgent(BaseAgent):
             ):
                 subject = f"[{draft_input.part_sku}] {subject}"
 
+            formatted_body = _format_and_verify_email_body(result.body, draft_input)
+
             result = result.model_copy(
                 update={
                     "to_personas": clean_to,
                     "cc_personas": clean_cc,
                     "subject": subject,
+                    "body": formatted_body,
                 }
             )
 

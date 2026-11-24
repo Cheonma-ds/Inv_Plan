@@ -486,6 +486,7 @@ cases:
       body:
         not_null: true
         min_len: 30
+        contains_all: ["\n\n", "**", "Best regards", "Lex"]
 
   - id: draft_invoice_discrepancy_compliance
     name: "Invoice discrepancy draft holds payment and avoids unapproved concessions"
@@ -519,6 +520,7 @@ cases:
       subject:
         contains: PO-1038
       body:
+        contains_all: ["\n\n", "**", "Best regards", "Lex"]
         not_contains_any_ci:
           - "payment has been released"
           - "we accept the overcharge"
@@ -555,6 +557,7 @@ cases:
       subject:
         contains: PO-1038
       body:
+        contains_all: ["\n\n", "**", "Best regards", "Lex"]
         not_contains_any_ci:
           - "we agree to extra expedite fee"
           - "waive all penalties"
@@ -879,6 +882,7 @@ cases:
       body:
         not_null: true
         min_len: 30
+        contains_all: ["\n\n", "**", "Best regards", "Lex"]
         contains_any_ci: ["dispatch", "carrier", "tracking"]
 
   - id: draft_dispatch_details_nudge_compliance
@@ -914,6 +918,7 @@ cases:
       body:
         not_null: true
         min_len: 30
+        contains_all: ["\n\n", "**", "Best regards", "Lex"]
         contains_any_ci: ["tracking", "dispatch"]
 
   # ---------------------------------------------------------------------------
@@ -1043,6 +1048,43 @@ cases:
       body:
         not_contains_any_ci: ["USD", "$"]
         contains_any_ci: ["INR", "₹", "Rs"]
+        contains_all: ["\n\n", "**", "Best regards", "Lex"]
+
+  - id: draft_po_dispatch_structured_markdown
+    name: "PO dispatch draft enforces structured paragraphs, bullets, bolding, and Lex sign-off"
+    task: email_draft
+    tags: [draft, formatting, phase3]
+    input:
+      category: PO_DISPATCH
+      po_number: "PO-2001"
+      part_sku: "BRG-402"
+      part_name: "Deep Groove Bearing 6205"
+      qty: 20
+      unit_price: 450.0
+      currency: "INR"
+      recipient_persona: sup1
+      recipient_name: "Apex Precision Components"
+      current_date: "2026-10-01"
+      context_facts:
+        currency: "INR"
+        order_qty: 20
+        unit_price: 450.0
+        total_value: 9000.0
+    mock_response:
+      to_personas: [sup1]
+      cc_personas: [inventory_manager]
+      subject: "[PO-2001] New Purchase Order — BRG-402 (20 units)"
+      body: "Dear Apex Precision Components, please accept PO-2001 for 20 units of BRG-402 at ₹450.00/unit (Total **₹9,000.00**). Kindly confirm your expected dispatch date."
+    expect:
+      to_personas:
+        contains: sup1
+      cc_personas:
+        contains: inventory_manager
+      subject:
+        contains: PO-2001
+      body:
+        contains_all: ["Dear Apex Precision Components,", "\n\n", "**PO-2001**", "**BRG-402**", "Best regards,", "**Lex**"]
+        not_contains_any_ci: ["USD", "$"]
 
   - id: stock_request_csv_bom_multi_sku
     name: "Making Team CSV BOM attachment extracts all SKUs and quantities"
