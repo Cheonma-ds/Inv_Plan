@@ -2,8 +2,23 @@
 
 Most inventory software makes creating a purchase order easy, then leaves the hard part—chasing silent suppliers, decoding messy delay emails, and reconciling mismatched invoices—trapped in an inbox. I built InvPlan to pair a deterministic supply-chain engine with **Lex**, a multimodal AI operations agent and manager copilot that reads supplier emails and PDFs, checks live stock, and drafts responses without ever touching the ledger or sending mail on its own.
 
-<!-- TODO: Hero screenshot or short GIF showing the Inventory & Parts workspace with the Stockout In badges and the Manager Copilot drawer open side-by-side -->
-<!-- TODO: Link to 90-second demo video: [Watch the 90-second walkthrough](https://...) -->
+![InvPlan Walkthrough — Slide 1](docs/slides/slide-01.png)
+
+[Open the 9-slide walkthrough PDF in browser](docs/slides/InvPlan_walkthrough.pdf)
+
+<details>
+<summary><strong>Browse all 9 walkthrough slides inline</strong></summary>
+
+![InvPlan Walkthrough — Slide 2](docs/slides/slide-02.png)
+![InvPlan Walkthrough — Slide 3](docs/slides/slide-03.png)
+![InvPlan Walkthrough — Slide 4](docs/slides/slide-04.png)
+![InvPlan Walkthrough — Slide 5](docs/slides/slide-05.png)
+![InvPlan Walkthrough — Slide 6](docs/slides/slide-06.png)
+![InvPlan Walkthrough — Slide 7](docs/slides/slide-07.png)
+![InvPlan Walkthrough — Slide 8](docs/slides/slide-08.png)
+![InvPlan Walkthrough — Slide 9](docs/slides/slide-09.png)
+
+</details>
 
 **Stack:** Python 3.12, FastAPI, SQLAlchemy, SQLite, Google GenAI (`gemini-3.5-flash-lite`), React 19, TypeScript, Tailwind CSS, OpenTelemetry (optional Arize Phoenix).
 
