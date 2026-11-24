@@ -132,16 +132,28 @@
 
 ---
 
+## Post-P3-7 Lex Live Stress & Copilot-Readiness Test Suite Upgrade
+
+- **Offline Mock-LLM Lex Tests Removed:** Deleted `tests/agents/test_lex_agent.py` (5 `StubLLMClient` mock tests), `tests/agents/test_lex_formatting_and_resilience.py` (6 mock-LLM/fake-model tests), and removed `_ToolUsingMockLLM` + 4 mocked tests from `tests/orchestrator/test_lex_v2_workflows.py` (keeping pure deterministic `ToolRegistry`, AST `sandbox.py`, schema alias, `_format_and_verify_email_body`, `lex_tools` handler, and deferral/advisory helper tests with zero mock LLMs). Replaced the 3 basic smoke live files (`test_live_gemini_phase3.py`, `test_live_gemini_stock_request.py`, `test_live_gemini_pdf.py`) with a unified **25-test live Gemini suite** (`<= 30` tests):
+  - `tests/agents/live_helpers.py`: shared live Gemini helpers, PNG dispatch/damage image generators, `CopilotEvalResponse` schema, and `COPILOT_EVAL_SYSTEM_PROMPT`.
+  - `tests/agents/test_live_lex_triage_adversarial.py` (**8 live tests**): lengthy noisy thread with unrelated chatter & omitted PO#, unhinted safe `+4d` deferral, tight-runway unsafe `+5d` deferral (`HIGH` escalation), multi-PO mixed intents + vague price hedge, stealth USD quote, contradictory/unknown PO#, Inventory Manager dismissing ALL alerts carelessly, and memory deduplication + new operational constraint learning.
+  - `tests/agents/test_live_lex_multimodal_and_drafts.py` (**6 live tests**): noisy overcharged PDF invoice → 3-way quarantine, Credit Note PDF + non-invoice brochure trap, PNG dispatch slip + PNG dock damage photo, corrupt PDF graceful recovery, 3-PO simulated-clock `LexReminder` wakeup, and adversarial multi-category draft compliance.
+  - `tests/agents/test_live_lex_making_and_e2e.py` (**4 live tests**): messy CSV BOM with valid + unknown SKU (`BRG-999-X`), Making shortage → min-qty negotiation → auto-PO, vague floor slang, and full order-to-partial-release autonomous lifecycle E2E.
+  - `tests/agents/test_live_lex_copilot_readiness.py` (**7 live tests**): pre-Copilot evaluation stressing inventory-wide `CRITICAL`/`WARNING` ranking, `BRG-402` 90d EWMA + post-withdrawal sandbox math, `Sup1`/`Sup2`/`Sup3` comparison & `VLV-204` Primary-vs-Backup tradeoff, dismissed alerts & `PENDING_DISPATCH_APPROVAL` (`On Order = 0`) blindspots, InvPlan terminology (`ROP/T`, `Z`-factors `2.05`/`1.65`/`1.28`, `On Hold` vs `On Order`), 3-PO bottleneck diagnosis, and ungrounded/mutating refusal.
+
+---
+
 ## Next Session Handoff Prompt — Start Slice `P3-8`
 
-> Execute **Slice P3-8** (Final Phase 3 Verification & Documentation Parity Gate) per `docs/phase3/SLICES_P3.md`, `docs/phase3/PRD_P3.md §3`, and `AGENTS.md §5`:
-> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md (§3 Acceptance Criteria)`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-8)`, `STATUS.md`, and `README.md`.
-> - **Scope:** Verification & documentation parity only (fix any genuine E2E/live-eval bug discovered during verification if needed, keeping changes minimal and re-running full checks). Leave untracked `demo_recordings/` unstaged.
-> - **Acceptance Criteria:**
->   1. Run full offline `uv run pytest -v`, `uv run ruff check backend tests`, and `cd frontend && npm run build`.
->   2. Run live Gemini verification (`RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/`) and execute the `lex` eval suite in `mode: "live"` via `POST /api/evals/lex/run`, verifying 100% pass rate.
->   3. Run a full headless Playwright/Chromium browser walkthrough against the running backend + frontend across all 6 acceptance criteria in `PRD_P3.md §3` (Oct 1 13:00 IST seed & 0 open POs, same-day withdraw vs `+1d` EWMA rollover & `ROP/T` freeze/recalc invariants, `Stockout In` urgency badges & 90d cycle drawer, `[Create PO]` suggested qty + `[View PO]` jump, `[Edit PO]` modal from Alerts + `DISMISSED` draft hiding & inventory warning badge, formatted emails & Lex tool-call traces in `AIHealthPage`).
->   4. Sync `docs/phase3/STATUS_P3.md`, `STATUS.md`, and `README.md` with exact verified outputs and commit cleanly.
+> Execute **Slice P3-8** (Live Lex Stress Verification, Lex Upgrades & Documentation Parity Gate) per `docs/phase3/SLICES_P3.md`, `docs/phase3/PRD_P3.md §3`, and `AGENTS.md`:
+> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md (§3 Acceptance Criteria)`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-8)`, `backend/agents/lex/{agent,prompts,schemas,stock_request}.py`, `backend/orchestrator/lex_tools.py`, `STATUS.md`, and `README.md`.
+> - **Primary Mission — Live Lex Execution & Agent Upgrade Loop:**
+>   1. Run the 25-test live Gemini suite: `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/` (ensure `$GEMINI_API_KEY` is set) AND run the YAML eval suite in `mode: "live"` via `POST /api/evals/lex/run`.
+>   2. **Diagnose every live failure, missed tool call, or Copilot blindspot**—in particular inspect whether Lex lacks read tools needed for Copilot & cross-inventory queries (e.g., `list_parts_summary` / inventory-wide stockout urgency, `list_alerts` / `DISMISSED` & `unresolved_dismissed_alerts` inspection, `get_planning_overview` / `ROP/T` recommendations), whether `triage_stock_request` needs tool-use or prompt hardening for messy BOMs, and whether noisy multi-PO / dismissed-alert scenarios need prompt or tool upgrades.
+>   3. **Upgrade Lex** (`backend/agents/lex/*`, `backend/orchestrator/lex_tools.py`, and `backend/orchestrator/{workflows,sla_watcher}.py` if needed) while strictly preserving all 5 AST architectural checks in `tests/test_architecture.py`. Do **NOT** weaken test assertions or add mock-LLM tests to make failures pass—fix Lex's real prompts, schemas, tools, and reasoning loop.
+>   4. Re-run `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/` until **all 25 live Lex tests pass**, and run `uv run pytest -v`, `uv run ruff check backend tests`, and `cd frontend && npm run build`.
+>   5. Execute a full headless Playwright/Chromium browser walkthrough across all 6 acceptance criteria in `PRD_P3.md §3`.
+>   6. Sync `docs/phase3/STATUS_P3.md`, `STATUS.md`, and `README.md` with exact verified outputs and commit cleanly (leaving untracked `demo_recordings/` unstaged).
 
 ---
 

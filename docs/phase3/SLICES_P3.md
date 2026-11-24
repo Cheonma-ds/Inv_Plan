@@ -48,7 +48,7 @@
 | **P3-5** | Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory-Informed Alerts | `backend/agents/tools.py`, `backend/agents/sandbox.py`, `backend/orchestrator/lex_tools.py`, `tests/agents/test_sandbox_and_tools.py`, `tests/orchestrator/test_lex_v2_workflows.py` | `backend/agents/llm_client.py`, `backend/agents/lex/{schemas,prompts,agent,eval_adapter}.py`, `backend/orchestrator/{logistics_workflow,sla_watcher,workflows}.py`, `backend/evals/lex.yaml`, `tests/test_architecture.py` | `uv run pytest`, `ruff`; AST tests pass cleanly; sandbox blocks unsafe code; *"details after 4 days"* schedules 4-day `LexReminder` without premature nudge and wakes cleanly on `+4d`. |
 | **P3-6** | Frontend Core: IST Formatting, Sidebar Cleanup, `FormattedEmailBody`, `Inventory & Parts` Revamp & `Stockout In` Cycle Drawer | `frontend/src/components/FormattedEmailBody.tsx`, `frontend/src/components/StockoutCycleDrawer.tsx` | `frontend/src/App.tsx`, `frontend/src/components/ClockBar.tsx`, `frontend/src/utils/format.ts`, `frontend/src/api/{types,client}.ts`, `frontend/src/pages/{InventoryPage,MailroomPage,POTrackerPage}.tsx` | `cd frontend && npm run build`; browser check confirms IST clock, no sidebar Alerts link, `View PO` jumps & opens PO drawer, `Daily Burn` neutral grey trend %, clickable `Stockout In` 90d cycle chart drawer, and dismissed warning badge. |
 | **P3-7** | Frontend `CreateEditPOModal` (Suggested Qty + Reasoning), `AlertsPage` Revamp, `SuppliersPlanningPage` 90d Metrics & `AIHealthPage` Tool Traces | `frontend/src/components/CreateEditPOModal.tsx` | `frontend/src/pages/{InventoryPage,AlertsPage,POTrackerPage,SuppliersPlanningPage,AIHealthPage}.tsx`, `frontend/src/api/{types,client}.ts` | `cd frontend && npm run build`, `uv run pytest`, `ruff`; browser verifies `Edit PO` modal from Alerts, `Suggested Qty` reasoning, hidden draft on `DISMISSED`, `ROP/T` everywhere, 90d cycles & avg response days, and tool traces. |
-| **P3-8** | Final Phase 3 Verification: Full Browser E2E, Live `gemini-3.5-flash-lite` Eval Sweep & Documentation Parity | *(Verification & doc polish only)* | `docs/phase3/STATUS_P3.md`, `STATUS.md`, `README.md` | `uv run pytest`, `RUN_LIVE_GEMINI=1 uv run pytest tests/agents/`, live eval run, `ruff`, `npm run build`, and headless Chromium E2E across all Phase 3 acceptance criteria. |
+| **P3-8** | Final Phase 3 Verification: Live 25-Test Lex Stress & Copilot-Readiness Upgrade Loop, Browser E2E & Documentation Parity | *(Live verification, Lex upgrades from failures, & doc polish)* | `backend/agents/lex/*`, `backend/orchestrator/lex_tools.py`, `docs/phase3/STATUS_P3.md`, `STATUS.md`, `README.md` | `uv run pytest`, `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/` (all 25 live tests pass), live eval run, `ruff`, `npm run build`, and headless Chromium E2E across all Phase 3 acceptance criteria. |
 
 ---
 
@@ -137,10 +137,10 @@
 
 ---
 
-### Slice P3-8 — Final Phase 3 Verification & Documentation Parity Gate
+### Slice P3-8 — Final Phase 3 Verification, Live Lex Upgrade Loop & Documentation Parity Gate
 - **Read Only:** All modified Phase 3 files + `docs/phase3/*`, `STATUS.md`, `README.md`.
 - **Tasks:**
-  1. Run full offline `uv run pytest -v`, `uv run ruff check backend tests`, `cd frontend && npm run build`.
-  2. Run `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/` and `POST /api/evals/lex/run` (`mode: "live"`).
+  1. Run full offline deterministic suite (`uv run pytest -v`, `uv run ruff check backend tests`, `cd frontend && npm run build`).
+  2. Run the 25-test live Gemini Lex stress & Copilot-readiness suite (`RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/`) and `POST /api/evals/lex/run` (`mode: "live"`). Analyze every failure, missed tool call, noisy-thread misread, or Copilot lookup gap, and **upgrade Lex** (`backend/agents/lex/{agent,prompts,schemas,stock_request}.py`, `backend/orchestrator/lex_tools.py`, `tests/test_architecture.py` preserved) until all 25 live tests pass cleanly.
   3. Execute full headless Playwright/Chromium browser walkthrough across every acceptance criterion in `PRD_P3.md §3`.
   4. Sync `docs/phase3/STATUS_P3.md`, `STATUS.md`, and `README.md` with exact verified outputs.
