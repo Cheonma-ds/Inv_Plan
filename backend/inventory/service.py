@@ -216,37 +216,52 @@ def consume_stock(
         )
 
     burn_alert: AcceleratedBurnAlert | None = None
-    if part.on_hand_stock == 0:
-        open_pos = list(
+    stockout_active = part.on_hand_stock == 0
+    if part.on_hand_stock > 0 and part.daily_burn_ewma > 0.0:
+        dispatched_pos = list(
             session.scalars(
                 select(PurchaseOrder).where(
                     PurchaseOrder.part_id == part.id,
-                    PurchaseOrder.status.not_in(TERMINAL_PO_STATUSES),
+                    PurchaseOrder.status.not_in(NON_ON_ORDER_PO_STATUSES),
                 )
             ).all()
         )
-        far_pos: list[tuple[PurchaseOrder, float]] = []
-        threshold = sim_now + timedelta(days=3)
-        for po in open_pos:
+        po_etas: list[tuple[PurchaseOrder, object]] = []
+        for po in dispatched_pos:
             eta_raw = po.revised_eta or po.promised_eta
-            if eta_raw is None:
-                continue
-            eta = clock.ensure_utc(eta_raw)
-            if eta > threshold:
-                days_away = (eta - sim_now).total_seconds() / 86400.0
-                far_pos.append((po, days_away))
-        if far_pos:
-            far_pos.sort(key=lambda item: item[1])
-            earliest_po, earliest_days = far_pos[0]
-            earliest_eta = clock.ensure_utc(earliest_po.revised_eta or earliest_po.promised_eta)
-            burn_alert = AcceleratedBurnAlert(
-                part_id=part.id,
-                sku=part.sku,
-                part_name=part.name,
-                open_po_ids=[item[0].id for item in far_pos],
-                earliest_eta=earliest_eta,
-                days_until_eta=round(earliest_days, 2),
-            )
+            if eta_raw is not None:
+                eta = clock.ensure_utc(eta_raw)
+            else:
+                term = session.scalar(
+                    select(PartSupplierTerm).where(
+                        PartSupplierTerm.part_id == part.id,
+                        PartSupplierTerm.supplier_id == po.supplier_id,
+                    )
+                )
+                lt_days = float(term.effective_lead_time_days) if term is not None else 14.0
+                anchor = clock.ensure_utc(po.sent_at or po.created_at)
+                eta = anchor + timedelta(days=lt_days)
+            po_etas.append((po, eta))
+
+        if po_etas:
+            po_etas.sort(key=lambda item: item[1])
+            earliest_po, earliest_eta = po_etas[0]
+            days_to_stockout = float(part.on_hand_stock) / float(part.daily_burn_ewma)
+            predicted_stockout = sim_now + timedelta(days=days_to_stockout)
+            if predicted_stockout < earliest_eta:
+                days_until_eta = max(
+                    0.0, (earliest_eta - sim_now).total_seconds() / 86400.0
+                )
+                burn_alert = AcceleratedBurnAlert(
+                    part_id=part.id,
+                    sku=part.sku,
+                    part_name=part.name,
+                    open_po_ids=[item[0].id for item in po_etas],
+                    earliest_eta=earliest_eta,
+                    days_until_eta=round(days_until_eta, 2),
+                    days_to_stockout=round(days_to_stockout, 2),
+                    predicted_stockout_date=predicted_stockout,
+                )
 
     snapshot = PartSnapshot(
         part_id=part.id,
@@ -271,6 +286,7 @@ def consume_stock(
         transaction_id=tx.id,
         reorder_triggered=reorder_event,
         accelerated_burn=burn_alert,
+        stockout_active=stockout_active,
     )
 
 

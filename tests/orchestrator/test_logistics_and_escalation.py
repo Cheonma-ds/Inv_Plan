@@ -24,14 +24,53 @@ from backend.core.enums import (
     PersonaKey,
     POStatus,
 )
-from backend.core.models import ActionItem, PurchaseOrder, SupplierMemoryNote
+from backend.core.models import ActionItem, Part, PurchaseOrder, Supplier, SupplierMemoryNote
 from backend.mailroom import OutboundMessage, list_drafts, list_inbox
 from backend.main import create_app
 from backend.orchestrator.deps import get_workflow_engine
 from backend.orchestrator.sla_watcher import auto_resolve_po_alerts
 from backend.orchestrator.workflows import WorkflowEngine
+from backend.po import create_po, transition_po
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _create_open_po(
+    session,
+    *,
+    sku: str = "RLY-901",
+    persona: PersonaKey = PersonaKey.SUP3,
+    status: POStatus = POStatus.SENT_AWAITING_ACK,
+    qty: int = 10,
+    eta_days: int = 13,
+) -> PurchaseOrder:
+    sim_now = clock.now(session)
+    part = session.scalar(select(Part).where(Part.sku == sku))
+    sup = session.scalar(select(Supplier).where(Supplier.persona_key == persona.value))
+    assert part is not None and sup is not None
+    po = create_po(
+        session,
+        part_id=part.id,
+        supplier_id=sup.id,
+        qty=qty,
+        unit_price=100.0,
+        initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
+    )
+    transition_po(
+        session,
+        po,
+        POStatus.SENT_AWAITING_ACK,
+        promised_eta=sim_now + timedelta(days=eta_days),
+    )
+    if status == POStatus.ACKNOWLEDGED:
+        transition_po(
+            session,
+            po,
+            POStatus.ACKNOWLEDGED,
+            promised_eta=sim_now + timedelta(days=eta_days),
+        )
+    session.flush()
+    return po
 
 
 class _LogisticsMockLLM:
@@ -94,10 +133,7 @@ class _LogisticsMockLLM:
 def test_ack_with_complete_logistics_creates_info_alert_and_no_missing_draft(
     seeded_session,
 ) -> None:
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
-    )
-    assert po_await is not None
+    po_await = _create_open_po(seeded_session, status=POStatus.SENT_AWAITING_ACK)
 
     llm = _LogisticsMockLLM(
         next_triage=EmailTriageResult(
@@ -149,10 +185,7 @@ def test_ack_with_complete_logistics_creates_info_alert_and_no_missing_draft(
 
 
 def test_ack_deferred_2d_sla_expiry_nudge_and_followup_completion(seeded_session) -> None:
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
-    )
-    assert po_await is not None
+    po_await = _create_open_po(seeded_session, status=POStatus.SENT_AWAITING_ACK)
 
     llm = _LogisticsMockLLM(
         next_triage=EmailTriageResult(
@@ -299,10 +332,7 @@ def test_ack_deferred_2d_sla_expiry_nudge_and_followup_completion(seeded_session
 def test_ack_missing_details_immediate_draft_and_repeated_deferral_guard(
     seeded_session,
 ) -> None:
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
-    )
-    assert po_await is not None
+    po_await = _create_open_po(seeded_session, status=POStatus.SENT_AWAITING_ACK)
 
     llm = _LogisticsMockLLM(
         next_triage=EmailTriageResult(
@@ -389,10 +419,7 @@ def test_ack_missing_details_immediate_draft_and_repeated_deferral_guard(
 def test_mandatory_memory_note_alert_and_auto_resolve_preserves_notifications(
     seeded_session,
 ) -> None:
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
-    )
-    assert po_await is not None
+    po_await = _create_open_po(seeded_session, status=POStatus.SENT_AWAITING_ACK)
 
     llm = _LogisticsMockLLM(
         next_triage=EmailTriageResult(
@@ -468,10 +495,12 @@ def test_mandatory_memory_note_alert_and_auto_resolve_preserves_notifications(
 
 
 def test_sla_watcher_deferred_2d_expiry_also_fires_on_overdue_po(seeded_session) -> None:
-    po_ack = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    po_ack = _create_open_po(
+        seeded_session,
+        sku="FLT-108",
+        persona=PersonaKey.SUP1,
+        status=POStatus.ACKNOWLEDGED,
     )
-    assert po_ack is not None
     po_ack.status = POStatus.OVERDUE.value
     po_ack.dispatch_details_status = DispatchDetailsStatus.DEFERRED_2D.value
     po_ack.dispatch_details_due_at = clock.now(seeded_session) + timedelta(days=2)
@@ -489,6 +518,7 @@ def test_sla_watcher_deferred_2d_expiry_also_fires_on_overdue_po(seeded_session)
 
 
 def test_http_pos_serialization_and_escalate_to_procurement_endpoint(seeded_session) -> None:
+    _create_open_po(seeded_session, status=POStatus.SENT_AWAITING_ACK)
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=_LogisticsMockLLM()))
     app = create_app()
     app.dependency_overrides[get_session] = lambda: seeded_session
@@ -570,10 +600,7 @@ def test_http_pos_serialization_and_escalate_to_procurement_endpoint(seeded_sess
 def test_general_reply_on_unacknowledged_po_does_not_mutate_dispatch_status(
     seeded_session,
 ) -> None:
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
-    )
-    assert po_await is not None
+    po_await = _create_open_po(seeded_session, status=POStatus.SENT_AWAITING_ACK)
     assert po_await.dispatch_details_status == DispatchDetailsStatus.NONE.value
 
     llm = _LogisticsMockLLM(

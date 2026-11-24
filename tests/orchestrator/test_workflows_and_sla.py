@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from typing import TypeVar
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from backend.agents.lex import (
     LexAgent,
 )
 from backend.agents.llm_client import LLMResult
+from backend.core import clock
 from backend.core.db import get_session
 from backend.core.enums import (
     ActionItemStatus,
@@ -37,9 +39,55 @@ from backend.mailroom import OutboundMessage, list_drafts, list_inbox
 from backend.main import create_app
 from backend.orchestrator.deps import get_workflow_engine
 from backend.orchestrator.workflows import WorkflowEngine
-from backend.po import record_goods_receipt, submit_invoice_and_match
+from backend.po import create_po, record_goods_receipt, submit_invoice_and_match, transition_po
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def _create_open_po(
+    session,
+    *,
+    sku: str = "RLY-901",
+    persona: PersonaKey = PersonaKey.SUP3,
+    status: POStatus = POStatus.SENT_AWAITING_ACK,
+    qty: int = 10,
+    sent_hours_ago: int = 24,
+    eta_days: int = 13,
+) -> PurchaseOrder:
+    sim_now = clock.now(session)
+    part = session.scalar(select(Part).where(Part.sku == sku))
+    sup = session.scalar(select(Supplier).where(Supplier.persona_key == persona.value))
+    assert part is not None and sup is not None
+    sent_at = sim_now - timedelta(hours=sent_hours_ago)
+    po = create_po(
+        session,
+        part_id=part.id,
+        supplier_id=sup.id,
+        qty=qty,
+        unit_price=100.0,
+        initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
+    )
+    po.created_at = sent_at - timedelta(hours=2)
+    transition_po(
+        session,
+        po,
+        POStatus.SENT_AWAITING_ACK,
+        promised_eta=sim_now + timedelta(days=eta_days),
+    )
+    po.sent_at = sent_at
+    if status == POStatus.ACKNOWLEDGED:
+        transition_po(
+            session,
+            po,
+            POStatus.ACKNOWLEDGED,
+            promised_eta=sim_now + timedelta(days=eta_days),
+        )
+        po.acknowledged_at = sent_at + timedelta(hours=6)
+        po.promised_dispatch_date = sim_now + timedelta(days=1)
+        po.carrier_name = "BlueDart"
+        po.tracking_number = "BD-440192"
+    session.flush()
+    return po
 
 
 class SmartMockLLM:
@@ -101,15 +149,18 @@ def test_withdraw_to_draft_approve_dispatch_and_autonomy_tracking(seeded_session
     llm = SmartMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
-    # Hero part SKU-001: on_hand=4, rop=3, S=6 -> withdraw 2 => on_hand=2 < 3 => order 4
     part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
-    res = engine.withdraw_stock(seeded_session, part_id=part.id, qty=2, note="Spindle repair")
+    withdraw_qty = part.on_hand_stock - (part.rop - 1)
+    expected_order_qty = part.replenishment_point - (part.rop - 1)
+    res = engine.withdraw_stock(
+        seeded_session, part_id=part.id, qty=withdraw_qty, note="Spindle repair"
+    )
     po = res["created_po"]
     draft = res["draft_email"]
     assert po is not None
     assert po.status == POStatus.PENDING_DISPATCH_APPROVAL.value
-    assert po.qty == 4
+    assert po.qty == expected_order_qty
     assert draft is not None
     assert draft.status == CommStatus.DRAFT_PENDING_APPROVAL.value
     # Phase 3: PENDING_DISPATCH_APPROVAL keeps on_order_stock == 0 until actually dispatched
@@ -123,7 +174,7 @@ def test_withdraw_to_draft_approve_dispatch_and_autonomy_tracking(seeded_session
     approved = engine.approve_lex_draft(seeded_session, draft.id)
     assert approved["approval_outcome"] == ApprovalOutcome.APPROVED_AS_IS.value
     assert approved["po_transitioned_to"] == POStatus.SENT_AWAITING_ACK.value
-    assert get_on_order_stock(seeded_session, part.id) == 4
+    assert get_on_order_stock(seeded_session, part.id) == expected_order_qty
 
     seeded_session.refresh(po)
     assert po.status == POStatus.SENT_AWAITING_ACK.value
@@ -148,14 +199,19 @@ def test_inbound_ack_price_change_post_ack_delay_and_ambiguous_guardrail(seeded_
     llm = SmartMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
-    # Grab the seeded SENT_AWAITING_ACK PO (sup3) and ACKNOWLEDGED PO (sup1)
-    po_awaiting = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
+    po_awaiting = _create_open_po(
+        seeded_session,
+        sku="RLY-901",
+        persona=PersonaKey.SUP3,
+        status=POStatus.SENT_AWAITING_ACK,
     )
-    po_ack = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    _create_open_po(
+        seeded_session,
+        sku="FLT-108",
+        persona=PersonaKey.SUP1,
+        status=POStatus.ACKNOWLEDGED,
+        eta_days=4,
     )
-    assert po_awaiting is not None and po_ack is not None
 
     # Promote po_awaiting's part to CRITICAL so post-ack delay exercises CRITICAL path
     part_await = seeded_session.get(Part, po_awaiting.part_id)
@@ -230,10 +286,12 @@ def test_inbound_ack_price_change_post_ack_delay_and_ambiguous_guardrail(seeded_
     assert delay_alert.type == "CRITICAL_DELAY"
 
     # 3. Scenario 2: Price change on a SENT_AWAITING_ACK PO -> EXCEPTION_REVIEW + update_po CTA
+    brg_part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
+    assert brg_part is not None
     po_exc = engine.withdraw_stock(
         seeded_session,
-        part_id=seeded_session.scalar(select(Part.id).where(Part.sku == "BRG-402")),
-        qty=2,
+        part_id=brg_part.id,
+        qty=brg_part.on_hand_stock - (brg_part.rop - 1),
     )["created_po"]
     assert po_exc is not None
     draft_exc = list_drafts(seeded_session, PersonaKey.LEX.value)[0]
@@ -304,13 +362,22 @@ def test_sla_watcher_ack_escalation_pre_eta_overdue_and_quarantine(seeded_sessio
     llm = SmartMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
+    po_await = _create_open_po(
+        seeded_session,
+        sku="RLY-901",
+        persona=PersonaKey.SUP3,
+        status=POStatus.SENT_AWAITING_ACK,
+        sent_hours_ago=24,
+        eta_days=13,
     )
-    po_ack = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    po_ack = _create_open_po(
+        seeded_session,
+        sku="FLT-108",
+        persona=PersonaKey.SUP1,
+        status=POStatus.ACKNOWLEDGED,
+        sent_hours_ago=144,
+        eta_days=4,
     )
-    assert po_await is not None and po_ack is not None
 
     # Make po_ack's supplier reliability < 75 so Pre-ETA Check-in triggers 3 days before ETA
     sup_ack = seeded_session.get(Supplier, po_ack.supplier_id)
@@ -402,10 +469,12 @@ def test_sla_watcher_ack_escalation_pre_eta_overdue_and_quarantine(seeded_sessio
 
 
 def test_fastapi_routes_http_end_to_end(seeded_session):
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
+    po_await = _create_open_po(
+        seeded_session,
+        sku="RLY-901",
+        persona=PersonaKey.SUP3,
+        status=POStatus.SENT_AWAITING_ACK,
     )
-    assert po_await is not None
 
     llm = SmartMockLLM(
         next_triage=EmailTriageResult(
@@ -490,10 +559,11 @@ def test_fastapi_routes_http_end_to_end(seeded_session):
     parts_resp = client.get("/api/parts")
     assert parts_resp.status_code == 200
     hero_part = next(p for p in parts_resp.json() if p["sku"] == "BRG-402")
+    withdraw_qty = hero_part["on_hand_stock"] - (hero_part["rop"] - 1)
 
     consume_resp = client.post(
         f"/api/parts/{hero_part['part_id']}/consume",
-        json={"qty": 2, "note": "HTTP test"},
+        json={"qty": withdraw_qty, "note": "HTTP test"},
     )
     assert consume_resp.status_code == 200
     draft_id = consume_resp.json()["draft_comm_id"]
@@ -584,14 +654,18 @@ def test_scenario_1a_standard_part_above_rop_stockout_math_and_delayed_critical_
     llm = SmartMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
-    # Seeded ACKNOWLEDGED PO is on SKU-006 (STANDARD part, on_hand=15 > ROP=12, ~20d supply)
-    po_ack = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    po_ack = _create_open_po(
+        seeded_session,
+        sku="FLT-108",
+        persona=PersonaKey.SUP1,
+        status=POStatus.ACKNOWLEDGED,
+        eta_days=4,
     )
-    assert po_ack is not None
     part = seeded_session.get(Part, po_ack.part_id)
     supplier = seeded_session.get(Supplier, po_ack.supplier_id)
     assert part is not None and supplier is not None
+    part.on_hand_stock = 120
+    seeded_session.flush()
     assert part.criticality == Criticality.STANDARD.value
     assert part.on_hand_stock > part.rop
 
@@ -672,10 +746,12 @@ def test_scenario_2_price_variance_stockout_payload_default_update_po_and_cancel
     llm = SmartMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
-    po_await = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.SENT_AWAITING_ACK.value)
+    po_await = _create_open_po(
+        seeded_session,
+        sku="RLY-901",
+        persona=PersonaKey.SUP3,
+        status=POStatus.SENT_AWAITING_ACK,
     )
-    assert po_await is not None
     orig_price = po_await.unit_price
     orig_qty = po_await.qty
     proposed_price = round(orig_price * 1.2, 2)  # +20.0%
@@ -763,10 +839,13 @@ def test_quarantine_sla_timer_anchors_on_max_of_invoice_and_grn_timestamps(seede
     llm = SmartMockLLM()
     engine = WorkflowEngine(lex_agent=LexAgent(llm_client=llm))
 
-    po_ack = seeded_session.scalar(
-        select(PurchaseOrder).where(PurchaseOrder.status == POStatus.ACKNOWLEDGED.value)
+    po_ack = _create_open_po(
+        seeded_session,
+        sku="FLT-108",
+        persona=PersonaKey.SUP1,
+        status=POStatus.ACKNOWLEDGED,
+        eta_days=10,
     )
-    assert po_ack is not None
 
     # 1. Invoice arrives at T=0 (before GRN) with overbilled price -> PENDING_GRN
     submit_invoice_and_match(

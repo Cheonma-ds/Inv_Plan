@@ -27,7 +27,7 @@ def evaluate_part_recommendation(
     session: Session,
     part_id: int,
 ) -> ROPRecommendation:
-    """Compute a live ROP/S recommendation for a single part without mutating DB tables."""
+    """Compute a live ROP/T recommendation for a single part without mutating DB tables."""
     part = session.get(Part, part_id)
     if part is None:
         raise ValueError(f"Part {part_id} not found")
@@ -61,7 +61,7 @@ def refresh_supplier_metrics(
     *,
     part_id: int | None = None,
 ) -> SupplierScoreResult | None:
-    """Recompute and persist live reliability score & effective lead time for a supplier."""
+    """Recompute and persist live reliability score, response time, cycles_90d & effective LT."""
     supplier = session.get(Supplier, supplier_id)
     if supplier is None:
         return None
@@ -71,6 +71,8 @@ def refresh_supplier_metrics(
     supplier.otd_rate = score.otd_rate
     supplier.invoice_accuracy_rate = score.invoice_accuracy_rate
     supplier.response_rate = score.response_rate
+    supplier.avg_response_days = score.avg_response_days
+    supplier.cycles_90d = score.cycles_90d
 
     stmt = select(PartSupplierTerm).where(PartSupplierTerm.supplier_id == supplier.id)
     if part_id is not None:
@@ -170,6 +172,8 @@ def recalculate_all(session: Session) -> PlanningRecalculationSummary:
         sup.otd_rate = score.otd_rate
         sup.invoice_accuracy_rate = score.invoice_accuracy_rate
         sup.response_rate = score.response_rate
+        sup.avg_response_days = score.avg_response_days
+        sup.cycles_90d = score.cycles_90d
         supplier_scores.append(score)
 
     terms = list(

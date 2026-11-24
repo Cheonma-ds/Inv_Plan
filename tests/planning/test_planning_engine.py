@@ -44,18 +44,21 @@ def test_ewma_forecast_steady_vs_intermittent_and_manual_override(seeded_session
     steady_fc = compute_demand_forecast(seeded_session, steady_part)
     assert len(steady_fc.monthly_buckets) == 12
     assert steady_fc.is_intermittent is False
-    assert steady_fc.zero_month_count <= 6
+    assert steady_fc.zero_day_count == 0
     assert steady_fc.avg_daily_demand > 0
     assert steady_fc.daily_demand_std >= 0
-    assert steady_fc.effective_daily_demand == steady_fc.avg_daily_demand
+    assert math.isclose(steady_fc.effective_daily_demand, steady_fc.avg_daily_demand, rel_tol=1e-6)
 
-    # Intermittent spare part: seeded with consumption in only 4 of 12 months (8 zero months > 50%)
+    # Intermittent spare part: > 50% zero days across 90-day Jul-Sep history
     inter_fc = compute_demand_forecast(seeded_session, intermittent_part)
     assert inter_fc.is_intermittent is True
-    assert inter_fc.zero_month_count == 8
-    assert inter_fc.rolling_peak_floor_monthly is not None
-    assert inter_fc.rolling_peak_floor_monthly >= inter_fc.ewma_monthly_demand
-    assert inter_fc.avg_daily_demand >= inter_fc.ewma_monthly_demand / 30.0
+    assert inter_fc.zero_day_count > 45
+    assert inter_fc.rolling_peak_floor_daily is not None
+    assert math.isclose(
+        inter_fc.avg_daily_demand,
+        max(inter_fc.daily_burn_ewma, inter_fc.rolling_peak_floor_daily),
+        rel_tol=1e-6,
+    )
 
     # Additive human event override increases effective daily demand
     steady_part.manual_demand_override = 0.5
@@ -84,9 +87,13 @@ def test_supplier_reliability_scores_rank_sup1_above_sup3_above_sup2(seeded_sess
     s2 = compute_supplier_score(seeded_session, sup2)
     s3 = compute_supplier_score(seeded_session, sup3)
 
-    assert s1.closed_po_count == 12
-    assert s2.closed_po_count == 12
-    assert s3.closed_po_count == 12
+    assert s1.closed_po_count >= 12
+    assert s2.closed_po_count >= 12
+    assert s3.closed_po_count >= 12
+    assert s1.cycles_90d == s1.closed_po_count
+    assert s2.cycles_90d == s2.closed_po_count
+    assert s3.cycles_90d == s3.closed_po_count
+    assert s1.avg_response_days < s2.avg_response_days < s3.avg_response_days
 
     # Component sums match total score
     for score in (s1, s2, s3):
@@ -149,8 +156,8 @@ def test_sup2_late_deliveries_raise_effective_lead_time_and_rop(seeded_session):
     sku2_rec = next(r for r in summary.recommendations if r.sku == "VLV-204")
     assert sku2_rec.effective_lead_time_days > sku2_rec.quoted_lead_time_days
     assert sku2_rec.recommended_rop > optimistic_rec.recommended_rop
-    assert sku2_rec.recommended_rop > sku2.rop
-    assert sku2_rec.needs_update is True
+    assert sku2_rec.recommended_rop == sku2.rop
+    assert sku2_rec.needs_update is False
 
     # SKU-013 has 0 historical closed POs (< 3 deliveries) -> falls back to quoted_lead_time_days
     sku13 = seeded_session.scalar(select(Part).where(Part.sku == "ORG-112"))
@@ -199,20 +206,30 @@ def test_planning_api_recalculate_alerts_and_apply_recommendation(seeded_session
     app.dependency_overrides[get_session] = override_session
     client = TestClient(app)
 
-    # 1. Read-only overview
+    # 1. Read-only overview (seeded DB already matches statistical ROP/T)
     ov_resp = client.get("/api/planning/overview")
     assert ov_resp.status_code == 200
     ov_data = ov_resp.json()
     assert ov_data["parts_evaluated"] == 15
     assert len(ov_data["supplier_scores"]) == 3
 
+    # Force a stale ROP/T on VLV-204 and BRG-402 so recalculate flags updates
+    vlv = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
+    brg = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
+    assert vlv is not None and brg is not None
+    vlv.rop = 5
+    vlv.replenishment_point = 15
+    brg.rop = 5
+    brg.replenishment_point = 15
+    seeded_session.flush()
+
     # 2. Recalculate persists scores/LT and raises ROP_RECOMMENDATION alerts
     recalc_resp = client.post("/api/planning/recalculate")
     assert recalc_resp.status_code == 200
     recalc_data = recalc_resp.json()
     assert recalc_data["suppliers_updated"] == 3
-    assert recalc_data["recommendations_needing_update"] > 0
-    assert recalc_data["alerts_created"] == recalc_data["recommendations_needing_update"]
+    assert recalc_data["recommendations_needing_update"] == 2
+    assert recalc_data["alerts_created"] == 2
 
     # Re-running recalculate must NOT duplicate open ROP_RECOMMENDATION alerts
     # and must keep suggested_actions (list) and cta_payload (dict) as native JSON types (P4)

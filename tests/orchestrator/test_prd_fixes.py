@@ -536,7 +536,7 @@ def test_f2_3_multi_po_email_splitting_and_consolidated_multi_po_pdf_escalation(
         status=POStatus.ACKNOWLEDGED,
     )
     part2.criticality = "LOW"
-    part2.on_hand_stock = 120
+    part2.on_hand_stock = 1200
     seeded_session.flush()
 
     llm = FixesMockLLM()

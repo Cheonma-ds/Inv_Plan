@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta
+import math
+import statistics
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,7 @@ from backend.core.enums import (
     Criticality,
     EmailCategory,
     GRNStatus,
+    InventoryTxType,
     PersonaKey,
     POStatus,
     SupplierMemorySource,
@@ -29,6 +32,7 @@ from backend.core.enums import (
 from backend.core.models import (
     ActionItem,
     GoodsReceipt,
+    InventoryTransaction,
     Invoice,
     Part,
     PartSupplierTerm,
@@ -40,6 +44,7 @@ from backend.inventory import (
     ConsumeResult,
     clear_quarantined_stock,
     consume_stock,
+    get_part_snapshot,
     update_rop_and_replenishment,
 )
 from backend.mailroom import (
@@ -81,9 +86,16 @@ from backend.orchestrator.stock_request_workflow import (
     process_inbound_making_email,
 )
 from backend.planning import (
+    DAILY_EWMA_ALPHA,
+    DailyEWMAResult,
     compute_demand_forecast,
+    compute_effective_lead_time,
+    compute_ewma_from_daily_series,
+    compute_part_planning_metrics,
+    compute_rop_recommendation,
     evaluate_part_recommendation,
     recalculate_all,
+    reconstruct_observed_daily_series,
 )
 from backend.po import (
     ThreeWayMatchResult,
@@ -253,6 +265,210 @@ class WorkflowEngine:
             ),
         )
 
+    def _create_auto_replenishment_po(
+        self,
+        session: Session,
+        *,
+        part: Part,
+        supplier_id: int,
+        order_qty: int,
+        unit_price: float,
+        quoted_lead_time_days: int,
+        inventory_position_before: int,
+    ) -> tuple[PurchaseOrder, StoredEmail, ActionItem]:
+        created_po = create_po(
+            session,
+            part_id=part.id,
+            supplier_id=supplier_id,
+            qty=order_qty,
+            unit_price=unit_price,
+            initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
+            notes=(
+                f"Auto-triggered replenishment "
+                f"(IP={inventory_position_before} < ROP={part.rop})."
+            ),
+        )
+        supplier = session.get(Supplier, supplier_id)
+        assert supplier is not None
+
+        draft_email = self._create_lex_draft(
+            session,
+            po=created_po,
+            part=part,
+            supplier=supplier,
+            category=EmailCategory.PO_DISPATCH,
+            context_facts={
+                "order_qty": created_po.qty,
+                "unit_price": created_po.unit_price,
+                "total_value": round(created_po.qty * created_po.unit_price, 2),
+                "quoted_lead_time_days": quoted_lead_time_days,
+                "part_criticality": part.criticality,
+            },
+        )
+        alert = create_action_item(
+            session,
+            type="PO_DISPATCH_APPROVAL",
+            severity=(
+                AlertSeverity.HIGH
+                if part.criticality == Criticality.CRITICAL.value
+                else AlertSeverity.MEDIUM
+            ),
+            part_criticality=part.criticality,
+            title=(
+                f"Approve PO dispatch: {created_po.po_number} "
+                f"({part.sku}, {created_po.qty} units)"
+            ),
+            summary=(
+                f"Stock for {part.name} ({part.sku}) fell below ROP ({part.rop}). "
+                f"Created {created_po.po_number} for {created_po.qty} units to {supplier.name} "
+                f"(₹{created_po.unit_price:,.2f}/unit). Approve Lex's dispatch email."
+            ),
+            po_id=created_po.id,
+            part_id=part.id,
+            draft_comm_id=draft_email.id,
+            suggested_actions=[
+                {"action": "approve_draft", "label": "Approve & Send PO"},
+                {"action": "reject_draft", "label": "Reject Draft"},
+            ],
+            cta_payload={"draft_comm_id": draft_email.id, "po_id": created_po.id},
+        )
+        return created_po, draft_email, alert
+
+    def _sync_burn_and_stockout_alerts(
+        self,
+        session: Session,
+        part: Part,
+        *,
+        sim_now: datetime,
+    ) -> list[ActionItem]:
+        """Emit deduplicated ACCELERATED_BURN (pre-zero) and STOCKOUT_ACTIVE (at 0) alerts."""
+        created: list[ActionItem] = []
+
+        if part.on_hand_stock == 0:
+            existing_stockout = session.scalar(
+                select(ActionItem).where(
+                    ActionItem.type == "STOCKOUT_ACTIVE",
+                    ActionItem.part_id == part.id,
+                    ActionItem.status == ActionItemStatus.OPEN.value,
+                )
+            )
+            if existing_stockout is None:
+                earliest_po = session.scalar(
+                    select(PurchaseOrder)
+                    .where(
+                        PurchaseOrder.part_id == part.id,
+                        PurchaseOrder.status.notin_(
+                            (POStatus.CLOSED.value, POStatus.CANCELLED.value)
+                        ),
+                    )
+                    .order_by(PurchaseOrder.id.asc())
+                    .limit(1)
+                )
+                po_clause = (
+                    f" Open PO {earliest_po.po_number} is in progress."
+                    if earliest_po is not None
+                    else " No active replenishment PO exists yet."
+                )
+                alert = create_action_item(
+                    session,
+                    type="STOCKOUT_ACTIVE",
+                    severity=AlertSeverity.CRITICAL,
+                    part_criticality=part.criticality,
+                    days_to_stockout=0.0,
+                    title=f"Stockout active: {part.sku} hit 0 on-hand units",
+                    summary=(
+                        f"{part.name} ({part.sku}) has 0 units on hand.{po_clause} "
+                        "Immediate replenishment or expedite action is required."
+                    ),
+                    po_id=earliest_po.id if earliest_po is not None else None,
+                    part_id=part.id,
+                    suggested_actions=[{"action": "add_note", "label": "Log Expedite Decision"}],
+                    cta_payload={
+                        "po_id": earliest_po.id if earliest_po is not None else None,
+                        "part_id": part.id,
+                    },
+                )
+                created.append(alert)
+            return created
+
+        metrics = compute_part_planning_metrics(session, part, sim_now=sim_now)
+        if (
+            metrics.earliest_po_eta is not None
+            and metrics.predicted_stockout_date is not None
+            and metrics.predicted_stockout_date < metrics.earliest_po_eta
+        ):
+            existing_burn = session.scalar(
+                select(ActionItem).where(
+                    ActionItem.type == "ACCELERATED_BURN",
+                    ActionItem.part_id == part.id,
+                    ActionItem.status == ActionItemStatus.OPEN.value,
+                )
+            )
+            if existing_burn is None:
+                dispatched_pos = list(
+                    session.scalars(
+                        select(PurchaseOrder)
+                        .where(
+                            PurchaseOrder.part_id == part.id,
+                            PurchaseOrder.status.notin_(
+                                (
+                                    POStatus.PENDING_DISPATCH_APPROVAL.value,
+                                    POStatus.CLOSED.value,
+                                    POStatus.CANCELLED.value,
+                                )
+                            ),
+                        )
+                        .order_by(PurchaseOrder.id.asc())
+                    ).all()
+                )
+                earliest_po = dispatched_pos[0] if dispatched_pos else None
+                days_to_eta = max(
+                    0.0,
+                    (
+                        clock.ensure_utc(metrics.earliest_po_eta)
+                        - clock.ensure_utc(sim_now)
+                    ).total_seconds()
+                    / 86400.0,
+                )
+                days_to_so = metrics.days_to_stockout or 0.0
+                severity = (
+                    AlertSeverity.CRITICAL
+                    if (
+                        part.criticality == Criticality.CRITICAL.value
+                        or days_to_so <= 3.0
+                    )
+                    else AlertSeverity.HIGH
+                )
+                alert = create_action_item(
+                    session,
+                    type="ACCELERATED_BURN",
+                    severity=severity,
+                    part_criticality=part.criticality,
+                    days_to_stockout=days_to_so,
+                    title=(
+                        f"Accelerated burn: {part.sku} projected to stock out "
+                        f"before PO arrival"
+                    ),
+                    summary=(
+                        f"{part.sku} has {part.on_hand_stock} on hand ({days_to_so:.1f}d runway "
+                        f"at {metrics.daily_burn_ewma:.2f}/day) and is projected to stock out "
+                        f"on {metrics.predicted_stockout_date.date().isoformat()}, before the "
+                        f"earliest open PO ETA ({metrics.earliest_po_eta.date().isoformat()}, "
+                        f"{days_to_eta:.1f}d away)."
+                    ),
+                    po_id=earliest_po.id if earliest_po is not None else None,
+                    part_id=part.id,
+                    suggested_actions=[{"action": "add_note", "label": "Log Expedite Decision"}],
+                    cta_payload={
+                        "po_id": earliest_po.id if earliest_po is not None else None,
+                        "part_id": part.id,
+                        "days_to_stockout": round(days_to_so, 2),
+                        "days_until_eta": round(days_to_eta, 2),
+                    },
+                )
+                created.append(alert)
+        return created
+
     def withdraw_stock(
         self,
         session: Session,
@@ -266,89 +482,26 @@ class WorkflowEngine:
         draft_email: StoredEmail | None = None
         created_alerts: list[ActionItem] = []
 
+        part = session.get(Part, part_id)
+        assert part is not None
+
         if consume_res.reorder_triggered is not None:
             trig = consume_res.reorder_triggered
-            created_po = create_po(
+            created_po, draft_email, alert = self._create_auto_replenishment_po(
                 session,
-                part_id=trig.part_id,
-                supplier_id=trig.primary_supplier_id,
-                qty=trig.order_qty,
-                unit_price=trig.agreed_unit_price,
-                initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
-                notes=(
-                    f"Auto-triggered replenishment "
-                    f"(IP={trig.inventory_position_before} < ROP={trig.rop})."
-                ),
-            )
-            part = session.get(Part, trig.part_id)
-            supplier = session.get(Supplier, trig.primary_supplier_id)
-            assert part is not None and supplier is not None
-
-            draft_email = self._create_lex_draft(
-                session,
-                po=created_po,
                 part=part,
-                supplier=supplier,
-                category=EmailCategory.PO_DISPATCH,
-                context_facts={
-                    "order_qty": created_po.qty,
-                    "unit_price": created_po.unit_price,
-                    "total_value": round(created_po.qty * created_po.unit_price, 2),
-                    "quoted_lead_time_days": trig.quoted_lead_time_days,
-                    "part_criticality": part.criticality,
-                },
-            )
-            alert = create_action_item(
-                session,
-                type="PO_DISPATCH_APPROVAL",
-                severity=(
-                    AlertSeverity.HIGH
-                    if part.criticality == Criticality.CRITICAL.value
-                    else AlertSeverity.MEDIUM
-                ),
-                part_criticality=part.criticality,
-                title=(
-                    f"Approve PO dispatch: {created_po.po_number} "
-                    f"({part.sku}, {created_po.qty} units)"
-                ),
-                summary=(
-                    f"Stock for {part.name} ({part.sku}) fell below ROP ({part.rop}). "
-                    f"Created {created_po.po_number} for {created_po.qty} units to {supplier.name} "
-                    f"(₹{created_po.unit_price:,.2f}/unit). Approve Lex's dispatch email."
-                ),
-                po_id=created_po.id,
-                part_id=part.id,
-                draft_comm_id=draft_email.id,
-                suggested_actions=[
-                    {"action": "approve_draft", "label": "Approve & Send PO"},
-                    {"action": "reject_draft", "label": "Reject Draft"},
-                ],
-                cta_payload={"draft_comm_id": draft_email.id, "po_id": created_po.id},
+                supplier_id=trig.primary_supplier_id,
+                order_qty=trig.order_qty,
+                unit_price=trig.agreed_unit_price,
+                quoted_lead_time_days=trig.quoted_lead_time_days,
+                inventory_position_before=trig.inventory_position_before,
             )
             created_alerts.append(alert)
 
-        if consume_res.accelerated_burn is not None:
-            burn = consume_res.accelerated_burn
-            earliest_po_id = burn.open_po_ids[0] if burn.open_po_ids else None
-            part_obj = session.get(Part, burn.part_id)
-            alert = create_action_item(
-                session,
-                type="ACCELERATED_BURN",
-                severity=AlertSeverity.CRITICAL,
-                part_criticality=part_obj.criticality if part_obj else None,
-                days_to_stockout=0.0,
-                title=f"Accelerated burn: {burn.sku} hit 0 on-hand units",
-                summary=(
-                    f"{burn.sku} reached 0 on-hand units with {burn.days_until_eta:.1f} days "
-                    "until the earliest open PO arrives. No duplicate PO was raised; "
-                    "expedite review is recommended."
-                ),
-                po_id=earliest_po_id,
-                part_id=burn.part_id,
-                suggested_actions=[{"action": "add_note", "label": "Log Expedite Decision"}],
-                cta_payload={"po_id": earliest_po_id, "part_id": burn.part_id},
-            )
-            created_alerts.append(alert)
+        sim_now = clock.now(session)
+        created_alerts.extend(
+            self._sync_burn_and_stockout_alerts(session, part, sim_now=sim_now)
+        )
 
         return {
             "consume": consume_res,
@@ -1863,6 +2016,230 @@ class WorkflowEngine:
         """Escalate an open PO to Procurement via internal email and alert."""
         return escalate_po_to_procurement_workflow(session, po_id=po_id, reason=reason)
 
+    def settle_daily_burn_on_clock_advance(
+        self,
+        session: Session,
+        *,
+        prev_now: datetime,
+        new_now: datetime,
+    ) -> list[dict[str, Any]]:
+        """Settle each completed IST calendar day chronologically on clock advance.
+
+        - Deducts predicted daily burn via fractional ``burn_carry`` accumulator.
+        - Pure predicted burn day (``extra_events == 0``): keeps ``daily_burn_ewma``,
+          ``daily_demand_std``, ``rop``, and ``replenishment_point`` untouched.
+        - Unpredicted demand day (``extra_events > 0``): updates EWMA (alpha=0.3),
+          recomputes ``daily_demand_std``, and dynamically updates ``rop`` & ``T``.
+        - Evaluates replenishment triggers, ``ACCELERATED_BURN``, and ``STOCKOUT_ACTIVE``.
+        """
+        target_last_completed = clock.to_ist_date(new_now) - timedelta(days=1)
+        prev_ist_date = clock.to_ist_date(prev_now)
+        parts = list(session.scalars(select(Part).order_by(Part.id.asc())).all())
+        settled_events: list[dict[str, Any]] = []
+
+        for part in parts:
+            start_date = (
+                date.fromisoformat(part.last_burn_settled_date) + timedelta(days=1)
+                if part.last_burn_settled_date
+                else prev_ist_date
+            )
+            if start_date > target_last_completed:
+                continue
+
+            cur_day = start_date
+            while cur_day <= target_last_completed:
+                # 1. Discrete unpredicted consumption on IST date cur_day
+                day_txs = session.scalars(
+                    select(InventoryTransaction).where(
+                        InventoryTransaction.part_id == part.id,
+                        InventoryTransaction.type == InventoryTxType.CONSUMPTION.value,
+                        InventoryTransaction.is_predicted_burn.is_(False),
+                        InventoryTransaction.qty_delta < 0,
+                    )
+                ).all()
+                extra_events = sum(
+                    abs(int(tx.qty_delta))
+                    for tx in day_txs
+                    if clock.to_ist_date(tx.timestamp) == cur_day
+                )
+
+                # 2. Deduct physical simulated burn via carry accumulator
+                prev_ewma = float(part.daily_burn_ewma)
+                raw_consume = float(part.burn_carry) + prev_ewma
+                int_consume = int(math.floor(raw_consume + 1e-9))
+                new_carry = max(0.0, raw_consume - float(int_consume))
+                actual_deduct = min(int(part.on_hand_stock), int_consume)
+
+                burn_ts = datetime(
+                    cur_day.year, cur_day.month, cur_day.day, 23, 59, 0, tzinfo=clock.IST
+                ).astimezone(timezone.utc)
+
+                if actual_deduct > 0:
+                    part.on_hand_stock -= actual_deduct
+                    session.add(
+                        InventoryTransaction(
+                            part_id=part.id,
+                            type=InventoryTxType.CONSUMPTION.value,
+                            qty_delta=-actual_deduct,
+                            timestamp=burn_ts,
+                            is_predicted_burn=True,
+                            note="Simulated daily burn",
+                        )
+                    )
+                part.burn_carry = new_carry
+                part.last_burn_settled_date = cur_day.isoformat()
+                session.flush()
+
+                # 3. Update EWMA & ROP/T ONLY when unpredicted demand occurred
+                if extra_events > 0:
+                    c_d = prev_ewma + float(extra_events)
+                    new_ewma = (
+                        DAILY_EWMA_ALPHA * c_d + (1.0 - DAILY_EWMA_ALPHA) * prev_ewma
+                    )
+                    part.daily_burn_ewma = new_ewma
+
+                    _, c_series, e_series, has_pre_oct1 = reconstruct_observed_daily_series(
+                        session, part, end_date=cur_day
+                    )
+                    if has_pre_oct1 and len(c_series) >= 2:
+                        new_std = statistics.stdev(c_series)
+                        if len(e_series) >= 8:
+                            part.daily_burn_prev_7d = e_series[-8]
+                    else:
+                        synth_series = ([prev_ewma] * 89) + [c_d]
+                        new_std = statistics.stdev(synth_series)
+
+                    part.daily_demand_std = new_std
+
+                    # Check intermittent floor over trailing 90d window
+                    tail_90 = c_series[-90:] if has_pre_oct1 else [prev_ewma] * 89 + [c_d]
+                    (
+                        _,
+                        _,
+                        _,
+                        _,
+                        is_intermittent,
+                        zero_days,
+                        floor_daily,
+                        _,
+                    ) = compute_ewma_from_daily_series(tail_90)
+                    effective_daily = (
+                        max(new_ewma, floor_daily)
+                        if (is_intermittent and floor_daily is not None)
+                        else new_ewma
+                    )
+
+                    primary_term = session.scalar(
+                        select(PartSupplierTerm)
+                        .where(PartSupplierTerm.part_id == part.id)
+                        .order_by(PartSupplierTerm.supplier_rank.asc())
+                        .limit(1)
+                    )
+                    sup_name: str | None = None
+                    proxy_term: PartSupplierTerm | None = None
+                    if primary_term is not None:
+                        sup = session.get(Supplier, primary_term.supplier_id)
+                        sup_name = sup.name if sup is not None else None
+                        lt_calc = compute_effective_lead_time(
+                            session, primary_term, sim_now=burn_ts
+                        )
+                        proxy_term = PartSupplierTerm(
+                            id=primary_term.id,
+                            part_id=primary_term.part_id,
+                            supplier_id=primary_term.supplier_id,
+                            supplier_rank=primary_term.supplier_rank,
+                            agreed_unit_price=primary_term.agreed_unit_price,
+                            quoted_lead_time_days=primary_term.quoted_lead_time_days,
+                            effective_lead_time_days=lt_calc.effective_lead_time_days,
+                            lead_time_std_dev=lt_calc.lead_time_std_dev,
+                            moq=primary_term.moq,
+                            last_validated_at=primary_term.last_validated_at,
+                        )
+
+                    daily_fc = DailyEWMAResult(
+                        part_id=part.id,
+                        sku=part.sku,
+                        daily_series_90d=tail_90,
+                        daily_burn_ewma=new_ewma,
+                        daily_burn_prev_7d=part.daily_burn_prev_7d,
+                        trend_pct=0.0,
+                        daily_demand_std=new_std,
+                        is_intermittent=is_intermittent,
+                        zero_day_count=zero_days,
+                        rolling_peak_floor_daily=floor_daily,
+                        manual_demand_override=part.manual_demand_override,
+                        effective_daily_demand=effective_daily,
+                    )
+                    rop_rec = compute_rop_recommendation(
+                        part, proxy_term, sup_name, daily_fc
+                    )
+                    if rop_rec.recommended_rop > 0:
+                        part.rop = rop_rec.recommended_rop
+                        part.replenishment_point = rop_rec.recommended_replenishment_point
+                else:
+                    # Pure predicted burn day: leave ewma, std, rop, and T untouched.
+                    # Advance daily_burn_prev_7d when pre-Oct-1 history exists.
+                    _, _, e_series, has_pre_oct1 = reconstruct_observed_daily_series(
+                        session, part, end_date=cur_day
+                    )
+                    if has_pre_oct1 and len(e_series) >= 8:
+                        part.daily_burn_prev_7d = e_series[-8]
+
+                session.flush()
+
+                # 4. Evaluate replenishment trigger & burn/stockout alerts on day cur_day
+                snap = get_part_snapshot(session, part.id)
+                if snap.inventory_position < part.rop and snap.active_po_id is None:
+                    primary_term = session.scalar(
+                        select(PartSupplierTerm)
+                        .where(
+                            PartSupplierTerm.part_id == part.id,
+                            PartSupplierTerm.supplier_rank == 1,
+                        )
+                        .limit(1)
+                    )
+                    if primary_term is not None:
+                        order_qty = max(
+                            part.replenishment_point - snap.inventory_position,
+                            primary_term.moq,
+                        )
+                        po, _, po_alert = self._create_auto_replenishment_po(
+                            session,
+                            part=part,
+                            supplier_id=primary_term.supplier_id,
+                            order_qty=order_qty,
+                            unit_price=primary_term.agreed_unit_price,
+                            quoted_lead_time_days=primary_term.quoted_lead_time_days,
+                            inventory_position_before=snap.inventory_position,
+                        )
+                        settled_events.append(
+                            {
+                                "part_id": part.id,
+                                "date": cur_day.isoformat(),
+                                "po_id": po.id,
+                                "alert_id": po_alert.id,
+                            }
+                        )
+
+                day_eval_now = min(new_now, burn_ts)
+                burn_alerts = self._sync_burn_and_stockout_alerts(
+                    session, part, sim_now=day_eval_now
+                )
+                for ba in burn_alerts:
+                    settled_events.append(
+                        {
+                            "part_id": part.id,
+                            "date": cur_day.isoformat(),
+                            "alert_id": ba.id,
+                            "alert_type": ba.type,
+                        }
+                    )
+
+                cur_day += timedelta(days=1)
+
+        session.flush()
+        return settled_events
+
     def set_clock_and_watch(
         self,
         session: Session,
@@ -1877,12 +2254,20 @@ class WorkflowEngine:
                 "Cannot move simulated clock backwards unless allow_reset=True"
             )
         new_now = clock.set_time(session, target_utc)
+        burn_events = (
+            self.settle_daily_burn_on_clock_advance(
+                session, prev_now=current, new_now=new_now
+            )
+            if target_utc > current
+            else []
+        )
         sla_events: list[SLAEvent] = (
             run_sla_watcher(session, self.lex) if target_utc >= current else []
         )
         return {
             "sim_now": new_now,
             "sla_events": sla_events,
+            "burn_events": burn_events,
         }
 
     def advance_clock_and_watch(
@@ -1892,11 +2277,16 @@ class WorkflowEngine:
         hours: int = 0,
         days: int = 0,
     ) -> dict[str, Any]:
+        prev_now = clock.now(session)
         new_now = clock.advance(session, hours=hours, days=days)
+        burn_events = self.settle_daily_burn_on_clock_advance(
+            session, prev_now=prev_now, new_now=new_now
+        )
         sla_events: list[SLAEvent] = run_sla_watcher(session, self.lex)
         return {
             "sim_now": new_now,
             "sla_events": sla_events,
+            "burn_events": burn_events,
         }
 
     def jump_to_po_eta_and_watch(
@@ -1917,10 +2307,14 @@ class WorkflowEngine:
         if target_utc < current:
             raise ValueError("Cannot jump simulated clock backwards in time")
         new_now = clock.set_time(session, target_utc)
+        burn_events = self.settle_daily_burn_on_clock_advance(
+            session, prev_now=current, new_now=new_now
+        )
         sla_events = run_sla_watcher(session, self.lex)
         return {
             "sim_now": new_now,
             "sla_events": sla_events,
+            "burn_events": burn_events,
         }
 
     def execute_alert_cta(

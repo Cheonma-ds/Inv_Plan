@@ -132,6 +132,11 @@ def test_http_making_to_manager_without_lex_returns_400_and_with_lex_triages(
     app.dependency_overrides[get_workflow_engine] = lambda: engine
     client = TestClient(app)
 
+    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
+    assert part is not None
+    part.on_hand_stock = 4
+    seeded_session.flush()
+
     # 1. Missing 'lex' in To/CC returns 400 Bad Request
     bad_resp = client.post(
         "/api/mailroom/send",
@@ -146,8 +151,6 @@ def test_http_making_to_manager_without_lex_returns_400_and_with_lex_triages(
     assert bad_resp.status_code == 400
     assert "lex" in bad_resp.json()["detail"].lower()
 
-    part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
-    assert part is not None
     assert part.on_hand_stock == 4
 
     # 2. Including 'lex' in CC succeeds (200) without deducting stock prematurely
@@ -268,9 +271,12 @@ def test_scenario_s1_healthy_stock_approve_and_reject(seeded_session) -> None:
 
 
 def test_scenario_s2_sufficient_stock_triggers_po_only_after_approval(seeded_session) -> None:
-    # Hero part BRG-402: on_hand=4, rop=3, S=6 -> withdrawing 2 drops IP to 2 (<3) -> PO for 4
     part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
+    part.on_hand_stock = 4
+    part.rop = 3
+    part.replenishment_point = 6
+    seeded_session.flush()
     assert part.on_hand_stock == 4
 
     llm = MockStockRequestLLM(
@@ -482,7 +488,8 @@ def test_scenario_s3_and_s4_shortage_min_qty_loop_and_partial_issue(seeded_sessi
 def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded_session) -> None:
     part = seeded_session.scalar(select(Part).where(Part.sku == "VLV-204"))
     assert part is not None
-    part.on_hand_stock = 2
+    part.on_hand_stock = 10
+    part.daily_burn_ewma = 3.5
     part.rop = 1
     part.replenishment_point = 10
     seeded_session.flush()
@@ -495,7 +502,6 @@ def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded
         )
     )
     if open_po is None:
-        # Ensure an open PO exists with ETA > sim_now + 3d
         from backend.po import create_po
 
         sup_id = part.supplier_terms[0].supplier_id
@@ -520,7 +526,7 @@ def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded
             requested_items=[
                 StockRequestItem(part_sku="VLV-204", part_name=part.name, requested_qty=2)
             ],
-            summary_for_manager="Making Team requested final 2 units of VLV-204.",
+            summary_for_manager="Making Team requested 2 units of VLV-204.",
             suggested_action="Approve withdrawal.",
             reasoning="Clear VLV-204 request.",
         )
@@ -540,12 +546,18 @@ def test_scenario_s5_accelerated_burn_triggered_on_zero_stock_with_far_po(seeded
     cta_out = engine.execute_alert_cta(
         seeded_session, alert_id, action="approve_stock_withdrawal"
     )
-    assert cta_out["on_hand_after"] == 0
+    assert cta_out["on_hand_after"] == 8
     created_alerts = [seeded_session.get(ActionItem, aid) for aid in cta_out["alert_ids"]]
     burn_alerts = [a for a in created_alerts if a is not None and a.type == "ACCELERATED_BURN"]
     assert len(burn_alerts) == 1
     assert burn_alerts[0].severity == AlertSeverity.CRITICAL.value
     assert burn_alerts[0].status == ActionItemStatus.OPEN.value
+
+    # Exhaust remaining 8 units -> STOCKOUT_ACTIVE (CRITICAL) fires
+    zero_res = engine.withdraw_stock(seeded_session, part_id=part.id, qty=8, note="Final draw")
+    stockout_alerts = [a for a in zero_res["alerts"] if a.type == "STOCKOUT_ACTIVE"]
+    assert len(stockout_alerts) == 1
+    assert stockout_alerts[0].severity == AlertSeverity.CRITICAL.value
 
 
 def test_low_confidence_and_unknown_sku_guardrails_zero_mutation(seeded_session) -> None:

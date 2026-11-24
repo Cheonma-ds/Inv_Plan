@@ -115,9 +115,11 @@ def test_reorder_rounds_up_to_moq(db_session: Session) -> None:
     assert result.reorder_triggered.order_qty == 10
 
 
-def test_accelerated_burn_alert_when_stock_hits_zero_with_far_eta(db_session: Session) -> None:
-    part, sup = _setup_single_part(db_session, on_hand=2, rop=3, replenishment_point=6)
-    po = create_po(db_session, part_id=part.id, supplier_id=sup.id, qty=4, unit_price=100.0)
+def test_accelerated_burn_pre_zero_and_stockout_active(db_session: Session) -> None:
+    part, sup = _setup_single_part(db_session, on_hand=5, rop=3, replenishment_point=12)
+    part.daily_burn_ewma = 1.0
+    db_session.flush()
+    po = create_po(db_session, part_id=part.id, supplier_id=sup.id, qty=10, unit_price=100.0)
     transition_po(db_session, po, POStatus.SENT_AWAITING_ACK)
     transition_po(
         db_session,
@@ -126,17 +128,27 @@ def test_accelerated_burn_alert_when_stock_hits_zero_with_far_eta(db_session: Se
         promised_eta=clock.now(db_session) + timedelta(days=8),
     )
 
+    # Consume 2 -> 3 on hand (predicted stockout in 3d < 8d ETA) => accelerated_burn fires pre-zero!
     result = consume_stock(db_session, part.id, 2, note="Emergency usage")
-    assert result.snapshot.on_hand_stock == 0
-    assert result.reorder_triggered is None  # inv_pos = 0 + 4 >= 3
+    assert result.snapshot.on_hand_stock == 3
+    assert result.reorder_triggered is None  # inv_pos = 3 + 10 >= 3
+    assert result.stockout_active is False
     assert result.accelerated_burn is not None
     assert result.accelerated_burn.open_po_ids == [po.id]
     assert result.accelerated_burn.days_until_eta == pytest.approx(8.0, abs=0.1)
 
+    # Consume remaining 3 -> 0 on hand => stockout_active is True
+    zero_res = consume_stock(db_session, part.id, 3, note="Depleted")
+    assert zero_res.snapshot.on_hand_stock == 0
+    assert zero_res.stockout_active is True
+    assert zero_res.accelerated_burn is None
 
-def test_no_accelerated_burn_alert_when_eta_within_three_days(db_session: Session) -> None:
-    part, sup = _setup_single_part(db_session, on_hand=2, rop=3, replenishment_point=6)
-    po = create_po(db_session, part_id=part.id, supplier_id=sup.id, qty=4, unit_price=100.0)
+
+def test_no_accelerated_burn_alert_when_eta_covered_by_runway(db_session: Session) -> None:
+    part, sup = _setup_single_part(db_session, on_hand=6, rop=3, replenishment_point=12)
+    part.daily_burn_ewma = 1.0
+    db_session.flush()
+    po = create_po(db_session, part_id=part.id, supplier_id=sup.id, qty=10, unit_price=100.0)
     transition_po(db_session, po, POStatus.SENT_AWAITING_ACK)
     transition_po(
         db_session,
@@ -145,8 +157,10 @@ def test_no_accelerated_burn_alert_when_eta_within_three_days(db_session: Sessio
         promised_eta=clock.now(db_session) + timedelta(days=2),
     )
 
+    # Consume 2 -> 4 on hand (4d runway >= 2d ETA) => no accelerated_burn
     result = consume_stock(db_session, part.id, 2)
     assert result.accelerated_burn is None
+    assert result.stockout_active is False
 
 
 def test_quarantined_stock_cannot_be_consumed(db_session: Session) -> None:
@@ -177,10 +191,14 @@ def test_update_rop_and_replenishment_validation(db_session: Session) -> None:
 def test_seeded_hero_part_reproduces_manager_scenario(seeded_session: Session) -> None:
     sku1 = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert sku1 is not None
-    res = consume_stock(seeded_session, sku1.id, 2, note="CNC spindle maintenance")
-    assert res.snapshot.on_hand_stock == 2
+    target_on_hand = sku1.rop - 2
+    withdraw_qty = sku1.on_hand_stock - target_on_hand
+    res = consume_stock(seeded_session, sku1.id, withdraw_qty, note="CNC spindle maintenance")
+    assert res.snapshot.on_hand_stock == target_on_hand
     assert res.reorder_triggered is not None
-    assert res.reorder_triggered.order_qty == 4
+    assert res.reorder_triggered.order_qty == max(
+        res.reorder_triggered.moq, sku1.replenishment_point - target_on_hand
+    )
 
 
 def test_quarantined_stock_deducted_from_on_order_without_spawning_duplicate_po(

@@ -43,6 +43,8 @@ class AcceleratedBurnAlert(BaseModel):
     open_po_ids: list[int]
     earliest_eta: datetime
     days_until_eta: float
+    days_to_stockout: float | None = None
+    predicted_stockout_date: datetime | None = None
 
 
 class ConsumeResult(BaseModel):
@@ -50,3 +52,4 @@ class ConsumeResult(BaseModel):
     transaction_id: int
     reorder_triggered: ReorderTriggered | None = None
     accelerated_burn: AcceleratedBurnAlert | None = None
+    stockout_active: bool = False

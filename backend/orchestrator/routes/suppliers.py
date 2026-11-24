@@ -43,6 +43,8 @@ def list_suppliers(session: Session = Depends(get_session)) -> list[dict]:
             "otd_rate": s.otd_rate,
             "invoice_accuracy_rate": s.invoice_accuracy_rate,
             "response_rate": s.response_rate,
+            "avg_response_days": s.avg_response_days,
+            "cycles_90d": s.cycles_90d,
             "memory_notes": notes_by_sup.get(s.id, []),
         }
         for s in suppliers

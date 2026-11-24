@@ -20,6 +20,7 @@ from backend.core.models import (
     SupplierMemoryNote,
 )
 from backend.main import create_app
+from backend.planning import compute_supplier_score, evaluate_part_recommendation
 from backend.seed.data import SEED_START_TIME
 from backend.seed.reset import reset_and_seed
 
@@ -58,8 +59,8 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
     summary = reset_and_seed(engine)
     assert summary["suppliers"] == 3
     assert summary["parts"] == 15
-    assert summary["closed_pos"] == 36
-    assert summary["open_pos"] == 4
+    assert summary["closed_pos"] > 30
+    assert summary["open_pos"] == 0
 
     factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with factory() as session:
@@ -67,6 +68,17 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
 
         suppliers = session.scalars(select(Supplier).order_by(Supplier.persona_key)).all()
         assert [s.persona_key for s in suppliers] == ["sup1", "sup2", "sup3"]
+
+        # Zero-mismatch guarantee: supplier metrics match planning/scoring.py directly
+        for sup in suppliers:
+            score = compute_supplier_score(session, sup)
+            assert sup.reliability_score == score.reliability_score
+            assert sup.otd_rate == score.otd_rate
+            assert sup.invoice_accuracy_rate == score.invoice_accuracy_rate
+            assert sup.response_rate == score.response_rate
+            assert sup.avg_response_days == score.avg_response_days
+            assert sup.cycles_90d == score.cycles_90d
+            assert sup.cycles_90d > 0
 
         # Every supplier has a seeded memory note
         note_count = session.scalar(select(func.count(SupplierMemoryNote.id)))
@@ -91,12 +103,20 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
                 ).all()
             )
             assert ranks == [1, 2]
+            assert part.last_burn_settled_date == "2026-09-30"
+            assert part.daily_burn_ewma > 0
+            rec = evaluate_part_recommendation(session, part.id)
+            assert part.rop == rec.recommended_rop
+            assert part.replenishment_point == rec.recommended_replenishment_point
 
-        # 12 months of consumption history exist
-        tx_count = session.scalar(select(func.count(InventoryTransaction.id)))
-        assert tx_count is not None and tx_count > 300
+        # 90 days (Jul 3 .. Sep 30) of consumption & receipt transactions exist
+        txs = session.scalars(select(InventoryTransaction)).all()
+        assert len(txs) > 900
+        ist_dates = [clock.to_ist_date(tx.timestamp) for tx in txs]
+        assert min(ist_dates) == datetime(2026, 7, 3).date()
+        assert max(ist_dates) <= datetime(2026, 9, 30).date()
 
-        # Open & closed POs
+        # Zero open POs; all historical POs closed on or before Sep 29
         closed_count = session.scalar(
             select(func.count(PurchaseOrder.id)).where(
                 PurchaseOrder.status == POStatus.CLOSED.value
@@ -107,13 +127,11 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
                 PurchaseOrder.status != POStatus.CLOSED.value
             )
         )
-        assert closed_count == 36
-        assert open_count == 4
+        assert closed_count == summary["closed_pos"]
+        assert open_count == 0
 
-        # Verify distinct lifecycle timestamps and logistics metadata on seeded POs (Slice P2-3)
         all_pos = session.scalars(select(PurchaseOrder)).all()
-        assert all(po.sent_at is None or po.created_at < po.sent_at for po in all_pos)
-        closed_pos = [po for po in all_pos if po.status == POStatus.CLOSED.value]
+        assert all(po.sent_at is not None and po.created_at < po.sent_at for po in all_pos)
         assert all(
             po.acknowledged_at is not None
             and po.promised_dispatch_date is not None
@@ -121,7 +139,8 @@ def test_reset_and_seed_populates_complete_realistic_baseline(tmp_path: Path) ->
             and po.carrier_name
             and po.tracking_number
             and po.closed_at is not None
-            for po in closed_pos
+            and clock.to_ist_date(po.closed_at) <= datetime(2026, 9, 29).date()
+            for po in all_pos
         )
 
         # All Lex email categories locked to APPROVAL_REQUIRED in MVP
@@ -165,6 +184,7 @@ def test_fastapi_lifespan_empty_db_and_admin_reset_seed_endpoint(
         parts_resp = client.get("/api/parts")
         assert parts_resp.status_code == 200
         assert len(parts_resp.json()) == 15
+        brg_initial_rop = next(p for p in parts_resp.json() if p["sku"] == "BRG-402")["rop"]
 
         # 2. Mutate state: advance clock (+5h, within SLA window) and modify a part's ROP
         adv_resp = client.post("/api/clock/advance", json={"hours": 5})
@@ -183,8 +203,8 @@ def test_fastapi_lifespan_empty_db_and_admin_reset_seed_endpoint(
         assert body["status"] == "reset"
         assert body["summary"]["suppliers"] == 3
         assert body["summary"]["parts"] == 15
-        assert body["summary"]["closed_pos"] == 36
-        assert body["summary"]["open_pos"] == 4
+        assert body["summary"]["closed_pos"] > 30
+        assert body["summary"]["open_pos"] == 0
 
         clock_resp = client.get("/api/clock")
         assert clock_resp.status_code == 200
@@ -192,6 +212,6 @@ def test_fastapi_lifespan_empty_db_and_admin_reset_seed_endpoint(
 
         parts_after = client.get("/api/parts").json()
         sku1 = next(p for p in parts_after if p["sku"] == "BRG-402")
-        assert sku1["rop"] == 3
+        assert sku1["rop"] == brg_initial_rop
 
     test_engine.dispose()

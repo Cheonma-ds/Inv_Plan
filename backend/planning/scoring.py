@@ -5,17 +5,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
-from backend.core.enums import InvoiceMatchStatus, POStatus
+from backend.core.enums import CommDirection, InvoiceMatchStatus, POStatus
 from backend.core.models import (
     GoodsReceipt,
     Invoice,
     PartSupplierTerm,
+    POCommunication,
     PurchaseOrder,
     Supplier,
 )
 from backend.planning.schemas import EffectiveLeadTimeResult, SupplierScoreResult
 
 ROLLING_WINDOW_DAYS = 365
+CYCLES_WINDOW_DAYS = 90
 MIN_DELIVERIES_FOR_EFFECTIVE_LT = 3
 OTD_WEIGHT = 40.0
 LT_CONSISTENCY_WEIGHT = 25.0
@@ -52,16 +54,20 @@ def compute_supplier_score(
     *,
     sim_now: datetime | None = None,
 ) -> SupplierScoreResult:
-    """Compute weighted 0-100 Supplier Reliability Score across rolling 12-month history.
+    """Compute weighted 0-100 Supplier Reliability Score, avg_response_days, and cycles_90d.
 
-    Weights (DESIGN.md §7):
+    Weights (DESIGN.md §7 & DESIGN_P3.md §2.2):
       - OTD Rate (40%): % delivered <= promised_eta, penalized -2 pts/day avg late (capped).
       - Lead Time Consistency (25%): based on sigma_L relative to quoted lead time.
       - Invoice Accuracy (20%): % of POs matched on invoice v1 without quarantine.
       - Responsiveness (15%): % of POs acknowledged without needing follow-up nudges.
+      - avg_response_days: mean email ack/response latency in days across responded POs.
+      - cycles_90d: replenishment cycles in trailing 90 IST days.
     """
     now = clock.ensure_utc(sim_now) if sim_now is not None else clock.now(session)
     cutoff = now - timedelta(days=ROLLING_WINDOW_DAYS)
+    d_today = clock.to_ist_date(now)
+    d_90_start = d_today - timedelta(days=CYCLES_WINDOW_DAYS)
 
     pos = list(
         session.scalars(
@@ -92,6 +98,8 @@ def compute_supplier_score(
             ),
             response_rate=supplier.response_rate,
             responsiveness_component=round(supplier.response_rate * RESPONSIVENESS_WEIGHT, 2),
+            avg_response_days=round(float(supplier.avg_response_days), 2),
+            cycles_90d=0,
             reliability_score=round(supplier.reliability_score, 1),
         )
 
@@ -112,6 +120,19 @@ def compute_supplier_score(
         .order_by(Invoice.version.asc(), Invoice.id.asc())
     ).all():
         invoices_by_po[inv.po_id].append(inv)
+
+    earliest_inbound_by_po: dict[int, datetime] = {}
+    for comm in session.scalars(
+        select(POCommunication)
+        .where(
+            POCommunication.po_id.in_(po_ids),
+            POCommunication.direction == CommDirection.INBOUND.value,
+            POCommunication.from_persona == supplier.persona_key,
+        )
+        .order_by(POCommunication.timestamp.asc(), POCommunication.id.asc())
+    ).all():
+        if comm.po_id is not None:
+            earliest_inbound_by_po.setdefault(comm.po_id, clock.ensure_utc(comm.timestamp))
 
     terms = list(
         session.scalars(
@@ -202,6 +223,38 @@ def compute_supplier_score(
         response_rate = 1.0
     responsiveness_component = response_rate * RESPONSIVENESS_WEIGHT
 
+    # 5. Avg email response latency (days) & 90-day cycle count from real PO/Comm rows
+    response_latencies: list[float] = []
+    cycles_90d = 0
+    for po in pos:
+        sent_anchor = po.sent_at or po.created_at
+        if po.status not in (
+            POStatus.CANCELLED.value,
+            POStatus.PENDING_DISPATCH_APPROVAL.value,
+        ):
+            anchor_date = clock.to_ist_date(sent_anchor)
+            if d_90_start <= anchor_date <= d_today:
+                cycles_90d += 1
+
+        if po.sent_at is not None:
+            reply_ts = (
+                clock.ensure_utc(po.acknowledged_at)
+                if po.acknowledged_at is not None
+                else earliest_inbound_by_po.get(po.id)
+            )
+            if reply_ts is not None:
+                latency_days = max(
+                    0.0,
+                    (reply_ts - clock.ensure_utc(po.sent_at)).total_seconds() / 86400.0,
+                )
+                response_latencies.append(latency_days)
+
+    avg_response_days = (
+        round(sum(response_latencies) / len(response_latencies), 2)
+        if response_latencies
+        else round(float(supplier.avg_response_days), 2)
+    )
+
     total_score = max(
         0.0,
         min(
@@ -229,6 +282,8 @@ def compute_supplier_score(
         invoice_accuracy_component=round(invoice_accuracy_component, 2),
         response_rate=round(response_rate, 4),
         responsiveness_component=round(responsiveness_component, 2),
+        avg_response_days=avg_response_days,
+        cycles_90d=cycles_90d,
         reliability_score=round(total_score, 1),
     )
 

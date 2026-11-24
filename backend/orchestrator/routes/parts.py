@@ -1,13 +1,13 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
 from backend.core.db import get_session
-from backend.core.models import PartSupplierTerm, Supplier, SupplierMemoryNote
+from backend.core.models import Part, PartSupplierTerm, Supplier, SupplierMemoryNote
 from backend.inventory import (
     InsufficientStockError,
     PartNotFoundError,
@@ -18,6 +18,11 @@ from backend.inventory import (
 )
 from backend.orchestrator.deps import get_workflow_engine
 from backend.orchestrator.workflows import WorkflowEngine
+from backend.planning import (
+    build_cycle_analytics,
+    compute_part_planning_metrics,
+    compute_po_suggestion,
+)
 
 router = APIRouter(prefix="/api/parts", tags=["parts"])
 
@@ -36,9 +41,27 @@ class UpdateDemandOverrideRequest(BaseModel):
     manual_demand_override: float | None = Field(default=None, ge=0.0)
 
 
+def _serialize_part_metrics(part_metrics) -> dict:
+    return {
+        "daily_burn_ewma": part_metrics.daily_burn_ewma,
+        "daily_burn_prev_7d": part_metrics.daily_burn_prev_7d,
+        "trend_pct": round(part_metrics.trend_pct, 2),
+        "days_to_stockout": part_metrics.days_to_stockout,
+        "predicted_stockout_date": (
+            part_metrics.predicted_stockout_date.isoformat()
+            if part_metrics.predicted_stockout_date is not None
+            else None
+        ),
+        "stockout_urgency": part_metrics.stockout_urgency,
+        "comm_buffer_days": round(part_metrics.comm_buffer_days, 2),
+        "primary_effective_lt": part_metrics.primary_effective_lt,
+    }
+
+
 @router.get("")
 def list_parts(session: Session = Depends(get_session)) -> list[dict]:
     snapshots = list_part_snapshots(session)
+    parts_by_id = {p.id: p for p in session.scalars(select(Part)).all()}
     terms = session.scalars(
         select(PartSupplierTerm).order_by(
             PartSupplierTerm.part_id.asc(), PartSupplierTerm.supplier_rank.asc()
@@ -70,19 +93,31 @@ def list_parts(session: Session = Depends(get_session)) -> list[dict]:
                 "reliability_score": sup.reliability_score if sup else None,
                 "otd_rate": sup.otd_rate if sup else None,
                 "response_rate": sup.response_rate if sup else None,
+                "avg_response_days": sup.avg_response_days if sup else None,
                 "invoice_accuracy_rate": sup.invoice_accuracy_rate if sup else None,
                 "estimated_arrival_date": estimated_arrival,
                 "latest_memory_note": latest_note_by_sup.get(t.supplier_id),
             }
         )
 
-    return [
-        {
-            **snap.model_dump(),
-            "suppliers": terms_by_part.get(snap.part_id, []),
-        }
-        for snap in snapshots
-    ]
+    output: list[dict] = []
+    for snap in snapshots:
+        part_obj = parts_by_id.get(snap.part_id)
+        metrics_payload = (
+            _serialize_part_metrics(
+                compute_part_planning_metrics(session, part_obj, sim_now=sim_now)
+            )
+            if part_obj is not None
+            else {}
+        )
+        output.append(
+            {
+                **snap.model_dump(),
+                **metrics_payload,
+                "suppliers": terms_by_part.get(snap.part_id, []),
+            }
+        )
+    return output
 
 
 @router.get("/{part_id}")
@@ -91,7 +126,47 @@ def get_part(part_id: int, session: Session = Depends(get_session)) -> dict:
         snap = get_part_snapshot(session, part_id)
     except PartNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return snap.model_dump()
+    part_obj = session.get(Part, part_id)
+    metrics_payload = (
+        _serialize_part_metrics(compute_part_planning_metrics(session, part_obj))
+        if part_obj is not None
+        else {}
+    )
+    return {**snap.model_dump(), **metrics_payload}
+
+
+@router.get("/{part_id}/cycle-analytics")
+def get_part_cycle_analytics(
+    part_id: int,
+    session: Session = Depends(get_session),
+) -> dict:
+    part = session.get(Part, part_id)
+    if part is None:
+        raise HTTPException(status_code=404, detail=f"Part {part_id} not found")
+    analytics = build_cycle_analytics(session, part)
+    return analytics.model_dump(mode="json")
+
+
+@router.get("/{part_id}/po-suggestion")
+def get_part_po_suggestion(
+    part_id: int,
+    supplier_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict:
+    part = session.get(Part, part_id)
+    if part is None:
+        raise HTTPException(status_code=404, detail=f"Part {part_id} not found")
+    snap = get_part_snapshot(session, part_id)
+    try:
+        suggestion = compute_po_suggestion(
+            session,
+            part,
+            supplier_id=supplier_id,
+            inventory_position=snap.inventory_position,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return suggestion.model_dump(mode="json")
 
 
 @router.post("/{part_id}/consume")
