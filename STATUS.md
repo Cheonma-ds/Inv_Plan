@@ -1,7 +1,7 @@
 # STATUS.md — Live Session Baton
 
-**Current Stage:** Slices 1–5 + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) Complete & Verified  
-**Last Updated:** 2026-11-21
+**Current Stage:** Phase 3 Complete (`P3-1`–`P3-8`) — Verified Offline, Live Gemini, & Headless Browser E2E  
+**Last Updated:** 2026-11-24
 
 ## Completed
 - **PRD (`PRD.md` v1.0) & Design (`DESIGN.md` v1.0):** Approved baselines.
@@ -92,6 +92,10 @@
     - Live `uvicorn :8000` + `vite :5173` E2E verification: Vite served `AIHealthPage.tsx` & `App.tsx`, `POST /api/evals/lex/run` (`offline`) scored `16/16 (100.0%)` and logged 16 traces to `/api/observability/traces`, draft approve-as-is / edit-and-approve / reject updated `OVERDUE_CHASE` trust counters (`0/0/0 → 1/1/1`) in `/api/observability/autonomy`, and `ENABLE_PHOENIX=true` cleanly reported `mode="fallback_sqlite"` without `--extra phoenix`.
 
 ## Current Status & Optional Next Steps
+- **Phase 3 (`docs/phase3/PRD_P3.md`, `DESIGN_P3.md`, `STATUS_P3.md`, Slices `P3-1`–`P3-8`):** Complete & verified on 2026-11-24:
+  - **Clock, Causal Seed & Core Fixes (`P3-1`–`P3-3`):** `SimulatedClock` & `Reset Seed` anchored to **Oct 1, 2026 1:00 PM IST** (`2026-10-01T07:30:00+00:00`) with IST UI formatting; 90-day Jul–Sep causal seed across all 15 SKUs ending with **0 open POs**; 90-day daily EWMA (`alpha = 0.30`) burn & same-day freeze / midnight rollover engine; supplier-aware `Stockout In` urgency + 90-day `StockoutCycleDrawer`; `on_order_stock` excludes `PENDING_DISPATCH_APPROVAL` and subtracts per-PO GRNs; partial-delivery 3-way matching (`invoice_qty == grn_received_qty`); `UNRESPONSIVE_ESCALATED` / `SENT_AWAITING_ACK -> OVERDUE` transitions; global `ROP/T` sweep; `[Edit PO]` replacing `[Reject Draft]`, non-resolving `reject_lex_draft`, `DISMISSED` draft hiding + unresolved inventory warning badge + `reopen_action_item()` draft restoration.
+  - **Lex v2 Tool-Using Upgrade & Frontend Revamp (`P3-4`–`P3-8`):** `GeminiLLMClient` retry/backoff + multimodal image & PDF triage; structured Markdown + `₹` currency grounding; `ToolRegistry` (`backend/agents/tools.py`), AST-sandboxed Python calc executor (`backend/agents/sandbox.py`), and 13 DB/inventory/alert/planning/reminder/memory tools in `backend/orchestrator/lex_tools.py`; variable N-day deferral `LexReminder` engine; `COPILOT_SYSTEM_PROMPT`; `CreateEditPOModal` with dynamic per-supplier suggested qty + reasoning; `[View PO]` PO-drawer jump; `SuppliersPlanningPage` 90d cycles & avg response days; `AIHealthPage` tool-call trace cards.
+  - **Phase 3 Verification Gates:** `uv run pytest -v` (**`124 passed, 25 skipped`** offline, incl. 5 AST checks in `tests/test_architecture.py`), `RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/` (**`43 passed`** — all **25/25 live Gemini tests** + 18 unit/sandbox tests), `POST /api/evals/lex/run` (`mode="live"`, **`34/34`, `100.0%`**), `uv run ruff check backend tests` (**`All checks passed!`**), `cd frontend && npm run build` (**`✓ built in 1.65s`**), and headless Chromium Playwright E2E across all 6 `PRD_P3.md §3` acceptance criteria.
 - **PRD Fixes & Gap Closure (`docs/PRD_FIXES.md` `F-1.1`–`F-4.3`):** Implemented and verified on 2026-11-21 (`docs/test-scenarios/results-fixes-retest.md`):
   - **Workstream 1 (`F-1.1`–`F-1.4`):** Damaged GRN physical quality quarantine gate (`DAMAGED_GOODS_HOLD` + Manager release/claim CTAs), encrypted/unreadable PDF resilience (HTTP `200` + `INVOICE_EXTRACTION_REVIEW`), mandatory `procurement` + `inventory_manager` CC on `EXPEDITE_REQUEST` drafts, and explicit `INR` currency grounding in `EmailDraftInput` / `DRAFT_SYSTEM_PROMPT`.
   - **Workstream 2 (`F-2.1`–`F-2.3`):** Foreign-currency triage detection (`proposed_currency`) + `CURRENCY_MISMATCH` guardrail blocking blind `update_po`, post-acknowledgment `ACKNOWLEDGED`/`DELAYED_CRITICAL → EXCEPTION_REVIEW` reversal flow with `REVISED_PO` draft generation, multi-PO supplier email splitting (`additional_po_updates`), and consolidated multi-PO PDF escalation surfacing `referenced_po_numbers`.

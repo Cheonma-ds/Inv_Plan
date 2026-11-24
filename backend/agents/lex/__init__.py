@@ -1,5 +1,6 @@
 from backend.agents.lex.agent import CONFIDENCE_THRESHOLD, LexAgent
 from backend.agents.lex.eval_adapter import LexEvalExecutor
+from backend.agents.lex.prompts import COPILOT_SYSTEM_PROMPT
 from backend.agents.lex.schemas import (
     AdditionalPOUpdate,
     EmailDraftInput,
@@ -24,6 +25,7 @@ from backend.agents.lex.schemas import (
 
 __all__ = [
     "CONFIDENCE_THRESHOLD",
+    "COPILOT_SYSTEM_PROMPT",
     "AdditionalPOUpdate",
     "EmailDraftInput",
     "EmailDraftResult",

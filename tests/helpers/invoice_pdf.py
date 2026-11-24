@@ -3,6 +3,23 @@ from dataclasses import dataclass
 from fpdf import FPDF
 
 
+def _latin1_safe(text: str) -> str:
+    """Normalize common Unicode punctuation to latin-1 safe equivalents for Helvetica FPDF."""
+    replacements = {
+        "\u2014": "-",
+        "\u2013": "-",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u20b9": "INR ",
+    }
+    out = text
+    for src, dst in replacements.items():
+        out = out.replace(src, dst)
+    return out.encode("latin-1", errors="replace").decode("latin-1")
+
+
 @dataclass(frozen=True)
 class InvoiceLineSpec:
     sku: str
@@ -31,7 +48,7 @@ def build_invoice_pdf_bytes(
 
     # Header
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, supplier_name, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, _latin1_safe(supplier_name), new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 10)
     pdf.cell(0, 6, "TAX INVOICE (ORIGINAL FOR RECIPIENT)", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
@@ -40,20 +57,20 @@ def build_invoice_pdf_bytes(
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(45, 7, "Invoice Number:")
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(60, 7, invoice_number)
+    pdf.cell(60, 7, _latin1_safe(invoice_number))
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(35, 7, "Invoice Date:")
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 7, invoice_date, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _latin1_safe(invoice_date), new_x="LMARGIN", new_y="NEXT")
 
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(45, 7, "Purchase Order Ref:")
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(60, 7, po_number or "N/A")
+    pdf.cell(60, 7, _latin1_safe(po_number or "N/A"))
     pdf.set_font("Helvetica", "B", 10)
     pdf.cell(35, 7, "Currency:")
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 7, currency, new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, _latin1_safe(currency), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(6)
 
     # Table Header
@@ -84,8 +101,8 @@ def build_invoice_pdf_bytes(
             else round(line.qty * line.unit_price, 2)
         )
         computed_subtotal += lt
-        pdf.cell(28, 8, line.sku, border=1)
-        pdf.cell(72, 8, line.description[:36], border=1)
+        pdf.cell(28, 8, _latin1_safe(line.sku), border=1)
+        pdf.cell(72, 8, _latin1_safe(line.description)[:36], border=1)
         pdf.cell(20, 8, str(line.qty), border=1, align="R")
         pdf.cell(34, 8, f"{line.unit_price:,.2f}", border=1, align="R")
         pdf.cell(36, 8, f"{lt:,.2f}", border=1, align="R", new_x="LMARGIN", new_y="NEXT")
@@ -112,6 +129,6 @@ def build_invoice_pdf_bytes(
     if notes:
         pdf.ln(6)
         pdf.set_font("Helvetica", "I", 9)
-        pdf.multi_cell(0, 5, f"Notes: {notes}")
+        pdf.multi_cell(0, 5, f"Notes: {_latin1_safe(notes)}")
 
     return bytes(pdf.output())

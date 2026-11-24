@@ -263,10 +263,12 @@ def test_dismiss_hides_draft_surfaces_part_warning_and_supports_reopen_and_ack(s
     part_detail = client.get(f"/api/parts/{part.id}").json()
     assert len(part_detail["unresolved_dismissed_alerts"]) == 1
 
-    # Reopen alert -> back to OPEN, removed from unresolved_dismissed_alerts
+    # Reopen alert -> back to OPEN, draft restored, removed from unresolved_dismissed_alerts
     reopen_resp = client.post(f"/api/alerts/{alert_id}/reopen")
     assert reopen_resp.status_code == 200
     assert reopen_resp.json()["status"] == ActionItemStatus.OPEN.value
+    seeded_session.refresh(comm)
+    assert comm.status == CommStatus.DRAFT_PENDING_APPROVAL.value
     part_detail_after_reopen = client.get(f"/api/parts/{part.id}").json()
     assert part_detail_after_reopen["unresolved_dismissed_alerts"] == []
 

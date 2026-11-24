@@ -1,6 +1,6 @@
 # InvPlan — Demand-to-Delivery & Inventory Planning Prototype
 
-> **Project Status:** Phase 1 MVP (Slices 1–5) + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) Complete & Verified  
+> **Project Status:** Phase 1 MVP (Slices 1–5) + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) + Phase 3 (`P3-1`–`P3-8`) Complete & Verified  
 > **Context:** A portfolio project built to practice **Product Management** and **Agentic Engineering**—translating recurring operational pain points gathered from Supply Chain Management (SCM) communities into a working, guardrailed prototype built with **Google Antigravity CLI**.
 >
 > *Note: This repository is an architectural and product prototype meant to demonstrate problem framing, system design, and agentic engineering practices rather than a packaged, end-user runnable distribution.*
@@ -19,24 +19,24 @@ Across SCM discussions, inventory and procurement teams consistently describe th
 | **2. Missed Supplier Exceptions** | Price hikes, quantity cuts, or stockouts arrive by email and sit unread. | **Lex** triages inbound emails into structured intents, computes exact INR/stockout impact, and surfaces inline-CTA alerts. |
 | **3. Unassessed Post-Ack Delays** | Delays after acknowledgment are either ignored or cause unnecessary panic. | Deterministic days-of-supply math distinguishes safe-buffer delays from `DELAYED_CRITICAL` stockout threats. |
 | **4. Silent Non-Deliveries** | Suppliers miss promised ETAs without warning; discovered only at stockout. | Simulated clock + SLA watcher flags `OVERDUE` POs and penalizes supplier reliability scores immediately. |
-| **5. PO–Invoice & Quality Mismatches** | Shipments arrive damaged or with wrong prices/quantities/credit notes; goods sit unusable in limbo. | Multimodal PDF extraction feeds deterministic 3-way matching (`PO vs. GRN vs. Invoice`), Credit Note net settlement, Packing List cross-checks, and a physical `DAMAGED` GRN quarantine gate. |
-| **6. Static, Blind Planning** | Reorder points ignore changing demand and chronic supplier lateness. | Statistical EWMA demand estimation, actual-vs-quoted lead time tracking, and criticality-weighted safety stock generate explainable ROP/$S$ recommendations. |
+| **5. PO–Invoice & Quality Mismatches** | Shipments arrive damaged or with wrong prices/quantities/credit notes; goods sit unusable in limbo. | Multimodal PDF extraction feeds deterministic 3-way matching (`PO vs. GRN vs. Invoice`, `invoice_qty == grn_received_qty` supporting partial receipts), Credit Note net settlement, Packing List cross-checks, and a physical `DAMAGED` GRN quarantine gate. |
+| **6. Static, Blind Planning** | Reorder points ignore changing demand and chronic supplier lateness. | 90-day daily EWMA burn (`alpha = 0.30`), supplier-aware `Stockout In` urgency & cycle analytics, actual-vs-quoted lead time + communication delay tracking, and criticality-weighted safety stock generate explainable `ROP/T` recommendations. |
 
 ---
 
 ## 2. How It Works & 3-Minute Guided Tour
 
 Every workflow in InvPlan follows a **human-in-the-loop (HITL)** loop:
-1. **Events Enter:** Stock drops below ROP (via **Inventory & Parts** or a **Making Team** email), time advances (**Simulated Clock**), or a supplier replies/attaches a PDF in **Mailroom**.
-2. **Lex Triages & Drafts:** Agent Lex reads unstructured emails, PDFs, or `.csv` BOMs and returns structured intents/extractions plus a `DRAFT_PENDING_APPROVAL` email—**never mutating POs or stock silently**.
-3. **Manager Decides in 1 Click:** **Actionable Alerts** surfaces exact INR impact, stockout dates, and inline CTAs (*Approve & Send*, *Switch to Backup Supplier*, *Release Usable Qty*, *Approve Net Settlement*).
+1. **Events Enter:** Stock drops below ROP (via **Inventory & Parts** `Withdraw` or a **Making Team** email), time advances (**Simulated Clock** starting **Oct 1, 2026 1:00 PM IST** with **0 open POs** on reset), or a supplier replies/attaches a PDF or image in **Mailroom**.
+2. **Lex Triages & Drafts:** Tool-using Agent Lex inspects live inventory, POs, alerts, supplier scorecards/memory, and AST-sandboxed Python calculations, reads emails/PDFs/images/`.csv` BOMs, schedules dynamic `LexReminder`s when safe, and returns structured outputs plus formatted `DRAFT_PENDING_APPROVAL` emails—**never mutating POs or stock silently**.
+3. **Manager Decides in 1 Click:** **Open Alerts** (top `ClockBar`) surfaces exact INR impact, stockout dates, and inline CTAs (*Approve & Send PO*, *Edit PO*, *Switch to Backup Supplier*, *Release Usable Qty*, *Approve Net Settlement*).
 
 ### What to Click (3-Minute Browser Tour)
-1. **Trigger a Replenishment PO:** Open **Inventory & Parts** → click **Withdraw** on `BRG-402` (`2` units). Because inventory position drops below ROP, InvPlan auto-creates `PO-1041` (`PENDING_DISPATCH_APPROVAL`) and Lex drafts the dispatch email.
-2. **Approve & Send:** Open **Actionable Alerts** → click **Approve & Send PO** on `PO-1041` (`SENT_AWAITING_ACK`).
-3. **Watch the SLA Clock:** Click **`+1d`** in the top **Simulated Clock** bar → Lex automatically drafts a 24h follow-up reminder for the unacknowledged critical PO.
-4. **Test a Supplier Exception:** Open **Mailroom** → switch persona to **`Apex Precision (Sup1)`** → reply to `PO-1041` with *"Unit price is now ₹540/unit and ETA slips to 2026-12-10."* → return to **Actionable Alerts** to see the `+20%` price variance, projected stockout gap, and 1-click **Switch to Backup Supplier**.
-5. **Explore More:** See [`docs/test-scenarios/demo-top-10.md`](docs/test-scenarios/demo-top-10.md) for 10 full click-by-click demo scenarios (including `USD` quote traps, damaged GRN quarantine, and Credit Note net settlement).
+1. **Explore 90-Day Burn & Runway:** Open **Inventory & Parts** → click any `Stockout In` badge to open the **90-Day Cycle Analytics** drawer (`Stockout → PO → Replenishment → Stockout`), primary effective LT + communication buffer, and recommended PO quantity.
+2. **Trigger a Replenishment PO:** Click **Withdraw** on `BRG-402` to drop Inventory Position below ROP. InvPlan auto-creates a `PENDING_DISPATCH_APPROVAL` PO (`On Order` stays `0`, button swaps to **View PO**), and Lex drafts a structured Markdown/`₹` dispatch email.
+3. **Approve or Edit & Send:** Click **Open Alerts** in the header → use **Approve & Send PO** or **Edit PO** (opens `CreateEditPOModal` with per-supplier suggested qty & reasoning) → PO moves to `SENT_AWAITING_ACK`.
+4. **Watch the SLA Clock & Dynamic Deferral:** Open **Mailroom** → switch persona to **`Apex Precision (Sup1)`** → reply citing the PO with *"We confirm, but can only share tracking details after 4 days."* Lex uses its Python sandbox to verify runway safety and schedules a 4-day `LexReminder` without nagging today; inspect full `tool_calls` in **AI Activity & Health**.
+5. **Test a Supplier Exception:** Reply as a supplier with *"Unit price is now ₹540/unit and ETA slips to 2026-10-20."* → return to **Open Alerts** to see price variance, projected stockout gap, and 1-click **Switch to Backup Supplier**.
 
 ---
 
@@ -46,10 +46,10 @@ A central design principle in InvPlan is knowing **where not to use an LLM**. Us
 
 | Layer | Approach | Responsibility |
 |---|---|---|
-| **Deterministic Core** | Pure Python + SQLAlchemy (`inventory/`, `po/`, `core/`) | Inventory position (`on_hand + on_order + quarantined`), duplicate-PO prevention, MOQ rounding, explicit allow-listed PO state machine, 3-way invoice match arithmetic, and persisted `SimulatedClock`. |
-| **Planning Intelligence** | Deterministic Statistics (`planning/`) | 12-month EWMA demand forecasting (`alpha = 0.25`) with intermittent-demand handling, 4-factor Supplier Reliability Score (`40/25/20/15`), effective lead time blending, and Z-factor dynamic ROP/$S$. |
-| **Targeted AI Agent (`Lex`)** | `google-genai` (`gemini-3.5-flash-lite`) + Strict Pydantic Schemas (`agents/lex/`) | Multimodal inbound email & PDF triage (quotes, dispatch advices, waybills), multi-PDF invoice/credit-note/packing-list extraction, Making `.csv` BOM stock-request triage, and context-/CC-/INR-grounded outbound drafting. **Zero direct database writes.** |
-| **Workflow Orchestration** | `orchestrator/` | Sole cross-module coordinator enforcing confidence guardrails, invoking domain services, and managing SLA timers. |
+| **Deterministic Core** | Pure Python + SQLAlchemy (`inventory/`, `po/`, `core/`) | Inventory position (`on_hand + on_order + quarantined`, excluding `PENDING_DISPATCH_APPROVAL` from `on_order`), duplicate-PO prevention, MOQ rounding, explicit allow-listed PO state machine, partial-delivery 3-way match arithmetic (`invoice == grn`), and persisted `SimulatedClock` (IST). |
+| **Planning Intelligence** | Deterministic Statistics (`planning/`) | 90-day daily EWMA demand forecasting (`alpha = 0.30`) with same-day demand freeze & rollover settlement, 90-day cycle reconstruction, 4-factor Supplier Reliability Score (`40/25/20/15`, `avg_response_days`, `cycles_90d`), effective lead time blending, and Z-factor dynamic `ROP/T`. |
+| **Targeted AI Agent (`Lex`)** | `google-genai` (`gemini-3.5-flash-lite`) + Strict Pydantic Schemas + Tool Loop (`agents/lex/`, `agents/sandbox.py`) | 13-tool read/calc/reminder/memory reasoning loop (`orchestrator/lex_tools.py`), AST-sandboxed Python calculation execution, multimodal email/PDF/image triage, multi-PDF invoice/credit-note/packing-list extraction, Making `.csv` BOM triage, and Markdown/`₹`-grounded outbound drafting. **Zero direct database writes.** |
+| **Workflow Orchestration** | `orchestrator/` | Sole cross-module coordinator enforcing confidence guardrails, invoking domain services, and managing SLA timers & `LexReminder` wakeups. |
 
 ### Safety Guardrails & Human-in-the-Loop (HITL) Trust Boundaries
 - **Draft-First Outbound Rule:** Every email drafted by Lex enters `DRAFT_PENDING_APPROVAL` and requires `InventoryManager` approval before dispatch. Outcomes (`APPROVED_AS_IS`, `APPROVED_EDITED`, `REJECTED`) are tracked per action category in `autonomy_policies` to measure trust before graduating categories in later phases.
@@ -119,7 +119,10 @@ This prototype was developed iteratively using **Google Antigravity CLI** (`agy`
    - **Slice 5:** Agent-agnostic YAML eval runner (`backend/evals/lex.yaml` — 30 golden cases across email triage, PDF extraction, stock requests, and draft compliance), `AIHealthPage` trust/eval dashboard, and optional OpenTelemetry/Arize Phoenix integration.
 4. **Phase 2 & 50-Scenario Live Stress Testing (`docs/phase2/`, `docs/PRD_FIXES.md`):**
    - **Phase 2 (`docs/phase2/PRD_P2.md`):** Added dispatch logistics tracking (`promised_dispatch_date`, `carrier_name`, `tracking_number`, 2-day deferral/nudge SLA), Making-team stock request & minimum-quantity negotiation workflow, and Procurement escalation.
-   - **50-Scenario Live Evaluation & Fixes (`F-1.1`–`F-4.3`):** Executed 50 end-to-end live scenarios against `gemini-3.5-flash-lite` (`docs/test-scenarios/`), closed all 12 discovered bugs/gaps in [`docs/PRD_FIXES.md`](docs/PRD_FIXES.md), and achieved **`16/16 PASS`** on re-verification ([`results-fixes-retest.md`](docs/test-scenarios/results-fixes-retest.md)) plus **`94 passed`** offline unit/integration tests.
+   - **50-Scenario Live Evaluation & Fixes (`F-1.1`–`F-4.3`):** Executed 50 end-to-end live scenarios against `gemini-3.5-flash-lite` (`docs/test-scenarios/`), closed all 12 discovered bugs/gaps in [`docs/PRD_FIXES.md`](docs/PRD_FIXES.md), and achieved **`16/16 PASS`** on re-verification ([`results-fixes-retest.md`](docs/test-scenarios/results-fixes-retest.md)).
+5. **Phase 3 (`docs/phase3/`, Slices `P3-1`–`P3-8`):**
+   - Reset simulated clock & seed baseline to **Oct 1, 2026 1:00 PM IST** with a 90-day causal Jul–Sep simulation (**0 open POs** on seed), daily EWMA (`alpha = 0.30`) + cycle analytics, `ROP/T` standardization, `Edit PO` + unresolved dismissed-alert inventory warnings, and **Lex v2** (13 tools, AST-sandboxed calculation executor, dynamic N-day `LexReminder` scheduling, multimodal image/PDF triage, and `COPILOT_SYSTEM_PROMPT`).
+   - Verified with **`124 passed, 25 skipped`** offline tests, **`43/43`** in `tests/agents/` (`RUN_LIVE_GEMINI=1`, **25/25 live Gemini tests**), **`34/34` (`100.0%`)** live YAML evals, and full headless Chromium E2E across all 6 `PRD_P3.md §3` acceptance criteria.
 
 ---
 
@@ -135,12 +138,15 @@ This prototype was developed iteratively using **Google Antigravity CLI** (`agy`
 ## 6. Quick Start (Local Development)
 
 ```bash
-# 1. Install backend dependencies & run offline tests (94 passed, 3 live Gemini skipped)
+# 1. Install backend dependencies & run offline tests (124 passed, 25 live Gemini skipped)
 uv sync
 uv run pytest -q
 
-# 2. Run FastAPI backend (export GEMINI_API_KEY for live Lex triage/drafts/PDFs)
+# Optional: run full 25-test live Gemini suite + 18 tool/sandbox tests (43 passed)
 export GEMINI_API_KEY="your-api-key"
+RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/
+
+# 2. Run FastAPI backend
 uv run uvicorn backend.main:app --reload --port 8000
 
 # 3. Run React/Vite frontend (http://localhost:5173, proxies /api -> :8000)
@@ -162,21 +168,22 @@ inv_plan/
 │   ├── PRD_FIXES.md              # Fixes & gap closure spec (F-1.1–F-4.3)
 │   ├── resolved_problems.md      # Pre-Slice 4 audit & resolution ledger (P1–P18)
 │   ├── phase2/                   # Phase 2 PRD, design & status (logistics, Making, procurement)
+│   ├── phase3/                   # Phase 3 PRD, design, slices & status (EWMA, Lex v2, UX)
 │   └── test-scenarios/           # 50 live scenarios, top-10 demo playbook, fixtures & reports
 ├── backend/
-│   ├── core/                     # Config, DB models, idempotent migrations, SimulatedClock
+│   ├── core/                     # Config, DB models, idempotent migrations, SimulatedClock (IST)
 │   ├── inventory/                # Stock ledger, inventory position, ROP trigger, quarantine
 │   ├── po/                       # PO state machine, GRN, 3-way match math, action alerts
 │   ├── mailroom/                 # EmailTransport protocol, 7-persona inbox, multi-attachment policy
-│   ├── planning/                 # EWMA demand forecast, supplier scoring, dynamic ROP/S
-│   ├── agents/                   # BaseAgent, GeminiLLMClient, Lex prompts/schemas/evals
-│   ├── observability/            # AgentTracer, AutonomyPolicy tracking, YAML EvalRunner
-│   ├── orchestrator/             # Cross-domain WorkflowEngine, SLA watcher, REST routes
-│   ├── seed/                     # 15-part, 3-supplier, 12-month historical seed generator
-│   └── evals/                    # Golden YAML evaluation suite (lex.yaml — 30 cases)
+│   ├── planning/                 # 90d EWMA daily burn (α=0.30), cycle analytics, supplier scoring, ROP/T
+│   ├── agents/                   # BaseAgent, ToolRegistry, AST sandbox, GeminiLLMClient, Lex
+│   ├── observability/            # AgentTracer (tool_calls), AutonomyPolicy tracking, YAML EvalRunner
+│   ├── orchestrator/             # Cross-domain WorkflowEngine, lex_tools (13 tools), SLA & LexReminder watcher
+│   ├── seed/                     # 15-part, 3-supplier, 90-day causal Jul–Sep seed generator (0 open POs)
+│   └── evals/                    # Golden YAML evaluation suite (lex.yaml — 34 cases)
 ├── frontend/                     # React + TypeScript + Tailwind operations & AI health UI
-└── tests/                        # Unit, integration, live Gemini, and AST architecture tests
+└── tests/                        # Unit, integration, 25 live Gemini, and AST architecture tests
 ```
 
 ### Next-Stage Direction
-The core deterministic engine, Phase 2 logistics/Making/Procurement workflows, and `PRD_FIXES` (`F-1.1`–`F-4.3`) are complete and verified. Next-stage work includes progressive autonomy graduation per email category (`AutonomyPolicy`), additional specialized agents on `BaseAgent` (e.g., a Manager Query & Visualization Copilot), and external IMAP/Gmail `EmailTransport` integration.
+Phases 1–3 (`P3-1`–`P3-8`) are complete and verified. Next-stage work includes exposing the interactive **Manager Copilot** chat/query UI (using Lex's 13-tool `COPILOT_SYSTEM_PROMPT` backend readiness), progressive autonomy graduation per email category (`AutonomyPolicy`), and external IMAP/Gmail `EmailTransport` integration.

@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
-from backend.core.enums import ActionItemStatus, AlertSeverity, CommStatus, Criticality
-from backend.core.models import ActionItem, POCommunication
+from backend.core.enums import ActionItemStatus, AlertSeverity, CommStatus, Criticality, POStatus
+from backend.core.models import ActionItem, POCommunication, PurchaseOrder
 
 SEVERITY_BASE_SCORE: dict[str, int] = {
     AlertSeverity.CRITICAL.value: 80,
@@ -155,6 +155,18 @@ def reopen_action_item(session: Session, action_item_id: int) -> ActionItem:
     item.status = ActionItemStatus.OPEN.value
     item.resolved_at = None
     item.dismiss_resolved_at = None
+    if item.draft_comm_id is not None:
+        comm = session.get(POCommunication, item.draft_comm_id)
+        if comm is not None and comm.status == CommStatus.REJECTED.value:
+            po = session.get(PurchaseOrder, item.po_id) if item.po_id is not None else None
+            if po is None or (
+                po.status not in (POStatus.CLOSED.value, POStatus.CANCELLED.value)
+                and (
+                    item.type != "PO_DISPATCH_APPROVAL"
+                    or po.status == POStatus.PENDING_DISPATCH_APPROVAL.value
+                )
+            ):
+                comm.status = CommStatus.DRAFT_PENDING_APPROVAL.value
     session.flush()
     return item
 

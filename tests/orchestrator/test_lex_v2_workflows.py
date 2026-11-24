@@ -69,12 +69,15 @@ def _create_open_po(
     return po
 
 
-def test_all_10_lex_tools_execute_and_deduplicate_cleanly(seeded_session) -> None:
+def test_all_13_lex_tools_execute_and_deduplicate_cleanly(seeded_session) -> None:
     po = _create_open_po(seeded_session, sku="RLY-901", persona=PersonaKey.SUP2)
     tracker = LexToolTracker()
     registry = build_lex_tool_registry(seeded_session, tracker=tracker)
 
     expected_tools = {
+        "list_parts_summary",
+        "list_alerts",
+        "get_planning_overview",
         "get_part_snapshot",
         "get_consumption_history",
         "get_po_details",
@@ -87,6 +90,17 @@ def test_all_10_lex_tools_execute_and_deduplicate_cleanly(seeded_session) -> Non
         "create_advisory_alert",
     }
     assert expected_tools == set(registry.names())
+
+    parts_res = registry.execute("list_parts_summary", {})
+    assert parts_res.ok and parts_res.data["total_parts"] == 15
+    assert len(parts_res.data["parts"]) == 15
+
+    alerts_res = registry.execute("list_alerts", {"status": "ALL"})
+    assert alerts_res.ok and "alerts" in alerts_res.data
+
+    plan_res = registry.execute("get_planning_overview", {})
+    assert plan_res.ok and len(plan_res.data["supplier_scores"]) == 3
+    assert len(plan_res.data["recommendations"]) == 15
 
     part_res = registry.execute("get_part_snapshot", {"sku_or_part_id": "RLY-901"})
     assert part_res.ok and part_res.data["found"] is True

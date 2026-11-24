@@ -37,6 +37,7 @@ from backend.planning import (
     build_cycle_analytics,
     compute_part_planning_metrics,
     compute_supplier_score,
+    get_planning_overview,
 )
 from backend.po import create_action_item
 
@@ -665,8 +666,291 @@ def build_lex_tool_registry(
     context_comm_id: int | None = None,
     tracker: LexToolTracker | None = None,
 ) -> ToolRegistry:
-    """Bind all 10 domain DB, planning, sandbox, reminder, and memory tools for Lex."""
+    """Bind all 13 domain DB, inventory, alert, planning, sandbox, and memory tools for Lex."""
     registry = ToolRegistry()
+
+    def _list_parts_summary(urgency_filter: str | None = None) -> dict[str, Any]:
+        sim_now = clock.now(session)
+        parts = list(session.scalars(select(Part).order_by(Part.sku.asc())).all())
+        sups_map = {s.id: s for s in session.scalars(select(Supplier)).all()}
+        terms = list(
+            session.scalars(
+                select(PartSupplierTerm).order_by(
+                    PartSupplierTerm.part_id.asc(), PartSupplierTerm.supplier_rank.asc()
+                )
+            ).all()
+        )
+        terms_by_part: dict[int, list[PartSupplierTerm]] = {}
+        for t in terms:
+            terms_by_part.setdefault(t.part_id, []).append(t)
+
+        wanted_urgencies: set[str] | None = None
+        if urgency_filter and urgency_filter.strip():
+            wanted_urgencies = {
+                u.strip().upper() for u in urgency_filter.split(",") if u.strip()
+            }
+
+        urgency_rank = {"CRITICAL": 0, "WARNING": 1, "HEALTHY": 2}
+        counts = {"CRITICAL": 0, "WARNING": 0, "HEALTHY": 0}
+        rows: list[dict[str, Any]] = []
+
+        for part in parts:
+            snap = get_part_snapshot(session, part.id)
+            metrics = compute_part_planning_metrics(session, part, sim_now=sim_now)
+            counts[metrics.stockout_urgency] = counts.get(metrics.stockout_urgency, 0) + 1
+            if wanted_urgencies is not None and metrics.stockout_urgency not in wanted_urgencies:
+                continue
+
+            part_terms = terms_by_part.get(part.id, [])
+            primary_term = part_terms[0] if part_terms else None
+            backup_term = part_terms[1] if len(part_terms) > 1 else None
+            backup_sup = (
+                sups_map.get(backup_term.supplier_id) if backup_term is not None else None
+            )
+
+            urgent_threshold = round(metrics.primary_effective_lt + metrics.comm_buffer_days, 2)
+            warning_threshold = round(urgent_threshold + metrics.safety_days, 2)
+            rows.append(
+                {
+                    "part_id": part.id,
+                    "sku": part.sku,
+                    "name": part.name,
+                    "criticality": part.criticality,
+                    "on_hand_stock": snap.on_hand_stock,
+                    "on_hold_quarantined_stock": snap.quarantined_stock,
+                    "on_order_stock": snap.on_order_stock,
+                    "inventory_position": snap.inventory_position,
+                    "rop": snap.rop,
+                    "replenishment_point": snap.replenishment_point,
+                    "daily_burn_ewma": round(metrics.daily_burn_ewma, 4),
+                    "trend_pct": round(metrics.trend_pct, 2),
+                    "is_intermittent": metrics.is_intermittent,
+                    "days_to_stockout": (
+                        round(metrics.days_to_stockout, 2)
+                        if metrics.days_to_stockout is not None
+                        else None
+                    ),
+                    "predicted_stockout_date": (
+                        metrics.predicted_stockout_date.isoformat()
+                        if metrics.predicted_stockout_date is not None
+                        else None
+                    ),
+                    "stockout_urgency": metrics.stockout_urgency,
+                    "primary_supplier_id": metrics.primary_supplier_id,
+                    "primary_supplier_name": metrics.primary_supplier_name,
+                    "primary_quoted_lt": metrics.primary_quoted_lt,
+                    "primary_effective_lt": metrics.primary_effective_lt,
+                    "primary_avg_response_days": metrics.primary_avg_response_days,
+                    "primary_moq": primary_term.moq if primary_term else None,
+                    "primary_unit_price": (
+                        primary_term.agreed_unit_price if primary_term else None
+                    ),
+                    "comm_buffer_days": round(metrics.comm_buffer_days, 2),
+                    "urgent_threshold_days": urgent_threshold,
+                    "safety_stock": round(metrics.safety_stock, 2),
+                    "safety_days": round(metrics.safety_days, 2),
+                    "warning_threshold_days": warning_threshold,
+                    "backup_supplier_name": backup_sup.name if backup_sup else None,
+                    "backup_effective_lt": (
+                        backup_term.effective_lead_time_days if backup_term else None
+                    ),
+                    "backup_unit_price": (
+                        backup_term.agreed_unit_price if backup_term else None
+                    ),
+                    "backup_moq": backup_term.moq if backup_term else None,
+                    "active_po_id": snap.active_po_id,
+                    "active_po_number": snap.active_po_number,
+                    "active_po_status": snap.active_po_status,
+                    "pending_dispatch_qty": snap.pending_dispatch_qty,
+                    "earliest_po_eta": (
+                        metrics.earliest_po_eta.isoformat()
+                        if metrics.earliest_po_eta is not None
+                        else None
+                    ),
+                    "unresolved_dismissed_alerts_count": len(snap.unresolved_dismissed_alerts),
+                }
+            )
+
+        rows.sort(
+            key=lambda r: (
+                urgency_rank.get(str(r["stockout_urgency"]), 9),
+                r["days_to_stockout"] if r["days_to_stockout"] is not None else 999999.0,
+                str(r["sku"]),
+            )
+        )
+        return {
+            "sim_now": sim_now.isoformat(),
+            "total_parts": len(parts),
+            "critical_count": counts.get("CRITICAL", 0),
+            "warning_count": counts.get("WARNING", 0),
+            "healthy_count": counts.get("HEALTHY", 0),
+            "returned_count": len(rows),
+            "parts": rows,
+        }
+
+    def _list_alerts(
+        status: str = "ALL",
+        include_unresolved_dismissed: bool = True,
+        part_sku_or_id: str | int | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        # Refresh auto-resolution of DISMISSED alerts before reading
+        dismissed_part_ids = {
+            pid
+            for pid in session.scalars(
+                select(ActionItem.part_id).where(
+                    ActionItem.status == ActionItemStatus.DISMISSED.value,
+                    ActionItem.dismiss_resolved_at.is_(None),
+                    ActionItem.part_id.is_not(None),
+                )
+            ).all()
+            if pid is not None
+        }
+        for pid in sorted(dismissed_part_ids):
+            get_part_snapshot(session, pid)
+
+        resolved_part: Part | None = None
+        if part_sku_or_id is not None and str(part_sku_or_id).strip():
+            resolved_part = _resolve_part(session, part_sku_or_id)
+            if resolved_part is None:
+                return {
+                    "open_count": 0,
+                    "dismissed_count": 0,
+                    "unresolved_dismissed_count": 0,
+                    "returned_count": 0,
+                    "alerts": [],
+                }
+
+        all_items = list(
+            session.scalars(
+                select(ActionItem).order_by(
+                    ActionItem.urgency_score.desc(),
+                    ActionItem.created_at.desc(),
+                    ActionItem.id.desc(),
+                )
+            ).all()
+        )
+        parts_map = {p.id: p for p in session.scalars(select(Part)).all()}
+        pos_map = {po.id: po for po in session.scalars(select(PurchaseOrder)).all()}
+
+        status_upper = (status or "ALL").strip().upper()
+        filtered: list[ActionItem] = []
+        open_count = 0
+        dismissed_count = 0
+        unresolved_dismissed_count = 0
+
+        for item in all_items:
+            if resolved_part is not None and item.part_id != resolved_part.id:
+                continue
+            if item.status == ActionItemStatus.OPEN.value:
+                open_count += 1
+            elif item.status == ActionItemStatus.DISMISSED.value:
+                dismissed_count += 1
+                if item.dismiss_resolved_at is None:
+                    unresolved_dismissed_count += 1
+
+            is_unres_dismissed = (
+                item.status == ActionItemStatus.DISMISSED.value
+                and item.dismiss_resolved_at is None
+            )
+            if status_upper == "ALL":
+                include = True
+            elif status_upper == "OPEN":
+                include = (item.status == ActionItemStatus.OPEN.value) or (
+                    include_unresolved_dismissed and is_unres_dismissed
+                )
+            elif status_upper == "DISMISSED":
+                include = item.status == ActionItemStatus.DISMISSED.value
+            elif status_upper == "RESOLVED":
+                include = item.status == ActionItemStatus.RESOLVED.value
+            else:
+                include = True
+
+            if include:
+                filtered.append(item)
+
+        bounded = filtered[: max(1, min(200, int(limit)))]
+        return {
+            "open_count": open_count,
+            "dismissed_count": dismissed_count,
+            "unresolved_dismissed_count": unresolved_dismissed_count,
+            "returned_count": len(bounded),
+            "alerts": [
+                {
+                    "id": item.id,
+                    "type": item.type,
+                    "severity": item.severity,
+                    "urgency_score": item.urgency_score,
+                    "status": item.status,
+                    "is_unresolved_dismissed": (
+                        item.status == ActionItemStatus.DISMISSED.value
+                        and item.dismiss_resolved_at is None
+                    ),
+                    "dismiss_resolved_at": (
+                        clock.ensure_utc(item.dismiss_resolved_at).isoformat()
+                        if item.dismiss_resolved_at
+                        else None
+                    ),
+                    "title": item.title,
+                    "summary": item.summary,
+                    "part_id": item.part_id,
+                    "part_sku": parts_map[item.part_id].sku if item.part_id in parts_map else None,
+                    "po_id": item.po_id,
+                    "po_number": pos_map[item.po_id].po_number if item.po_id in pos_map else None,
+                    "po_status": pos_map[item.po_id].status if item.po_id in pos_map else None,
+                    "draft_comm_id": item.draft_comm_id,
+                    "created_at": clock.ensure_utc(item.created_at).isoformat(),
+                }
+                for item in bounded
+            ],
+        }
+
+    def _get_planning_overview() -> dict[str, Any]:
+        overview = get_planning_overview(session)
+        notes_by_sup: dict[int, list[str]] = {}
+        for note_row in session.scalars(
+            select(SupplierMemoryNote).order_by(SupplierMemoryNote.id.asc())
+        ).all():
+            notes_by_sup.setdefault(note_row.supplier_id, []).append(note_row.note)
+
+        return {
+            "calculated_at": clock.ensure_utc(overview.calculated_at).isoformat(),
+            "parts_evaluated": overview.parts_evaluated,
+            "recommendations_needing_update": overview.recommendations_needing_update,
+            "supplier_scores": [
+                {
+                    "supplier_id": s.supplier_id,
+                    "supplier_name": s.name,
+                    "persona_key": s.persona_key,
+                    "reliability_score": s.reliability_score,
+                    "otd_rate": s.otd_rate,
+                    "invoice_accuracy_rate": s.invoice_accuracy_rate,
+                    "response_rate": s.response_rate,
+                    "avg_response_days": s.avg_response_days,
+                    "cycles_90d": s.cycles_90d,
+                    "memory_notes": notes_by_sup.get(s.supplier_id, []),
+                }
+                for s in overview.supplier_scores
+            ],
+            "recommendations": [
+                {
+                    "part_id": r.part_id,
+                    "sku": r.sku,
+                    "part_name": r.part_name,
+                    "criticality": r.criticality,
+                    "current_rop": r.current_rop,
+                    "recommended_rop": r.recommended_rop,
+                    "current_replenishment_point": r.current_replenishment_point,
+                    "recommended_replenishment_point": r.recommended_replenishment_point,
+                    "needs_update": r.needs_update,
+                    "daily_burn_ewma": round(r.forecast.avg_daily_demand, 4),
+                    "effective_lead_time_days": r.effective_lead_time_days,
+                    "safety_stock": round(r.safety_stock, 2),
+                    "reasoning": r.reason,
+                }
+                for r in overview.recommendations
+            ],
+        }
 
     def _get_part_snapshot(sku_or_part_id: str | int) -> dict[str, Any]:
         part = _resolve_part(session, sku_or_part_id)
@@ -1101,6 +1385,70 @@ def build_lex_tool_registry(
         )
 
     registry.register_function(
+        name="list_parts_summary",
+        description=(
+            "List all inventory parts with live stock balances (on_hand, on_hold, on_order, "
+            "inventory_position), EWMA daily burn, days_to_stockout, stockout_urgency "
+            "(CRITICAL/WARNING/HEALTHY), primary & backup effective lead times + comm buffer, "
+            "ROP/T, active/draft POs, and unresolved_dismissed_alerts_count."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "urgency_filter": {
+                    "type": "string",
+                    "description": (
+                        "Optional comma-separated urgency filter: 'CRITICAL', 'WARNING', "
+                        "'HEALTHY', or 'CRITICAL,WARNING'. Omit for all parts."
+                    ),
+                }
+            },
+        },
+        handler=_list_parts_summary,
+        read_only=True,
+    )
+    registry.register_function(
+        name="list_alerts",
+        description=(
+            "List ActionItem alerts including OPEN alerts and unresolved DISMISSED alerts "
+            "(where dismiss_resolved_at is null), with linked part_sku, po_number, po_status, "
+            "and draft_comm_id."
+        ),
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": (
+                        "Filter status: 'ALL' (default), 'OPEN', 'DISMISSED', or 'RESOLVED'."
+                    ),
+                },
+                "include_unresolved_dismissed": {
+                    "type": "boolean",
+                    "description": "When status='OPEN', also include unresolved DISMISSED alerts.",
+                },
+                "part_sku_or_id": {
+                    "type": "string",
+                    "description": "Optional part SKU or numeric ID filter.",
+                },
+                "limit": {"type": "integer", "description": "Max alerts returned (default 50)."},
+            },
+        },
+        handler=_list_alerts,
+        read_only=True,
+    )
+    registry.register_function(
+        name="get_planning_overview",
+        description=(
+            "Fetch read-only planning overview: all supplier reliability scorecards (OTD, "
+            "invoice accuracy, response rate, avg_response_days, cycles_90d, memory notes) "
+            "and all part ROP/T recommendations."
+        ),
+        parameters_schema={"type": "object", "properties": {}},
+        handler=_get_planning_overview,
+        read_only=True,
+    )
+    registry.register_function(
         name="get_part_snapshot",
         description=(
             "Fetch live stock balances, on-order stock, daily EWMA burn, days to stockout, "
@@ -1122,12 +1470,16 @@ def build_lex_tool_registry(
     registry.register_function(
         name="get_consumption_history",
         description=(
-            "Fetch trailing daily consumption history, recent withdrawals, and cycle events."
+            "Fetch trailing daily consumption history, recent withdrawals, and cycle events "
+            "for a specific part SKU or numeric part ID."
         ),
         parameters_schema={
             "type": "object",
             "properties": {
-                "part_id": {"type": "integer", "description": "Numeric part ID."},
+                "part_id": {
+                    "type": "string",
+                    "description": "Part SKU (e.g., 'BRG-402') or numeric part ID.",
+                },
                 "days": {"type": "integer", "description": "Lookback days (1-365, default 90)."},
             },
             "required": ["part_id"],

@@ -11,6 +11,7 @@ from backend.agents.lex.schemas import (
     StockRequestTriageResult,
 )
 from backend.agents.llm_client import LLMClientProtocol
+from backend.agents.tools import ToolRegistry
 from backend.observability.tracer import AgentTracer
 
 
@@ -56,6 +57,7 @@ def run_stock_request_triage(
     triage_input: StockRequestTriageInput,
     confidence_threshold: float = 0.85,
     linked_comm_id: int | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> StockRequestTriageResult:
     """Triage a Making-team stock request email with < 0.85 confidence & SKU guardrails."""
     prompt = json.dumps(triage_input.model_dump(mode="json"), indent=2)
@@ -74,12 +76,22 @@ def run_stock_request_triage(
         )
         span.raw_prompt = prompt
 
-        llm_res = llm.generate_structured(
-            prompt=prompt,
-            response_schema=StockRequestTriageResult,
-            system_instruction=STOCK_REQUEST_TRIAGE_PROMPT,
-            temperature=0.0,
-        )
+        if tool_registry is not None and hasattr(llm, "generate_with_tools"):
+            llm_res = llm.generate_with_tools(
+                prompt=prompt,
+                response_schema=StockRequestTriageResult,
+                tool_registry=tool_registry,
+                system_instruction=STOCK_REQUEST_TRIAGE_PROMPT,
+                temperature=0.0,
+            )
+            span.tool_calls.extend(llm_res.tool_calls)
+        else:
+            llm_res = llm.generate_structured(
+                prompt=prompt,
+                response_schema=StockRequestTriageResult,
+                system_instruction=STOCK_REQUEST_TRIAGE_PROMPT,
+                temperature=0.0,
+            )
         result = llm_res.parsed
 
         forced_reasons: list[str] = []

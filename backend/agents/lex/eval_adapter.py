@@ -139,6 +139,20 @@ def _build_standalone_eval_registry(case_input: dict[str, Any]) -> ToolRegistry:
             "messages": list(case_input.get("thread_history") or []),
         }
 
+    def _list_open_pos(
+        supplier_id: int | str | None = None,
+        part_id: int | str | None = None,
+    ) -> dict[str, Any]:
+        del supplier_id, part_id
+        open_pos = list(case_input.get("open_pos") or [])
+        return {"count": len(open_pos), "open_pos": open_pos}
+
+    registry.register_function(
+        name="list_open_pos",
+        description="List currently open PurchaseOrders.",
+        parameters_schema={"type": "object", "properties": {}},
+        handler=_list_open_pos,
+    )
     registry.register_function(
         name="run_sandbox_calc",
         description="Execute AST-sandboxed Python mathematical or date calculations.",
@@ -354,7 +368,9 @@ class LexEvalExecutor:
             ).model_dump(mode="json")
             latest = list_traces(session, agent_name=lex.agent_name, task_type=task, limit=1)
             if latest:
-                out["tool_calls"] = list(latest[0].tool_calls_json or [])
+                tcalls = list(latest[0].tool_calls_json or [])
+                out["tool_calls"] = tcalls
+                out["tool_names"] = [str(tc.get("tool", "")) for tc in tcalls]
             return out
 
         if task == "invoice_extraction":
@@ -384,7 +400,9 @@ class LexEvalExecutor:
             ).model_dump(mode="json")
             latest = list_traces(session, agent_name=lex.agent_name, task_type=task, limit=1)
             if latest:
-                out["tool_calls"] = list(latest[0].tool_calls_json or [])
+                tcalls = list(latest[0].tool_calls_json or [])
+                out["tool_calls"] = tcalls
+                out["tool_names"] = [str(tc.get("tool", "")) for tc in tcalls]
             return out
 
         if task == "stock_request_triage":
@@ -400,7 +418,9 @@ class LexEvalExecutor:
             ).model_dump(mode="json")
             latest = list_traces(session, agent_name=lex.agent_name, task_type=task, limit=1)
             if latest:
-                out["tool_calls"] = list(latest[0].tool_calls_json or [])
+                tcalls = list(latest[0].tool_calls_json or [])
+                out["tool_calls"] = tcalls
+                out["tool_names"] = [str(tc.get("tool", "")) for tc in tcalls]
             return out
 
         raise ValueError(f"Unsupported Lex eval task '{task}'.")

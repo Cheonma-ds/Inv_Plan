@@ -62,6 +62,12 @@ def _is_transient_error(exc: Exception) -> bool:
     cls_name = type(exc).__name__.lower()
     if "timeout" in cls_name or "connection" in cls_name or "transport" in cls_name:
         return True
+    msg_lower = str(exc).lower()
+    if any(
+        tok in msg_lower
+        for tok in ("429", "503", "504", "resource_exhausted", "unavailable", "timed out")
+    ):
+        return True
     return False
 
 
@@ -94,7 +100,7 @@ class GeminiLLMClient:
         *,
         api_key: str | None = None,
         model_name: str | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 45.0,
         max_retries: int = 3,
         backoff_base_seconds: float = 0.5,
     ) -> None:

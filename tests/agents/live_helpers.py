@@ -1,13 +1,12 @@
 import io
 import os
 from datetime import timedelta
-from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from backend.agents.lex import LexAgent
+from backend.agents.lex import COPILOT_SYSTEM_PROMPT, LexAgent
 from backend.agents.llm_client import GeminiLLMClient
 from backend.core import clock
 from backend.core.config import settings
@@ -143,39 +142,21 @@ def build_damage_inspection_png(
     return buf.getvalue()
 
 
+class CitedMetric(BaseModel):
+    name: str
+    value: str
+
+
 class CopilotEvalResponse(BaseModel):
     """Structured response contract used to evaluate Lex on Manager Copilot queries."""
 
     answer: str
     cited_skus: list[str] = Field(default_factory=list)
     cited_po_numbers: list[str] = Field(default_factory=list)
-    cited_metrics: dict[str, Any] = Field(default_factory=dict)
+    cited_metrics: list[CitedMetric] = Field(default_factory=list)
     recommended_actions: list[str] = Field(default_factory=list)
     cannot_verify_or_missing_tools: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-COPILOT_EVAL_SYSTEM_PROMPT = """\
-You are Lex, the InvPlan AI Supply Chain Copilot assisting the Inventory Manager.
-Answer complex operational, analytical, and terminology questions accurately using ONLY
-verified data retrieved from your tools and calculations run via `run_sandbox_calc`.
-
-Rules:
-1. Always inspect live database state using your tools before quoting numbers, SKUs,
-   PO statuses, stockout runways, supplier scores, or alerts.
-2. Use `run_sandbox_calc` for multi-step math (post-withdrawal runways, comparisons, diffs).
-3. Never mutate business records, approve drafts, or fabricate numbers not backed by tools.
-   If a required lookup is unavailable via your current tools, state that clearly in
-   `cannot_verify_or_missing_tools` and `answer` instead of guessing.
-4. Know InvPlan domain definitions accurately:
-   - Daily Burn: 90-day trailing completed-IST-day EWMA (alpha = 0.30); same-day withdrawals
-     reduce On Hand and Stockout In immediately while Daily Burn stays frozen until rollover.
-   - On Hand: usable warehouse stock (excludes On Hold / quarantined stock).
-   - On Hold: quarantined units held due to 3-way invoice mismatch or damage.
-   - On Order: remaining qty across dispatched+ active POs (PENDING_DISPATCH_APPROVAL = 0).
-   - Inventory Position: On Hand + On Hold + On Order.
-   - ROP/T: Reorder Point (ROP) and Order-Up-To Target level (T), using service-level Z-factors
-     (CRITICAL=2.05, STANDARD=1.65, LOW=1.28), safety stock, and effective lead time.
-   - Stockout In urgency: compares days_to_stockout against primary effective LT +
-     comm_buffer_days + safety_days and earliest dispatched PO ETA.
-"""
+COPILOT_EVAL_SYSTEM_PROMPT = COPILOT_SYSTEM_PROMPT

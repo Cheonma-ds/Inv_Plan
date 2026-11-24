@@ -87,10 +87,11 @@ def _format_and_verify_email_body(body: str, draft_input: EmailDraftInput) -> st
         expanded.append(para)
     text = "\n\n".join(expanded)
 
-    # Currency grounding: prevent USD/$ leakage on INR POs
+    # Currency grounding: prevent USD/$ leakage on INR POs and ensure INR uses ₹
     if draft_input.currency.strip().upper() == "INR":
-        text = re.sub(r"\bUSD\s*", "INR ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bUSD\s*", "₹", text, flags=re.IGNORECASE)
         text = text.replace("$", "₹")
+        text = re.sub(r"\b(?:Rs\.?|INR)\s*(?=\d)", "₹", text, flags=re.IGNORECASE)
 
     # Bold PO number & SKU; ensure PO number is grounded if provided
     po_ref = draft_input.po_number.strip()
@@ -106,7 +107,34 @@ def _format_and_verify_email_body(body: str, draft_input: EmailDraftInput) -> st
 
     # Ensure standard sign-off block and collapse accidental triple/quadruple asterisks
     tail_lower = text.split("\n\n")[-1].lower()
-    if not any(sig in tail_lower for sig in ("best regards", "regards,", "sincerely,", "lex")):
+    has_sig = any(sig in tail_lower for sig in ("best regards", "regards,", "sincerely,", "lex"))
+
+    if (
+        draft_input.currency.strip().upper() == "INR"
+        and "₹" not in text
+        and draft_input.unit_price > 0
+        and draft_input.category
+        in {
+            EmailCategory.PO_DISPATCH,
+            EmailCategory.REVISED_PO,
+            EmailCategory.EXPEDITE_REQUEST,
+            EmailCategory.INVOICE_DISCREPANCY,
+            EmailCategory.OVERDUE_CHASE,
+        }
+    ):
+        total_val = draft_input.qty * draft_input.unit_price
+        rate_line = (
+            f"- **Order Terms:** **{draft_input.qty}** units @ "
+            f"**₹{draft_input.unit_price:,.2f}**/unit (**₹{total_val:,.2f}**)"
+        )
+        blocks = text.split("\n\n")
+        if has_sig and len(blocks) >= 2:
+            blocks.insert(-1, rate_line)
+            text = "\n\n".join(blocks)
+        else:
+            text = f"{text}\n\n{rate_line}"
+
+    if not has_sig:
         text = f"{text}\n\n{_STANDARD_SIGNATURE}"
 
     text = re.sub(r"\*{3,}", "**", text)
@@ -288,6 +316,7 @@ class LexAgent(BaseAgent):
         triage_input: StockRequestTriageInput,
         *,
         linked_comm_id: int | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> StockRequestTriageResult:
         return run_stock_request_triage(
             session,
@@ -296,6 +325,7 @@ class LexAgent(BaseAgent):
             triage_input=triage_input,
             confidence_threshold=CONFIDENCE_THRESHOLD,
             linked_comm_id=linked_comm_id,
+            tool_registry=tool_registry,
         )
 
     def draft_email(
