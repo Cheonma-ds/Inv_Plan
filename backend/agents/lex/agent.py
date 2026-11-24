@@ -104,11 +104,12 @@ def _format_and_verify_email_body(body: str, draft_input: EmailDraftInput) -> st
     if sku and sku.upper() != "GENERAL":
         text = _bold_token(text, sku)
 
-    # Ensure standard sign-off block
+    # Ensure standard sign-off block and collapse accidental triple/quadruple asterisks
     tail_lower = text.split("\n\n")[-1].lower()
     if not any(sig in tail_lower for sig in ("best regards", "regards,", "sincerely,", "lex")):
         text = f"{text}\n\n{_STANDARD_SIGNATURE}"
 
+    text = re.sub(r"\*{3,}", "**", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
@@ -366,7 +367,7 @@ class LexAgent(BaseAgent):
                 ):
                     clean_cc.append(req_p)
 
-            subject = result.subject.strip()
+            subject = re.sub(r"\*{2,}", "", result.subject).strip()
             po_ref = draft_input.po_number.strip()
             if po_ref and po_ref.upper() != "N/A" and po_ref not in subject:
                 subject = f"[{po_ref}] {subject}"

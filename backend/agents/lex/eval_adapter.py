@@ -315,6 +315,10 @@ class LexEvalExecutor:
         self.tool_registry_factory = tool_registry_factory
 
     def _resolve_registry(self, session: Session, case_input: dict[str, Any]) -> ToolRegistry:
+        # Synthetic YAML cases supply isolated open_pos / part_snapshot / po_status inputs;
+        # bind tools to those synthetic fixtures so live runs don't collide with seeded POs.
+        if any(k in case_input for k in ("open_pos", "part_snapshot", "po_status")):
+            return _build_standalone_eval_registry(case_input)
         if self.tool_registry_factory is not None:
             return self.tool_registry_factory(session)
         return _build_standalone_eval_registry(case_input)

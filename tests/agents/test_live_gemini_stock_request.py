@@ -27,7 +27,9 @@ def test_live_gemini_making_shortage_min_qty_and_po_trigger_end_to_end(seeded_se
     """Live Gemini end-to-end smoke test for Making stock request -> shortage -> min-qty -> PO."""
     part = seeded_session.scalar(select(Part).where(Part.sku == "BRG-402"))
     assert part is not None
-    assert part.on_hand_stock == 4
+    # Phase 3 seeded BRG-402 starts with healthy Oct 1 stock; lower to 4 to test shortage flow.
+    part.on_hand_stock = 4
+    seeded_session.commit()
 
     lex = LexAgent(llm_client=GeminiLLMClient(model_name=settings.gemini_model))
     engine = WorkflowEngine(lex_agent=lex)
