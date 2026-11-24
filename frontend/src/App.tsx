@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   Award,
-  Bell,
   ClipboardList,
   Mail,
   Package,
@@ -21,9 +20,8 @@ import { SuppliersPlanningPage } from './pages/SuppliersPlanningPage';
 const NAV_ITEMS: Array<{
   id: NavTab;
   label: string;
-  icon: typeof Bell;
+  icon: typeof Package;
 }> = [
-  { id: 'alerts', label: 'Actionable Alerts', icon: Bell },
   { id: 'inventory', label: 'Inventory & Parts', icon: Package },
   { id: 'pos', label: 'PO Tracker', icon: ClipboardList },
   { id: 'mailroom', label: 'Mailroom', icon: Mail },
@@ -32,7 +30,7 @@ const NAV_ITEMS: Array<{
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('alerts');
+  const [activeTab, setActiveTab] = useState<NavTab>('inventory');
   const [simNow, setSimNow] = useState<string | null>(null);
   const [openAlertsCount, setOpenAlertsCount] = useState(0);
   const [clockBusy, setClockBusy] = useState(false);
@@ -131,6 +129,7 @@ export default function App() {
       <ClockBar
         simNow={simNow}
         openAlertsCount={openAlertsCount}
+        alertsActive={activeTab === 'alerts'}
         busy={clockBusy}
         onAdvance={(p) => void handleAdvanceClock(p)}
         onResetSeed={() => void handleResetSeed()}
@@ -167,17 +166,6 @@ export default function App() {
                     <Icon className="h-4 w-4 shrink-0" />
                     {item.label}
                   </span>
-                  {item.id === 'alerts' && openAlertsCount > 0 && (
-                    <span
-                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
-                        isActive
-                          ? 'bg-white/20 text-white'
-                          : 'bg-[#C9342D]/12 text-[#B82923]'
-                      }`}
-                    >
-                      {openAlertsCount}
-                    </span>
-                  )}
                 </button>
               );
             })}
@@ -209,6 +197,10 @@ export default function App() {
                 onClearFocus={() => setFocusPartId(null)}
                 onMutated={bumpRefresh}
                 onNotify={notify}
+                onNavigatePo={(poId) => {
+                  setFocusPoId(poId);
+                  setActiveTab('pos');
+                }}
               />
             )}
 

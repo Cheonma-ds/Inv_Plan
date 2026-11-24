@@ -1,20 +1,32 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
+  Activity,
   AlertTriangle,
-  Edit3,
+  Check,
+  ExternalLink,
   Package,
   PackageMinus,
   RefreshCw,
+  RotateCcw,
   Search,
   ShoppingCart,
-  Sliders,
   Sparkles,
   X,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { PartItem, PartSupplierTerm } from '../api/types';
 import { DataTable, type ColumnDef } from '../components/DataTable';
-import { criticalityBadgeClass, formatInr, personaLabel } from '../utils/format';
+import { StockoutCycleDrawer } from '../components/StockoutCycleDrawer';
+import {
+  criticalityBadgeClass,
+  formatBurnRate,
+  formatInr,
+  formatSimDateTime,
+  personaLabel,
+  severityBadgeClass,
+  stockoutUrgencyBadgeClass,
+} from '../utils/format';
 
 interface InventoryPageProps {
   refreshNonce: number;
@@ -22,14 +34,38 @@ interface InventoryPageProps {
   onClearFocus: () => void;
   onMutated: () => void;
   onNotify: (kind: 'success' | 'error' | 'info', title: string, detail?: string) => void;
+  onNavigatePo: (poId: number) => void;
 }
 
 type ModalState =
-  | { kind: 'rop'; part: PartItem }
-  | { kind: 'demand'; part: PartItem }
   | { kind: 'withdraw'; part: PartItem }
   | { kind: 'create_po'; part: PartItem }
   | null;
+
+interface DismissedPopoverState {
+  partId: number;
+  anchorRect: DOMRect;
+}
+
+function formatTrendIndicator(trendPct: number | undefined): string {
+  if (trendPct === undefined || Number.isNaN(trendPct) || Math.abs(trendPct) < 0.5) {
+    return '0%';
+  }
+  const absRounded = Math.round(Math.abs(trendPct));
+  return trendPct > 0 ? `↑ ${absRounded}%` : `↓ ${absRounded}%`;
+}
+
+function formatStockoutDays(
+  onHand: number,
+  daysToStockout: number | null | undefined,
+): string {
+  if (onHand <= 0) return '0d';
+  if (daysToStockout === null || daysToStockout === undefined || Number.isNaN(daysToStockout)) {
+    return '—';
+  }
+  if (daysToStockout < 10) return `${daysToStockout.toFixed(1)}d`;
+  return `${Math.round(daysToStockout)}d`;
+}
 
 export function InventoryPage({
   refreshNonce,
@@ -37,6 +73,7 @@ export function InventoryPage({
   onClearFocus,
   onMutated,
   onNotify,
+  onNavigatePo,
 }: InventoryPageProps) {
   const [parts, setParts] = useState<PartItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,10 +82,16 @@ export function InventoryPage({
   const [modal, setModal] = useState<ModalState>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Form fields
-  const [ropInput, setRopInput] = useState('');
-  const [sInput, setSInput] = useState('');
-  const [demandInput, setDemandInput] = useState('');
+  // Stockout & Cycle drawer state
+  const [cyclePartId, setCyclePartId] = useState<number | null>(null);
+
+  // Unresolved dismissed alerts popover state
+  const [dismissedPopover, setDismissedPopover] = useState<DismissedPopoverState | null>(null);
+  const [busyDismissedId, setBusyDismissedId] = useState<number | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [popoverCoords, setPopoverCoords] = useState<{ top: number; left: number } | null>(null);
+
+  // Withdraw form fields
   const [withdrawQtyInput, setWithdrawQtyInput] = useState('1');
   const [withdrawNoteInput, setWithdrawNoteInput] = useState('');
 
@@ -80,19 +123,63 @@ export function InventoryPage({
     void loadParts();
   }, [loadParts, refreshNonce]);
 
+  const activePopoverPart = useMemo(() => {
+    if (!dismissedPopover) return null;
+    const found = parts.find((p) => p.part_id === dismissedPopover.partId);
+    if (!found || found.unresolved_dismissed_alerts.length === 0) return null;
+    return found;
+  }, [dismissedPopover, parts]);
+
+  useEffect(() => {
+    if (dismissedPopover && !activePopoverPart) {
+      setDismissedPopover(null);
+    }
+  }, [dismissedPopover, activePopoverPart]);
+
+  useLayoutEffect(() => {
+    if (!dismissedPopover || !activePopoverPart) {
+      setPopoverCoords(null);
+      return;
+    }
+    const { anchorRect } = dismissedPopover;
+    const el = popoverRef.current;
+    const width = el ? el.offsetWidth : 340;
+    const height = el ? el.offsetHeight : 220;
+    const pad = 12;
+
+    const left = Math.min(
+      Math.max(pad, anchorRect.left),
+      Math.max(pad, window.innerWidth - width - pad),
+    );
+    const fitsBelow = anchorRect.bottom + 8 + height <= window.innerHeight - pad;
+    const top = fitsBelow
+      ? anchorRect.bottom + 8
+      : Math.max(pad, anchorRect.top - height - 8);
+    setPopoverCoords({ top, left });
+  }, [dismissedPopover, activePopoverPart]);
+
+  useEffect(() => {
+    if (!dismissedPopover) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDismissedPopover(null);
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setDismissedPopover(null);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [dismissedPopover]);
+
   const openModal = useCallback((next: ModalState) => {
     setModal(next);
     if (!next) return;
-    if (next.kind === 'rop') {
-      setRopInput(String(next.part.rop));
-      setSInput(String(next.part.replenishment_point));
-    } else if (next.kind === 'demand') {
-      setDemandInput(
-        next.part.manual_demand_override !== null
-          ? String(next.part.manual_demand_override)
-          : '',
-      );
-    } else if (next.kind === 'withdraw') {
+    if (next.kind === 'withdraw') {
       setWithdrawQtyInput(next.part.on_hand_stock > 0 ? '1' : '0');
       setWithdrawNoteInput('');
     } else if (next.kind === 'create_po') {
@@ -123,66 +210,6 @@ export function InventoryPage({
     });
   }, [parts, search, criticality]);
 
-  const handleSubmitRop = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (modal?.kind !== 'rop') return;
-    const rop = Number.parseInt(ropInput, 10);
-    const sVal = Number.parseInt(sInput, 10);
-    if (!Number.isFinite(rop) || rop < 0 || !Number.isFinite(sVal) || sVal <= 0) {
-      onNotify('error', 'Invalid ROP/S values', 'ROP must be >= 0 and S must be > 0.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await api.updatePartRop(modal.part.part_id, rop, sVal);
-      onNotify('success', `Updated ROP/S for ${modal.part.sku}`, `ROP=${rop}, S=${sVal}`);
-      setModal(null);
-      onMutated();
-      await loadParts();
-    } catch (err) {
-      onNotify(
-        'error',
-        'Failed to update ROP/S',
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleSubmitDemand = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (modal?.kind !== 'demand') return;
-    const trimmed = demandInput.trim();
-    const overrideVal = trimmed === '' ? null : Number.parseFloat(trimmed);
-    if (overrideVal !== null && (!Number.isFinite(overrideVal) || overrideVal < 0)) {
-      onNotify('error', 'Invalid demand override', 'Enter a non-negative number or clear.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      await api.updateDemandOverride(modal.part.part_id, overrideVal);
-      onNotify(
-        'success',
-        `Demand override ${overrideVal === null ? 'cleared' : 'updated'} for ${modal.part.sku}`,
-        overrideVal === null
-          ? 'Reverted to 12-month EWMA demand forecast.'
-          : `Override set to ${overrideVal} units/day.`,
-      );
-      setModal(null);
-      onMutated();
-      await loadParts();
-    } catch (err) {
-      onNotify(
-        'error',
-        'Failed to update demand override',
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   const handleSubmitWithdraw = async (e: React.FormEvent) => {
     e.preventDefault();
     if (modal?.kind !== 'withdraw') return;
@@ -200,7 +227,7 @@ export function InventoryPage({
       onNotify(
         'success',
         `Withdrew ${qty} units of ${modal.part.sku}`,
-        `Remaining on-hand: ${res.consume.snapshot.on_hand_stock}.${poMsg}`,
+        `Remaining on hand: ${res.consume.snapshot.on_hand_stock}.${poMsg}`,
       );
       setModal(null);
       onMutated();
@@ -213,6 +240,42 @@ export function InventoryPage({
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleReopenDismissedAlert = async (alertId: number) => {
+    setBusyDismissedId(alertId);
+    try {
+      await api.reopenAlert(alertId);
+      onNotify('success', `Reopened alert #${alertId}`, 'Alert restored to Open Alerts.');
+      onMutated();
+      await loadParts();
+    } catch (err) {
+      onNotify(
+        'error',
+        'Failed to reopen alert',
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setBusyDismissedId(null);
+    }
+  };
+
+  const handleAcknowledgeDismissedAlert = async (alertId: number) => {
+    setBusyDismissedId(alertId);
+    try {
+      await api.acknowledgeDismissedAlert(alertId);
+      onNotify('info', `Acknowledged alert #${alertId}`, 'Cleared inventory warning badge.');
+      onMutated();
+      await loadParts();
+    } catch (err) {
+      onNotify(
+        'error',
+        'Failed to acknowledge dismissed alert',
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setBusyDismissedId(null);
     }
   };
 
@@ -239,7 +302,12 @@ export function InventoryPage({
     !submitting;
 
   const handleGeneratePoDraft = async () => {
-    if (modal?.kind !== 'create_po' || !selectedPoSupplier || !Number.isFinite(parsedPoQty) || parsedPoQty <= 0) {
+    if (
+      modal?.kind !== 'create_po' ||
+      !selectedPoSupplier ||
+      !Number.isFinite(parsedPoQty) ||
+      parsedPoQty <= 0
+    ) {
       return;
     }
     setPoDraftGenerating(true);
@@ -294,8 +362,12 @@ export function InventoryPage({
     }
   };
 
-  const totalQuarantined = parts.reduce((acc, p) => acc + p.quarantined_stock, 0);
+  const totalOnHold = parts.reduce((acc, p) => acc + p.quarantined_stock, 0);
   const belowRopCount = parts.filter((p) => p.inventory_position < p.rop).length;
+  const cyclePart = useMemo(
+    () => (cyclePartId !== null ? parts.find((p) => p.part_id === cyclePartId) ?? null : null),
+    [parts, cyclePartId],
+  );
 
   const columns = useMemo<ColumnDef<PartItem>[]>(
     () => [
@@ -303,44 +375,67 @@ export function InventoryPage({
         key: 'part',
         header: 'Part',
         tooltip:
-          'Unique SKU identifier, part name, and operational criticality tier. CRITICAL: essential parts with 98% target service level (Z = 2.05) and 24h supplier ack SLA. STANDARD: core production items with 95% service level (Z = 1.65) and 48h SLA. LOW: routine/non-urgent items with 90% service level (Z = 1.28).',
-        defaultWidth: 250,
-        minWidth: 180,
-        renderCell: (part) => (
-          <>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Package className="h-3.5 w-3.5 text-[#86868B] shrink-0" />
-              <span className="font-mono font-semibold text-[#1D1D1F]">{part.sku}</span>
-              <span
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${criticalityBadgeClass(
-                  part.criticality,
-                )}`}
-              >
-                {part.criticality}
-              </span>
-            </div>
-            <div className="mt-0.5 text-[#6E6E73] font-medium">{part.name}</div>
-          </>
-        ),
+          'Unique SKU identifier, part name, operational criticality tier, and warning indicator for unresolved dismissed alerts.',
+        defaultWidth: 255,
+        minWidth: 190,
+        renderCell: (part) => {
+          const dismissedCount = part.unresolved_dismissed_alerts?.length ?? 0;
+          return (
+            <>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Package className="h-3.5 w-3.5 text-[#86868B] shrink-0" />
+                <span className="font-mono font-semibold text-[#1D1D1F]">{part.sku}</span>
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${criticalityBadgeClass(
+                    part.criticality,
+                  )}`}
+                >
+                  {part.criticality}
+                </span>
+                {dismissedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setDismissedPopover((prev) =>
+                        prev?.partId === part.part_id
+                          ? null
+                          : { partId: part.part_id, anchorRect: rect },
+                      );
+                    }}
+                    title={`${dismissedCount} unresolved dismissed alert(s) — click to reopen or acknowledge`}
+                    aria-label={`${dismissedCount} unresolved dismissed alert(s) for ${part.sku}`}
+                    className="apple-press inline-flex items-center gap-1 rounded-full border border-[#B46900]/35 bg-[#B46900]/12 px-1.5 py-0.5 text-[10px] font-bold text-[#945600] hover:bg-[#B46900]/20"
+                  >
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    <span>{dismissedCount}</span>
+                  </button>
+                )}
+              </div>
+              <div className="mt-0.5 text-[#6E6E73] font-medium">{part.name}</div>
+            </>
+          );
+        },
       },
       {
         key: 'on_hand',
-        header: 'On-Hand',
+        header: 'On Hand',
         tooltip:
-          'Usable physical stock currently available in the warehouse. Excludes quarantined units awaiting invoice discrepancy resolution.',
-        defaultWidth: 105,
-        minWidth: 85,
+          'Usable physical stock currently available in the warehouse. Excludes On Hold units awaiting invoice discrepancy resolution.',
+        defaultWidth: 95,
+        minWidth: 80,
         align: 'right',
         cellClassName: 'font-semibold tabular-nums text-[#1D1D1F]',
         renderCell: (part) => part.on_hand_stock,
       },
       {
-        key: 'quarantined',
-        header: 'Quarantined',
+        key: 'on_hold',
+        header: 'On Hold',
         tooltip:
-          'Units physically received via GRN but locked out of usable On-Hand stock due to a 3-way invoice mismatch. Released once a corrected PDF invoice matches.',
-        defaultWidth: 120,
-        minWidth: 95,
+          'Units physically received via GRN but locked in quarantine due to a 3-way invoice mismatch or damage hold.',
+        defaultWidth: 95,
+        minWidth: 80,
         align: 'right',
         cellClassName: 'tabular-nums',
         renderCell: (part) =>
@@ -355,22 +450,31 @@ export function InventoryPage({
       },
       {
         key: 'on_order',
-        header: 'On-Order',
+        header: 'On Order',
         tooltip:
-          'Open replenishment quantity across active Purchase Orders (including drafts awaiting dispatch approval, net of quarantined units) to prevent duplicate POs.',
+          'Remaining quantity across dispatched+ active Purchase Orders (PENDING_DISPATCH_APPROVAL drafts contribute 0 until sent; net of GRNs received).',
         defaultWidth: 105,
         minWidth: 85,
         align: 'right',
         cellClassName: 'tabular-nums text-[#6E6E73] font-medium',
-        renderCell: (part) => part.on_order_stock,
+        renderCell: (part) => (
+          <div>
+            <div>{part.on_order_stock}</div>
+            {part.pending_dispatch_qty > 0 && (
+              <div className="text-[10px] text-[#86868B]" title="Pending dispatch approval (not counted in On Order yet)">
+                Draft {part.pending_dispatch_qty}u
+              </div>
+            )}
+          </div>
+        ),
       },
       {
         key: 'inventory_position',
         header: 'Inventory Position',
         tooltip:
-          'Total pipeline stock (On-Hand + On-Order + Quarantined) evaluated against ROP before triggering a new PO so in-flight or disputed shipments never spawn duplicate POs.',
-        defaultWidth: 150,
-        minWidth: 115,
+          'Total pipeline stock (On Hand + On Order + On Hold) evaluated against ROP before triggering replenishment.',
+        defaultWidth: 138,
+        minWidth: 110,
         align: 'right',
         cellClassName: 'tabular-nums',
         renderCell: (part) => {
@@ -383,48 +487,75 @@ export function InventoryPage({
         },
       },
       {
-        key: 'rop_s',
-        header: 'Reorder Point/Target',
+        key: 'daily_burn',
+        header: 'Daily Burn',
         tooltip:
-          'Reorder Point (ROP) trigger threshold and Order-Up-To target level (S) with target coverage days. When Inventory Position < ROP, an order of (S - Inventory Position) rounded up to MOQ is triggered.',
-        defaultWidth: 175,
-        minWidth: 135,
+          'Trailing 90-day IST completed-day EWMA burn rate (α = 0.30) with 7-day neutral trend indicator.',
+        defaultWidth: 120,
+        minWidth: 100,
         align: 'right',
-        cellClassName: 'tabular-nums text-[#1D1D1F]',
+        cellClassName: 'tabular-nums',
         renderCell: (part) => (
-          <>
-            <span className="font-semibold">{part.rop}</span>
-            <span className="text-[#86868B]">/</span>
-            <span>{part.replenishment_point}</span>
-            <div className="text-[10px] text-[#86868B]">{part.target_coverage_days}d cov</div>
-          </>
+          <div>
+            <div className="font-semibold text-[#1D1D1F]">
+              {formatBurnRate(part.daily_burn_ewma)}
+            </div>
+            <div className="text-[10px] font-medium text-[#86868B]">
+              {formatTrendIndicator(part.trend_pct)}
+            </div>
+          </div>
         ),
       },
       {
-        key: 'demand_override',
-        header: 'Demand Override',
+        key: 'stockout_in',
+        header: 'Stockout In',
         tooltip:
-          'Manual daily demand rate (units/day) overriding the automatic 12-month EWMA demand forecast. Shows Auto when statistical EWMA forecasting is active.',
-        defaultWidth: 145,
-        minWidth: 115,
+          'Estimated runway until stockout vs. primary supplier effective lead time + communication buffer. Click to inspect 90-day stockout & replenishment cycle chart.',
+        defaultWidth: 118,
+        minWidth: 96,
         align: 'right',
         cellClassName: 'tabular-nums',
-        renderCell: (part) =>
-          part.manual_demand_override !== null ? (
-            <span className="rounded-full bg-[#0066CC]/10 border border-[#0066CC]/22 px-2 py-0.5 font-semibold text-[#0058B3]">
-              {part.manual_demand_override}/d
-            </span>
-          ) : (
-            <span className="text-[#86868B]">Auto</span>
-          ),
+        renderCell: (part) => (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setCyclePartId(part.part_id);
+            }}
+            title="Inspect 90-day stockout & replenishment cycle chart"
+            className={`apple-press inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-semibold cursor-pointer ${stockoutUrgencyBadgeClass(
+              part.stockout_urgency,
+            )}`}
+          >
+            <Activity className="h-3 w-3 shrink-0" />
+            <span>{formatStockoutDays(part.on_hand_stock, part.days_to_stockout)}</span>
+          </button>
+        ),
+      },
+      {
+        key: 'rop_t',
+        header: 'ROP/T',
+        tooltip:
+          'Dynamic Reorder Point (ROP) and Order-Up-To Target level (T) derived from daily EWMA (α = 0.30), demand variance, and effective lead time.',
+        defaultWidth: 110,
+        minWidth: 90,
+        align: 'right',
+        cellClassName: 'tabular-nums text-[#1D1D1F]',
+        renderCell: (part) => (
+          <span>
+            <span className="font-semibold">{part.rop}</span>
+            <span className="text-[#86868B]">/</span>
+            <span>{part.replenishment_point}</span>
+          </span>
+        ),
       },
       {
         key: 'suppliers',
         header: 'Primary & Backup Suppliers',
         tooltip:
-          'Ranked Primary (1°) and Backup (2°) suppliers for this SKU, displaying agreed unit price, observed effective lead time vs. quoted lead time, and Minimum Order Quantity (MOQ).',
-        defaultWidth: 360,
-        minWidth: 220,
+          'Ranked Primary (1°) and Backup (2°) suppliers displaying unit price, effective lead time vs. quoted lead time, and MOQ.',
+        defaultWidth: 340,
+        minWidth: 215,
         cellClassName: 'space-y-1 tabular-nums',
         renderCell: (part) => {
           const primary = part.suppliers.find((s) => s.supplier_rank === 1);
@@ -457,15 +588,18 @@ export function InventoryPage({
         key: 'actions',
         header: 'Actions',
         tooltip:
-          'SKU controls: withdraw stock, create a manual PO with Lex draft assistance, adjust Reorder Point/Order-Up-To (ROP/S) parameters, or set a manual daily demand override.',
-        defaultWidth: 260,
-        minWidth: 220,
+          'Withdraw stock, view an active Purchase Order in PO Tracker, or create a manual Purchase Order when no active PO is open.',
+        defaultWidth: 205,
+        minWidth: 180,
         align: 'right',
         renderCell: (part) => (
           <div className="inline-flex flex-wrap justify-end gap-1.5">
             <button
               type="button"
-              onClick={() => openModal({ kind: 'withdraw', part })}
+              onClick={(e) => {
+                e.stopPropagation();
+                openModal({ kind: 'withdraw', part });
+              }}
               disabled={part.on_hand_stock <= 0}
               className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD] disabled:opacity-40"
               title="Withdraw stock"
@@ -473,39 +607,41 @@ export function InventoryPage({
               <PackageMinus className="h-3 w-3 text-[#6E6E73]" />
               Withdraw
             </button>
-            <button
-              type="button"
-              onClick={() => openModal({ kind: 'create_po', part })}
-              disabled={part.suppliers.length === 0}
-              className="apple-press inline-flex items-center gap-1 rounded-lg border border-[#0066CC]/30 bg-[#0066CC]/[0.06] px-2.5 py-1 text-xs font-semibold text-[#0058B3] hover:bg-[#0066CC]/[0.12] disabled:opacity-40"
-              title="Create manual Purchase Order"
-            >
-              <ShoppingCart className="h-3 w-3" />
-              Create PO
-            </button>
-            <button
-              type="button"
-              onClick={() => openModal({ kind: 'rop', part })}
-              className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-              title="Edit ROP/S"
-            >
-              <Edit3 className="h-3 w-3 text-[#6E6E73]" />
-              ROP/S
-            </button>
-            <button
-              type="button"
-              onClick={() => openModal({ kind: 'demand', part })}
-              className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.10] bg-white px-2.5 py-1 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-              title="Manual daily demand override"
-            >
-              <Sliders className="h-3 w-3 text-[#6E6E73]" />
-              Demand
-            </button>
+            {part.active_po_id !== null ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (part.active_po_id !== null) {
+                    onNavigatePo(part.active_po_id);
+                  }
+                }}
+                className="apple-press inline-flex items-center gap-1 rounded-lg border border-[#5E5CE6]/30 bg-[#5E5CE6]/[0.07] px-2.5 py-1 text-xs font-semibold text-[#4B48C4] hover:bg-[#5E5CE6]/[0.14]"
+                title={`View ${part.active_po_number ?? 'active PO'} (${part.active_po_status ?? 'OPEN'}) in PO Tracker`}
+              >
+                <ExternalLink className="h-3 w-3" />
+                View PO
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openModal({ kind: 'create_po', part });
+                }}
+                disabled={part.suppliers.length === 0}
+                className="apple-press inline-flex items-center gap-1 rounded-lg border border-[#0066CC]/30 bg-[#0066CC]/[0.06] px-2.5 py-1 text-xs font-semibold text-[#0058B3] hover:bg-[#0066CC]/[0.12] disabled:opacity-40"
+                title="Create manual Purchase Order"
+              >
+                <ShoppingCart className="h-3 w-3" />
+                Create PO
+              </button>
+            )}
           </div>
         ),
       },
     ],
-    [openModal],
+    [openModal, onNavigatePo],
   );
 
   return (
@@ -514,7 +650,7 @@ export function InventoryPage({
         <div>
           <h1 className="text-xl font-bold tracking-tight text-[#1D1D1F]">Inventory &amp; Parts</h1>
           <p className="text-sm text-[#6E6E73]">
-            15-SKU live stock ledger, inventory position (On-Hand + On-Order + Quarantined), ROP/S, and supplier terms. Withdraw stock, create manual POs, or route Making Team requests via Mailroom.
+            15-SKU live stock ledger with On Hand, On Hold, On Order, EWMA Daily Burn (α = 0.30), supplier-aware Stockout In runway, and dynamic ROP/T.
           </p>
         </div>
 
@@ -524,8 +660,8 @@ export function InventoryPage({
             <span className="font-bold text-[#B82923]">{belowRopCount}</span>
           </div>
           <div className="rounded-full border border-black/[0.08] bg-white px-3.5 py-1.5 shadow-2xs">
-            <span className="text-[#6E6E73]">Quarantined Units:</span>{' '}
-            <span className="font-bold text-[#945600]">{totalQuarantined}</span>
+            <span className="text-[#6E6E73]">On Hold Units:</span>{' '}
+            <span className="font-bold text-[#945600]">{totalOnHold}</span>
           </div>
           <button
             type="button"
@@ -580,12 +716,132 @@ export function InventoryPage({
         loading={loading}
         maxHeight="calc(100vh - 280px)"
         emptyMessage="No parts match the current filter."
+        onRowClick={(part) => setCyclePartId(part.part_id)}
         rowClassName={(part) => {
           const isBelowRop = part.inventory_position < part.rop;
           const isFocused = focusPartId === part.part_id;
           if (isFocused) return 'bg-[#0066CC]/[0.07]';
           if (isBelowRop) return 'bg-[#C9342D]/[0.03] hover:bg-[#C9342D]/[0.06]';
           return 'hover:bg-black/[0.02]';
+        }}
+      />
+
+      {/* Interactive Popover for Unresolved Dismissed Alerts */}
+      {dismissedPopover &&
+        activePopoverPart &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            role="dialog"
+            aria-label={`Unresolved dismissed alerts for ${activePopoverPart.sku}`}
+            style={{
+              position: 'fixed',
+              top: popoverCoords
+                ? `${popoverCoords.top}px`
+                : `${dismissedPopover.anchorRect.bottom + 8}px`,
+              left: popoverCoords
+                ? `${popoverCoords.left}px`
+                : `${Math.max(12, dismissedPopover.anchorRect.left)}px`,
+              opacity: popoverCoords ? 1 : 0,
+            }}
+            className="z-50 w-[360px] max-w-[calc(100vw-24px)] rounded-2xl border border-black/[0.12] bg-white/96 p-4 shadow-[0_14px_38px_rgba(0,0,0,0.16)] backdrop-blur-xl space-y-3"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-black/[0.06] pb-2">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-[#945600]">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Unresolved Dismissed Alert
+                  {activePopoverPart.unresolved_dismissed_alerts.length > 1 ? 's' : ''} ·{' '}
+                  <span className="font-mono">{activePopoverPart.sku}</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label="Close dismissed alerts popover"
+                onClick={() => setDismissedPopover(null)}
+                className="apple-press rounded-full p-1 text-[#86868B] hover:bg-black/[0.05] hover:text-[#1D1D1F]"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="max-h-72 space-y-2.5 overflow-y-auto pr-0.5">
+              {activePopoverPart.unresolved_dismissed_alerts.map((alert) => {
+                const isBusy = busyDismissedId === alert.id;
+                return (
+                  <div
+                    key={alert.id}
+                    className="rounded-xl border border-black/[0.08] bg-[#FBFBFD] p-3 text-xs space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${severityBadgeClass(
+                          alert.severity,
+                        )}`}
+                      >
+                        {alert.severity}
+                      </span>
+                      <span className="text-[10px] text-[#86868B] tabular-nums">
+                        {formatSimDateTime(alert.created_at)}
+                      </span>
+                    </div>
+                    <div className="font-semibold text-[#1D1D1F]">{alert.title}</div>
+                    <p className="text-[11px] leading-relaxed text-[#6E6E73]">{alert.summary}</p>
+                    <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void handleReopenDismissedAlert(alert.id)}
+                        className="apple-press inline-flex items-center gap-1 rounded-lg bg-[#0066CC] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        Reopen Alert
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void handleAcknowledgeDismissedAlert(alert.id)}
+                        className="apple-press inline-flex items-center gap-1 rounded-lg border border-black/[0.12] bg-white px-2.5 py-1 text-[11px] font-medium text-[#1D1D1F] hover:bg-black/[0.03] disabled:opacity-45"
+                      >
+                        <Check className="h-3 w-3 text-[#1B6B43]" />
+                        Acknowledge
+                      </button>
+                      {alert.po_id !== null && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDismissedPopover(null);
+                            if (alert.po_id !== null) onNavigatePo(alert.po_id);
+                          }}
+                          className="apple-press inline-flex items-center gap-1 rounded-lg border border-[#5E5CE6]/28 bg-[#5E5CE6]/[0.07] px-2 py-1 text-[11px] font-semibold text-[#4B48C4] hover:bg-[#5E5CE6]/[0.14]"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          View PO
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {/* 90-Day Stockout & Cycle Analytics Drawer */}
+      <StockoutCycleDrawer
+        partId={cyclePartId}
+        activePoId={cyclePart?.active_po_id}
+        activePoNumber={cyclePart?.active_po_number}
+        refreshNonce={refreshNonce}
+        onClose={() => setCyclePartId(null)}
+        onNavigatePo={onNavigatePo}
+        onCreatePo={(id) => {
+          const target = parts.find((p) => p.part_id === id);
+          if (target && target.active_po_id === null) {
+            openModal({ kind: 'create_po', part: target });
+          }
         }}
       />
 
@@ -599,13 +855,9 @@ export function InventoryPage({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h2 className="text-base font-bold tracking-tight text-[#1D1D1F]">
-                  {modal.kind === 'rop'
-                    ? `Edit ROP/S — ${modal.part.sku}`
-                    : modal.kind === 'demand'
-                      ? `Demand Override — ${modal.part.sku}`
-                      : modal.kind === 'withdraw'
-                        ? `Withdraw Stock — ${modal.part.sku}`
-                        : `Create PO — ${modal.part.sku}`}
+                  {modal.kind === 'withdraw'
+                    ? `Withdraw Stock — ${modal.part.sku}`
+                    : `Create PO — ${modal.part.sku}`}
                 </h2>
                 <p className="text-xs text-[#6E6E73] mt-0.5">{modal.part.name}</p>
               </div>
@@ -618,60 +870,10 @@ export function InventoryPage({
               </button>
             </div>
 
-            {modal.kind === 'rop' && (
-              <form onSubmit={handleSubmitRop} className="mt-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                      Reorder Point (ROP)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      value={ropInput}
-                      onChange={(e) => setRopInput(e.target.value)}
-                      required
-                      className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                      Order-Up-To (S)
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={sInput}
-                      onChange={(e) => setSInput(e.target.value)}
-                      required
-                      className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setModal(null)}
-                    className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
-                  >
-                    {submitting ? 'Saving...' : 'Save ROP/S'}
-                  </button>
-                </div>
-              </form>
-            )}
-
             {modal.kind === 'withdraw' && (
               <form onSubmit={handleSubmitWithdraw} className="mt-4 space-y-3">
                 <div className="rounded-xl bg-[#FBFBFD] border border-black/[0.06] px-3 py-2 text-xs text-[#6E6E73] flex items-center justify-between">
-                  <span>Available On-Hand Stock:</span>
+                  <span>Available On Hand Stock:</span>
                   <span className="font-bold text-[#1D1D1F] tabular-nums">
                     {modal.part.on_hand_stock} units
                   </span>
@@ -779,11 +981,18 @@ export function InventoryPage({
                           </div>
                           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-[#6E6E73] tabular-nums">
                             <span>
-                              Lead Time: <strong className="text-[#1D1D1F]">{sup.effective_lead_time_days.toFixed(1)}d eff</strong> (quoted {sup.quoted_lead_time_days}d)
+                              Lead Time:{' '}
+                              <strong className="text-[#1D1D1F]">
+                                {sup.effective_lead_time_days.toFixed(1)}d eff
+                              </strong>{' '}
+                              (quoted {sup.quoted_lead_time_days}d)
                             </span>
                             {sup.estimated_arrival_date && (
                               <span>
-                                Est. Arrival: <strong className="text-[#1D1D1F]">{sup.estimated_arrival_date}</strong>
+                                Est. Arrival:{' '}
+                                <strong className="text-[#1D1D1F]">
+                                  {sup.estimated_arrival_date}
+                                </strong>
                               </span>
                             )}
                             <span>MOQ: {sup.moq}</span>
@@ -852,7 +1061,13 @@ export function InventoryPage({
                 {poDraftReady && (
                   <div className="space-y-2.5 rounded-xl border border-[#0066CC]/25 bg-[#0066CC]/[0.03] p-3">
                     <div className="text-[11px] font-medium text-[#6E6E73]">
-                      To: <strong className="text-[#1D1D1F]">{selectedPoSupplier?.supplier_persona ? personaLabel(selectedPoSupplier.supplier_persona) : selectedPoSupplier?.supplier_name}</strong> · CC: <strong className="text-[#1D1D1F]">Lex (AI Agent), Inventory Manager</strong>
+                      To:{' '}
+                      <strong className="text-[#1D1D1F]">
+                        {selectedPoSupplier?.supplier_persona
+                          ? personaLabel(selectedPoSupplier.supplier_persona)
+                          : selectedPoSupplier?.supplier_name}
+                      </strong>{' '}
+                      · CC: <strong className="text-[#1D1D1F]">Lex (AI Agent), Inventory Manager</strong>
                     </div>
                     <div>
                       <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
@@ -896,55 +1111,6 @@ export function InventoryPage({
                   >
                     {submitting ? 'Creating PO...' : 'Create PO'}
                   </button>
-                </div>
-              </form>
-            )}
-
-            {modal.kind === 'demand' && (
-              <form onSubmit={handleSubmitDemand} className="mt-4 space-y-3">
-                <p className="text-xs text-[#6E6E73]">
-                  Set an additive/override daily demand rate (units/day) for planning calculations, or leave blank to revert to EWMA forecast.
-                </p>
-                <div>
-                  <label className="block text-xs font-semibold text-[#1D1D1F] mb-1">
-                    Manual Daily Demand (units/day)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min={0}
-                    placeholder="Blank = auto EWMA"
-                    value={demandInput}
-                    onChange={(e) => setDemandInput(e.target.value)}
-                    className="w-full rounded-xl border border-black/[0.12] px-3 py-2 text-sm text-[#1D1D1F] tabular-nums focus:border-[#0066CC] focus:outline-none"
-                  />
-                </div>
-
-                <div className="flex justify-between gap-2 pt-2">
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => setDemandInput('')}
-                    className="apple-press rounded-xl border border-black/[0.10] px-3 py-2 text-xs font-medium text-[#6E6E73] hover:bg-[#FBFBFD]"
-                  >
-                    Clear Override
-                  </button>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setModal(null)}
-                      className="apple-press rounded-xl border border-black/[0.10] px-3.5 py-2 text-xs font-medium text-[#1D1D1F] hover:bg-[#FBFBFD]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="apple-press rounded-xl bg-[#0066CC] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0071E3] disabled:opacity-45"
-                    >
-                      {submitting ? 'Saving...' : 'Save Override'}
-                    </button>
-                  </div>
                 </div>
               </form>
             )}

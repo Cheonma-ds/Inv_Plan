@@ -21,6 +21,7 @@ import type {
   POListItem,
 } from '../api/types';
 import { DataTable, type ColumnDef } from '../components/DataTable';
+import { FormattedEmailBody } from '../components/FormattedEmailBody';
 import { OrderTrackingStepper } from '../components/OrderTrackingStepper';
 import { ProcurementEscalationModal } from '../components/ProcurementEscalationModal';
 import {
@@ -920,7 +921,7 @@ export function POTrackerPage({
                             </div>
                           </div>
                           <div className="font-semibold text-[#1D1D1F]">{c.subject}</div>
-                          <p className="whitespace-pre-wrap text-[#6E6E73]">{c.body}</p>
+                          <FormattedEmailBody body={c.body} className="text-[#3A3A3C]" />
                           <div className="text-[11px] text-[#86868B] tabular-nums">
                             {formatSimDateTime(c.timestamp)}
                             {c.attachment_paths && c.attachment_paths.length > 0

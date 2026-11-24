@@ -2,15 +2,17 @@ export function formatSimDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString('en-US', {
-    timeZone: 'UTC',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }) + ' UTC';
+  return (
+    d.toLocaleString('en-US', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }) + ' IST'
+  );
 }
 
 export function formatSimDate(iso: string | null | undefined): string {
@@ -18,11 +20,29 @@ export function formatSimDate(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('en-US', {
-    timeZone: 'UTC',
+    timeZone: 'Asia/Kolkata',
     year: 'numeric',
     month: 'short',
-    day: '2-digit',
+    day: 'numeric',
   });
+}
+
+export function formatBurnRate(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined || Number.isNaN(rate)) return '—';
+  if (rate <= 0) return '0/day';
+  return rate >= 1 ? `${Math.round(rate)}/day` : `${rate.toFixed(1)}/day`;
+}
+
+export function stockoutUrgencyBadgeClass(urgency: string | null | undefined): string {
+  switch (urgency) {
+    case 'CRITICAL':
+      return 'bg-[#C9342D]/10 text-[#B82923] border-[#C9342D]/25 hover:bg-[#C9342D]/16';
+    case 'WARNING':
+      return 'bg-[#B46900]/10 text-[#945600] border-[#B46900]/25 hover:bg-[#B46900]/16';
+    case 'HEALTHY':
+    default:
+      return 'bg-[#1F7A4D]/10 text-[#1B6B43] border-[#1F7A4D]/22 hover:bg-[#1F7A4D]/16';
+  }
 }
 
 export function formatInr(value: number | null | undefined): string {

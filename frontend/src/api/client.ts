@@ -6,6 +6,7 @@ import type {
   AutonomyPolicyItem,
   ClockResponse,
   ConsumeResponse,
+  CycleAnalyticsResult,
   EscalateProcurementResponse,
   EvalRunReport,
   EvalSuiteMetadata,
@@ -15,6 +16,7 @@ import type {
   ObservabilityStatusResponse,
   PODetail,
   POListItem,
+  POSuggestionResult,
   PartItem,
   PartSnapshot,
   PersonaKey,
@@ -103,9 +105,23 @@ export const api = {
     }),
   dismissAlert: (actionItemId: number) =>
     jsonPost<{ id: number; status: string }>(`/api/alerts/${actionItemId}/dismiss`),
+  reopenAlert: (actionItemId: number) =>
+    jsonPost<{ id: number; status: string }>(`/api/alerts/${actionItemId}/reopen`),
+  acknowledgeDismissedAlert: (actionItemId: number) =>
+    jsonPost<{ id: number; status: string; dismiss_resolved_at: string | null }>(
+      `/api/alerts/${actionItemId}/acknowledge-dismissed`,
+    ),
 
   // Parts / Inventory
   listParts: () => requestJson<PartItem[]>('/api/parts'),
+  getPartCycleAnalytics: (partId: number) =>
+    requestJson<CycleAnalyticsResult>(`/api/parts/${partId}/cycle-analytics`),
+  getPartPoSuggestion: (partId: number, supplierId?: number) =>
+    requestJson<POSuggestionResult>(
+      supplierId !== undefined
+        ? `/api/parts/${partId}/po-suggestion?supplier_id=${encodeURIComponent(String(supplierId))}`
+        : `/api/parts/${partId}/po-suggestion`,
+    ),
   consumeStock: (partId: number, qty: number, note: string) =>
     jsonPost<ConsumeResponse>(`/api/parts/${partId}/consume`, { qty, note }),
   updatePartRop: (partId: number, rop: number, replenishmentPoint: number) =>

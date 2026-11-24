@@ -65,6 +65,7 @@ export interface AlertItem {
   cta_payload: Record<string, unknown>;
   created_at: string;
   resolved_at: string | null;
+  dismiss_resolved_at?: string | null;
 }
 
 export interface PartSupplierTerm {
@@ -79,9 +80,21 @@ export interface PartSupplierTerm {
   reliability_score?: number | null;
   otd_rate?: number | null;
   response_rate?: number | null;
+  avg_response_days?: number | null;
   invoice_accuracy_rate?: number | null;
   estimated_arrival_date?: string | null;
   latest_memory_note?: string | null;
+}
+
+export interface UnresolvedDismissedAlert {
+  id: number;
+  type: string;
+  severity: string;
+  title: string;
+  summary: string;
+  po_id: number | null;
+  created_at: string;
+  resolved_at: string | null;
 }
 
 export interface ManualPODraftResponse {
@@ -112,10 +125,118 @@ export interface PartSnapshot {
   replenishment_point: number;
   target_coverage_days: number;
   manual_demand_override: number | null;
+  active_po_id: number | null;
+  active_po_number: string | null;
+  active_po_status: string | null;
+  pending_dispatch_qty: number;
+  unresolved_dismissed_alerts: UnresolvedDismissedAlert[];
 }
 
 export interface PartItem extends PartSnapshot {
+  daily_burn_ewma?: number;
+  daily_burn_prev_7d?: number;
+  trend_pct?: number;
+  days_to_stockout?: number | null;
+  predicted_stockout_date?: string | null;
+  stockout_urgency?: 'CRITICAL' | 'WARNING' | 'HEALTHY' | string;
+  comm_buffer_days?: number;
+  primary_effective_lt?: number;
   suppliers: PartSupplierTerm[];
+}
+
+export interface PartPlanningMetrics {
+  part_id: number;
+  sku: string;
+  daily_burn_ewma: number;
+  daily_burn_prev_7d: number;
+  trend_pct: number;
+  daily_demand_std: number;
+  is_intermittent: boolean;
+  days_to_stockout: number | null;
+  predicted_stockout_date: string | null;
+  stockout_urgency: 'CRITICAL' | 'WARNING' | 'HEALTHY' | string;
+  comm_buffer_days: number;
+  primary_supplier_id: number | null;
+  primary_supplier_name: string | null;
+  primary_quoted_lt: number;
+  primary_effective_lt: number;
+  primary_lead_time_std: number;
+  primary_avg_response_days: number;
+  primary_response_rate: number;
+  safety_stock: number;
+  safety_days: number;
+  urgent_threshold_days: number;
+  warning_threshold_days: number;
+  earliest_po_eta: string | null;
+}
+
+export interface POSuggestionResult {
+  part_id: number;
+  sku: string;
+  supplier_id: number;
+  supplier_name: string;
+  supplier_rank: number;
+  moq: number;
+  unit_price: number;
+  currency: string;
+  quoted_lead_time_days: number;
+  effective_lead_time_days: number;
+  lead_time_std_dev: number;
+  avg_response_days: number;
+  comm_buffer_days: number;
+  daily_burn_ewma: number;
+  effective_daily_demand: number;
+  inventory_position: number;
+  safety_stock: number;
+  rop_for_supplier: number;
+  target_stock_t: number;
+  suggested_qty: number;
+  reasoning: string;
+}
+
+export interface DailyStockPoint {
+  date: string;
+  consumption: number;
+  receipt: number;
+  closing_on_hand: number;
+  is_today: boolean;
+}
+
+export interface CycleEventMarker {
+  date: string;
+  event_type: 'STOCKOUT' | 'LOW_STOCK' | 'PO_PLACED' | 'REPLENISHMENT' | string;
+  label: string;
+  po_number: string | null;
+  supplier_name: string | null;
+  qty: number | null;
+  actual_lt_days: number | null;
+  on_hand: number | null;
+}
+
+export interface ProjectedStockPoint {
+  date: string;
+  projected_on_hand: number;
+  event_note: string | null;
+}
+
+export interface CycleAnalyticsResult {
+  part_id: number;
+  sku: string;
+  part_name: string;
+  criticality: string;
+  on_hand_stock: number;
+  quarantined_stock: number;
+  on_order_stock: number;
+  inventory_position: number;
+  rop: number;
+  replenishment_point: number;
+  target_coverage_days: number;
+  ewma_alpha: number;
+  metrics: PartPlanningMetrics;
+  po_suggestion: POSuggestionResult | null;
+  history: DailyStockPoint[];
+  events: CycleEventMarker[];
+  projected: ProjectedStockPoint[];
 }
 
 export interface ConsumeResponse {

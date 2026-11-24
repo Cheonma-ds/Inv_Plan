@@ -4,6 +4,7 @@ import { formatSimDateTime } from '../utils/format';
 interface ClockBarProps {
   simNow: string | null;
   openAlertsCount: number;
+  alertsActive?: boolean;
   busy: boolean;
   onAdvance: (params: { days?: number; hours?: number }) => void;
   onResetSeed: () => void;
@@ -13,6 +14,7 @@ interface ClockBarProps {
 export function ClockBar({
   simNow,
   openAlertsCount,
+  alertsActive = false,
   busy,
   onAdvance,
   onResetSeed,
@@ -74,15 +76,34 @@ export function ClockBar({
           <button
             type="button"
             onClick={onGoToAlerts}
-            className="apple-press inline-flex items-center gap-2 rounded-full border border-black/[0.08] bg-white/90 px-3.5 py-1.5 text-xs font-medium text-[#1D1D1F] hover:bg-white shadow-2xs"
+            aria-current={alertsActive ? 'page' : undefined}
+            className={`apple-press inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs shadow-2xs ${
+              alertsActive
+                ? 'border-[#0066CC] bg-[#0066CC] font-semibold text-white shadow-[0_1px_4px_rgba(0,102,204,0.3)]'
+                : openAlertsCount > 0
+                  ? 'border-[#C9342D]/35 bg-[#C9342D]/[0.07] font-semibold text-[#B82923] hover:bg-[#C9342D]/[0.12]'
+                  : 'border-black/[0.08] bg-white/90 font-medium text-[#1D1D1F] hover:bg-white'
+            }`}
           >
-            <Bell className="h-3.5 w-3.5 text-[#6E6E73]" />
+            <Bell
+              className={`h-3.5 w-3.5 ${
+                alertsActive
+                  ? 'text-white'
+                  : openAlertsCount > 0
+                    ? 'text-[#C9342D]'
+                    : 'text-[#6E6E73]'
+              }`}
+            />
             <span>Open Alerts</span>
             <span
               className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${
-                openAlertsCount > 0
-                  ? 'bg-[#C9342D] text-white'
-                  : 'bg-black/[0.06] text-[#6E6E73]'
+                alertsActive
+                  ? openAlertsCount > 0
+                    ? 'bg-white text-[#B82923]'
+                    : 'bg-white/20 text-white'
+                  : openAlertsCount > 0
+                    ? 'bg-[#C9342D] text-white'
+                    : 'bg-black/[0.06] text-[#6E6E73]'
               }`}
             >
               {openAlertsCount}

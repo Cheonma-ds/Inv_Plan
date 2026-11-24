@@ -1,6 +1,6 @@
 # STATUS_P3.md — Phase 3 Live Session Baton
 
-**Current Stage:** **Slice P3-5 Complete** — Ready to Start **Slice P3-6**  
+**Current Stage:** **Slice P3-6 Complete** — Ready to Start **Slice P3-7**  
 **Last Updated:** 2026-11-24  
 **Baseline Reference:** `HEAD` (`099474f`), [`STATUS.md`](../../STATUS.md), [`STATUS_P2.md`](../phase2/STATUS_P2.md)  
 **Planning Docs:** [`PRD_P3.md`](PRD_P3.md) · [`DESIGN_P3.md`](DESIGN_P3.md) · [`SLICES_P3.md`](SLICES_P3.md)
@@ -14,7 +14,7 @@
 - [x] **Slice P3-3:** Alerting Overhaul (`Edit PO`, Non-Resolving `Reject`, `DISMISSED` Hiding + Inventory Warning) & `ROP/T` Sweep
 - [x] **Slice P3-4:** Lex Resilience (Retries/Fallbacks), Multimodal Image Triage & Enforced Email Formatting
 - [x] **Slice P3-5:** Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory Alerts
-- [ ] **Slice P3-6:** Frontend Core (IST Clock, Sidebar Cleanup, `FormattedEmailBody`, `InventoryPage` Revamp & `StockoutCycleDrawer`)
+- [x] **Slice P3-6:** Frontend Core (IST Clock, Sidebar Cleanup, `FormattedEmailBody`, `InventoryPage` Revamp & `StockoutCycleDrawer`)
 - [ ] **Slice P3-7:** Frontend `CreateEditPOModal` (Suggested Qty + Reasoning), `AlertsPage`, `SuppliersPlanningPage` & `AIHealthPage` Traces
 - [ ] **Slice P3-8:** Full Phase 3 E2E Verification, Live Gemini Eval Sweep & Documentation Parity Gate
 
@@ -102,17 +102,32 @@
 
 ---
 
-## Next Session Handoff Prompt — Start Slice `P3-6`
+## Completed Slice Summary — `P3-6`
 
-> Implement **Slice P3-6** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md` (§5.3, §3.2–§3.3):
-> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-6)`, and target frontend files: `frontend/src/{App.tsx,api/types.ts,api/client.ts,utils/format.ts,components/ClockBar.tsx}`, `frontend/src/pages/{InventoryPage,MailroomPage,POTrackerPage}.tsx`.
-> - **Leave Untouched:** `backend/`, `frontend/src/pages/SuppliersPlanningPage.tsx`, `frontend/src/pages/AIHealthPage.tsx`, `frontend/src/pages/AlertsPage.tsx` (modal/page updates for Alerts/Suppliers/AIHealth belong to `P3-7`).
+- **Files Added:**
+  - `frontend/src/components/FormattedEmailBody.tsx` (safe React Markdown-lite renderer supporting blank-line separated paragraphs, `- ` / bullet lists, and inline `**bold**` spans while stripping any stray `**` markers).
+  - `frontend/src/components/StockoutCycleDrawer.tsx` (portaled slide-over analytics drawer backed by `GET /api/parts/{part_id}/cycle-analytics` and `GET /api/parts/{part_id}/po-suggestion`; renders 90-day SVG stock trajectory + consumption bars + projection line + `STOCKOUT`/`LOW_STOCK`/`PO_PLACED`/`REPLENISHMENT` markers with actual LT, predicted stockout date in IST, primary effective LT + communication delay buffer, `EWMA α = 0.30` note, and recommended PO quantity + reasoning).
+- **Files Modified:**
+  - `frontend/src/utils/format.ts` (`formatSimDateTime` and `formatSimDate` updated to `Asia/Kolkata` / `IST`; added `formatBurnRate` and `stockoutUrgencyBadgeClass`).
+  - `frontend/src/api/types.ts` & `frontend/src/api/client.ts` (added Phase 3 `PartSnapshot`/`PartItem` burn/runway/active-PO/`unresolved_dismissed_alerts` types, `CycleAnalyticsResult`, `POSuggestionResult`, `AlertItem.dismiss_resolved_at`, and `getPartCycleAnalytics`, `getPartPoSuggestion`, `reopenAlert`, `acknowledgeDismissedAlert` helpers).
+  - `frontend/src/components/ClockBar.tsx` & `frontend/src/App.tsx` (removed duplicate `Actionable Alerts` entry from sidebar `NAV_ITEMS`, defaulted `activeTab` to `'inventory'`, highlighted `Open Alerts` pill in `ClockBar` when open alerts exist or Alerts view is active, and wired `onNavigatePo` into `InventoryPage`).
+  - `frontend/src/pages/MailroomPage.tsx` & `frontend/src/pages/POTrackerPage.tsx` (wired `FormattedEmailBody` into message threads and PO linked email threads while keeping editable draft `<textarea>` fields as plain Markdown).
+  - `frontend/src/pages/InventoryPage.tsx` (updated table columns to `On Hand`, `On Hold`, `On Order`, `Inventory Position`, `Daily Burn` with neutral-grey trend %, clickable `Stockout In` urgency badge, and `ROP/T` without `30d cov`; removed `Demand Override`, `Edit ROP/S`, and `Demand` actions/modals; dynamically swapped `[Create PO]` ↔ `[View PO]` jumping straight into `POTrackerPage` PO drawer; added `unresolved_dismissed_alerts` warning badge with portaled interactive `[Reopen Alert]` / `[Acknowledge]` popover; preserved existing `[Create PO]` flow until `P3-7`).
+- **Verification:** `cd frontend && npm run build` (`tsc -b && vite build`, `✓ built in 1.73s`, 0 TypeScript/Vite errors); `uv run pytest` (`138 passed, 8 skipped` — 8 live-Gemini tests skipped offline) and `uv run ruff check backend tests` (`All checks passed!`). `backend/`, `SuppliersPlanningPage.tsx`, `AIHealthPage.tsx`, and `AlertsPage.tsx` left untouched.
+
+---
+
+## Next Session Handoff Prompt — Start Slice `P3-7`
+
+> Implement **Slice P3-7** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
+> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-7)`, and target frontend files: `frontend/src/api/{types,client}.ts`, `frontend/src/components/FormattedEmailBody.tsx`, and `frontend/src/pages/{InventoryPage,AlertsPage,POTrackerPage,SuppliersPlanningPage,AIHealthPage}.tsx`.
+> - **Leave Untouched:** `backend/` (all Phase 3 backend APIs are already implemented and verified).
 > - **Acceptance Criteria:**
->   1. Update `formatSimDateTime` / `formatSimDate` in `frontend/src/utils/format.ts` to render in `Asia/Kolkata` (`IST`), remove the duplicate `Actionable Alerts` sidebar nav entry in `frontend/src/App.tsx`, highlight the `Open Alerts` pill in `ClockBar.tsx` when open alerts exist, and wire `onNavigatePo` into `InventoryPage`.
->   2. Create `frontend/src/components/FormattedEmailBody.tsx` to cleanly render `**bold**` spans, `- ` bullets, and blank-line paragraphs (no raw `**` markers shown), and wire it into `MailroomPage.tsx` and `POTrackerPage.tsx` linked email threads.
->   3. Revamp `frontend/src/pages/InventoryPage.tsx`: render columns (`On Hand`, `On Hold`, `On Order`, `Daily Burn`, `Stockout In`, `ROP/T` without `30d cov`), remove `Demand Override` / `Edit ROP/S` / `Demand` buttons, swap `[Create PO]` ↔ `[View PO]` (navigating to `POTracker` & opening the active PO drawer), and render the unresolved dismissed-alert warning badge + interactive reopen/acknowledge popover.
->   4. Create `frontend/src/components/StockoutCycleDrawer.tsx` backed by `GET /api/parts/{part_id}/cycle-analytics` with 90-day SVG trend + lifecycle markers, predicted stockout date, effective LT + comm buffer, `α = 0.3` note, and recommended PO quantity.
->   5. Run `cd frontend && npm run build` (and verify zero regressions with `uv run pytest -v` if needed), update `docs/phase3/STATUS_P3.md`, and commit cleanly.
+>   1. Extract `frontend/src/components/CreateEditPOModal.tsx` with live per-supplier **Suggested Qty + Reasoning** (calling `GET /api/parts/{part_id}/po-suggestion?supplier_id=...` when switching suppliers); wire it into `InventoryPage` (`Create PO`), `AlertsPage` (`edit_po` CTA on `PO_DISPATCH_APPROVAL` calling `POST /api/pos/{po_id}/dispatch-edited`), and `POTrackerPage` (`PENDING_DISPATCH_APPROVAL` drawer).
+>   2. Update `frontend/src/pages/AlertsPage.tsx`: remove `[Reject Draft]` on PO dispatch alerts (`edit_po` replaces it), ensure `DISMISSED` alerts hide `draft_preview`, render read-only email bodies via `FormattedEmailBody`, and replace any `ROP/S` / `ROP / S` strings with `ROP/T`.
+>   3. Update `frontend/src/pages/SuppliersPlanningPage.tsx`: display `Cycles (90d)` (`cycles_90d`) and `Avg Response (days)` (`avg_response_days`) on supplier scorecards, include the `EWMA α = 0.30` note, and replace all `ROP/S` strings with `ROP/T`.
+>   4. Update `frontend/src/pages/AIHealthPage.tsx`: render `trace.tool_calls` (tool name, args, sandbox output, reminder scheduling) cleanly inside expandable trace detail cards.
+>   5. Run `cd frontend && npm run build`, `uv run pytest`, and `uv run ruff check backend tests`, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
 
 ---
 

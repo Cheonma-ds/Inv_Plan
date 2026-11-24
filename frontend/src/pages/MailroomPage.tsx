@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { POListItem, PersonaKey, StoredEmail } from '../api/types';
+import { FormattedEmailBody } from '../components/FormattedEmailBody';
 import { formatSimDateTime, personaLabel } from '../utils/format';
 
 interface MailroomPageProps {
@@ -603,9 +604,7 @@ export function MailroomPage({
                       </div>
                     </div>
 
-                    <p className="whitespace-pre-wrap text-[#1D1D1F] leading-relaxed">
-                      {msg.body}
-                    </p>
+                    <FormattedEmailBody body={msg.body} />
 
                     {emailAttachments(msg).length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
