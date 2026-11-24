@@ -1,4 +1,4 @@
-# InvPlan — Exception-Driven Inventory Control with a Guardrailed AI Agent
+# InvPlan — Inventory Planning with a Guardrailed AI Agent
 
 Most inventory software makes creating a purchase order easy, then leaves the hard part—chasing silent suppliers, decoding messy delay emails, and reconciling mismatched invoices—trapped in an inbox. I built InvPlan to pair a deterministic supply-chain engine with **Lex**, a multimodal AI operations agent and manager copilot that reads supplier emails and PDFs, checks live stock, and drafts responses without ever touching the ledger or sending mail on its own.
 
