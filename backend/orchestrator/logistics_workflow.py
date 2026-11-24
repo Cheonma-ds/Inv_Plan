@@ -29,7 +29,7 @@ def parse_iso_date_utc(date_str: str | None) -> datetime | None:
     try:
         cleaned = date_str.strip()
         if len(cleaned) == 10:
-            dt = datetime.fromisoformat(f"{cleaned}T09:00:00+00:00")
+            dt = datetime.fromisoformat(f"{cleaned}T07:30:00+00:00")
         else:
             dt = datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
         if dt.tzinfo is None:

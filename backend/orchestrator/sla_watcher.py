@@ -146,6 +146,78 @@ def _draft_lex_email_for_po(
     )
 
 
+def _handle_overdue_po(
+    session: Session,
+    lex_agent: LexAgent,
+    *,
+    po: PurchaseOrder,
+    part: Part,
+    supplier: Supplier,
+    effective_eta,
+    is_critical: bool,
+    days_of_supply: float | None,
+    sim_now,
+) -> SLAEvent:
+    eta_str = effective_eta.date().isoformat()
+    transition_po(
+        session,
+        po,
+        POStatus.OVERDUE,
+        note=f"No goods receipt recorded by {eta_str} (+1d grace).",
+    )
+    refresh_supplier_metrics(session, supplier.id, part_id=part.id)
+    promised_str = (
+        clock.ensure_utc(po.promised_eta).date().isoformat() if po.promised_eta else None
+    )
+    draft = _draft_lex_email_for_po(
+        session,
+        lex_agent,
+        po=po,
+        part=part,
+        supplier=supplier,
+        category=EmailCategory.OVERDUE_CHASE,
+        context_facts={
+            "promised_eta": promised_str,
+            "effective_eta": eta_str,
+            "days_overdue": max(1, (sim_now - effective_eta).days),
+        },
+    )
+    backup = _backup_supplier_payload(session, part.id, supplier.id)
+    suggested = [{"action": "approve_draft", "label": "Approve & Send Overdue Chase"}]
+    if backup.get("backup_supplier_id"):
+        suggested.append(
+            {
+                "action": "switch_backup_supplier",
+                "label": f"Switch to {backup['backup_supplier_name']}",
+            }
+        )
+    alert = create_action_item(
+        session,
+        type="OVERDUE_PO",
+        severity=AlertSeverity.CRITICAL if is_critical else AlertSeverity.HIGH,
+        part_criticality=part.criticality,
+        days_to_stockout=days_of_supply,
+        title=f"OVERDUE shipment: {po.po_number} ({part.sku})",
+        summary=(
+            f"{po.po_number} from {supplier.name} missed its ETA ({eta_str}) "
+            "with no goods received. Lex drafted an overdue chase email."
+        ),
+        po_id=po.id,
+        part_id=part.id,
+        draft_comm_id=draft.id,
+        suggested_actions=suggested,
+        cta_payload={"draft_comm_id": draft.id, "po_id": po.id, **backup},
+    )
+    return SLAEvent(
+        po_id=po.id,
+        po_number=po.po_number,
+        event_type="OVERDUE_DETECTED",
+        summary=alert.title,
+        draft_comm_id=draft.id,
+        action_item_id=alert.id,
+    )
+
+
 def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
     """Synchronously evaluate all active PO SLAs against the current SimulatedClock."""
     sim_now = clock.now(session)
@@ -153,6 +225,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
 
     active_statuses = (
         POStatus.SENT_AWAITING_ACK.value,
+        POStatus.UNRESPONSIVE_ESCALATED.value,
         POStatus.ACKNOWLEDGED.value,
         POStatus.DELAYED_CRITICAL.value,
         POStatus.OVERDUE.value,
@@ -179,7 +252,33 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
         )
 
         # 1. Ack SLA (SENT_AWAITING_ACK): 24h for CRITICAL, 48h for STANDARD/LOW
+        # Also check OVERDUE first if effective_eta + 1d has passed with no GRN.
         if po.status == POStatus.SENT_AWAITING_ACK.value:
+            effective_eta_raw = po.revised_eta or po.promised_eta
+            if effective_eta_raw is not None:
+                effective_eta = clock.ensure_utc(effective_eta_raw)
+                grn_count = (
+                    session.scalar(
+                        select(func.count(GoodsReceipt.id)).where(GoodsReceipt.po_id == po.id)
+                    )
+                    or 0
+                )
+                if grn_count == 0 and sim_now >= effective_eta + timedelta(days=1):
+                    events.append(
+                        _handle_overdue_po(
+                            session,
+                            lex_agent,
+                            po=po,
+                            part=part,
+                            supplier=supplier,
+                            effective_eta=effective_eta,
+                            is_critical=is_critical,
+                            days_of_supply=days_of_supply,
+                            sim_now=sim_now,
+                        )
+                    )
+                    continue
+
             sla_delta = timedelta(hours=24 if is_critical else 48)
             anchor = (
                 clock.ensure_utc(po.next_sla_check_at)
@@ -287,6 +386,33 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                     )
             continue
 
+        # 1b. Unresponsive Escalated Overdue Detection
+        if po.status == POStatus.UNRESPONSIVE_ESCALATED.value:
+            effective_eta_raw = po.revised_eta or po.promised_eta
+            if effective_eta_raw is not None:
+                effective_eta = clock.ensure_utc(effective_eta_raw)
+                grn_count = (
+                    session.scalar(
+                        select(func.count(GoodsReceipt.id)).where(GoodsReceipt.po_id == po.id)
+                    )
+                    or 0
+                )
+                if grn_count == 0 and sim_now >= effective_eta + timedelta(days=1):
+                    events.append(
+                        _handle_overdue_po(
+                            session,
+                            lex_agent,
+                            po=po,
+                            part=part,
+                            supplier=supplier,
+                            effective_eta=effective_eta,
+                            is_critical=is_critical,
+                            days_of_supply=days_of_supply,
+                            sim_now=sim_now,
+                        )
+                    )
+            continue
+
         # 2 & 3. Deferred Dispatch Details SLA, Pre-ETA Check-in & Overdue Detection
         if po.status in (
             POStatus.ACKNOWLEDGED.value,
@@ -385,66 +511,17 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
 
             # Overdue Detection: sim_now >= effective_eta + 1 day with no GRN
             if grn_count == 0 and sim_now >= effective_eta + timedelta(days=1):
-                eta_str = effective_eta.date().isoformat()
-                transition_po(
-                    session,
-                    po,
-                    POStatus.OVERDUE,
-                    note=f"No goods receipt recorded by {eta_str} (+1d grace).",
-                )
-                refresh_supplier_metrics(session, supplier.id, part_id=part.id)
-                promised_str = (
-                    clock.ensure_utc(po.promised_eta).date().isoformat()
-                    if po.promised_eta
-                    else None
-                )
-                draft = _draft_lex_email_for_po(
-                    session,
-                    lex_agent,
-                    po=po,
-                    part=part,
-                    supplier=supplier,
-                    category=EmailCategory.OVERDUE_CHASE,
-                    context_facts={
-                        "promised_eta": promised_str,
-                        "effective_eta": eta_str,
-                        "days_overdue": max(1, (sim_now - effective_eta).days),
-                    },
-                )
-                backup = _backup_supplier_payload(session, part.id, supplier.id)
-                suggested = [{"action": "approve_draft", "label": "Approve & Send Overdue Chase"}]
-                if backup.get("backup_supplier_id"):
-                    suggested.append(
-                        {
-                            "action": "switch_backup_supplier",
-                            "label": f"Switch to {backup['backup_supplier_name']}",
-                        }
-                    )
-                alert = create_action_item(
-                    session,
-                    type="OVERDUE_PO",
-                    severity=AlertSeverity.CRITICAL if is_critical else AlertSeverity.HIGH,
-                    part_criticality=part.criticality,
-                    days_to_stockout=days_of_supply,
-                    title=f"OVERDUE shipment: {po.po_number} ({part.sku})",
-                    summary=(
-                        f"{po.po_number} from {supplier.name} missed its ETA ({eta_str}) "
-                        "with no goods received. Lex drafted an overdue chase email."
-                    ),
-                    po_id=po.id,
-                    part_id=part.id,
-                    draft_comm_id=draft.id,
-                    suggested_actions=suggested,
-                    cta_payload={"draft_comm_id": draft.id, "po_id": po.id, **backup},
-                )
                 events.append(
-                    SLAEvent(
-                        po_id=po.id,
-                        po_number=po.po_number,
-                        event_type="OVERDUE_DETECTED",
-                        summary=alert.title,
-                        draft_comm_id=draft.id,
-                        action_item_id=alert.id,
+                    _handle_overdue_po(
+                        session,
+                        lex_agent,
+                        po=po,
+                        part=part,
+                        supplier=supplier,
+                        effective_eta=effective_eta,
+                        is_critical=is_critical,
+                        days_of_supply=days_of_supply,
+                        sim_now=sim_now,
                     )
                 )
                 continue

@@ -20,6 +20,11 @@ from backend.inventory.schemas import (
 )
 
 TERMINAL_PO_STATUSES = (POStatus.CLOSED.value, POStatus.CANCELLED.value)
+NON_ON_ORDER_PO_STATUSES = (
+    POStatus.PENDING_DISPATCH_APPROVAL.value,
+    POStatus.CLOSED.value,
+    POStatus.CANCELLED.value,
+)
 
 
 class PartNotFoundError(ValueError):
@@ -42,26 +47,58 @@ def _get_part_or_raise(session: Session, part_id: int) -> Part:
 
 
 def get_on_order_stock(session: Session, part_id: int) -> int:
-    part = _get_part_or_raise(session, part_id)
-    open_po_ids_stmt = select(PurchaseOrder.id).where(
-        PurchaseOrder.part_id == part_id,
-        PurchaseOrder.status.not_in(TERMINAL_PO_STATUSES),
+    _get_part_or_raise(session, part_id)
+    dispatched_pos = list(
+        session.scalars(
+            select(PurchaseOrder).where(
+                PurchaseOrder.part_id == part_id,
+                PurchaseOrder.status.not_in(NON_ON_ORDER_PO_STATUSES),
+            )
+        ).all()
     )
-    ordered_qty = session.scalar(
-        select(func.coalesce(func.sum(PurchaseOrder.qty), 0)).where(
-            PurchaseOrder.part_id == part_id,
-            PurchaseOrder.status.not_in(TERMINAL_PO_STATUSES),
+    if not dispatched_pos:
+        return 0
+    po_ids = [po.id for po in dispatched_pos]
+    grn_rows = session.execute(
+        select(
+            GoodsReceipt.po_id,
+            func.coalesce(func.sum(GoodsReceipt.received_qty), 0),
         )
-    )
-    released_qty = session.scalar(
-        select(func.coalesce(func.sum(GoodsReceipt.received_qty), 0)).where(
-            GoodsReceipt.po_id.in_(open_po_ids_stmt),
-            GoodsReceipt.status == GRNStatus.RELEASED.value,
+        .where(
+            GoodsReceipt.po_id.in_(po_ids),
+            GoodsReceipt.status.in_(
+                (GRNStatus.RELEASED.value, GRNStatus.HELD_QUARANTINE.value)
+            ),
         )
+        .group_by(GoodsReceipt.po_id)
+    ).all()
+    received_by_po = {po_id: int(qty or 0) for po_id, qty in grn_rows}
+    return sum(max(0, po.qty - received_by_po.get(po.id, 0)) for po in dispatched_pos)
+
+
+def _get_active_po_summary(
+    session: Session, part_id: int
+) -> tuple[list[PurchaseOrder], int | None, str | None, str | None, int]:
+    active_pos = list(
+        session.scalars(
+            select(PurchaseOrder)
+            .where(
+                PurchaseOrder.part_id == part_id,
+                PurchaseOrder.status.not_in(TERMINAL_PO_STATUSES),
+            )
+            .order_by(PurchaseOrder.id.asc())
+        ).all()
     )
-    return max(
-        0,
-        int(ordered_qty or 0) - int(released_qty or 0) - int(part.quarantined_stock or 0),
+    primary = active_pos[0] if active_pos else None
+    pending_dispatch_qty = sum(
+        po.qty for po in active_pos if po.status == POStatus.PENDING_DISPATCH_APPROVAL.value
+    )
+    return (
+        active_pos,
+        primary.id if primary else None,
+        primary.po_number if primary else None,
+        primary.status if primary else None,
+        pending_dispatch_qty,
     )
 
 
@@ -73,6 +110,9 @@ def get_inventory_position(session: Session, part_id: int) -> int:
 def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
     part = _get_part_or_raise(session, part_id)
     on_order = get_on_order_stock(session, part.id)
+    _, active_po_id, active_po_number, active_po_status, pending_dispatch_qty = (
+        _get_active_po_summary(session, part.id)
+    )
     return PartSnapshot(
         part_id=part.id,
         sku=part.sku,
@@ -86,6 +126,10 @@ def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
         replenishment_point=part.replenishment_point,
         target_coverage_days=part.target_coverage_days,
         manual_demand_override=part.manual_demand_override,
+        active_po_id=active_po_id,
+        active_po_number=active_po_number,
+        active_po_status=active_po_status,
+        pending_dispatch_qty=pending_dispatch_qty,
     )
 
 
@@ -137,9 +181,12 @@ def consume_stock(
 
     on_order = get_on_order_stock(session, part.id)
     inv_pos = part.on_hand_stock + on_order + part.quarantined_stock
+    active_pos, active_po_id, active_po_number, active_po_status, pending_dispatch_qty = (
+        _get_active_po_summary(session, part.id)
+    )
 
     reorder_event: ReorderTriggered | None = None
-    if inv_pos < part.rop:
+    if inv_pos < part.rop and not active_pos:
         primary_term = session.scalar(
             select(PartSupplierTerm)
             .where(
@@ -214,6 +261,10 @@ def consume_stock(
         replenishment_point=part.replenishment_point,
         target_coverage_days=part.target_coverage_days,
         manual_demand_override=part.manual_demand_override,
+        active_po_id=active_po_id,
+        active_po_number=active_po_number,
+        active_po_status=active_po_status,
+        pending_dispatch_qty=pending_dispatch_qty,
     )
     return ConsumeResult(
         snapshot=snapshot,

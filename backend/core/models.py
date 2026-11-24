@@ -37,6 +37,11 @@ class Part(Base):
     replenishment_point: Mapped[int] = mapped_column(Integer, nullable=False)
     target_coverage_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     manual_demand_override: Mapped[float | None] = mapped_column(Float, nullable=True)
+    daily_burn_ewma: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    daily_burn_prev_7d: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    daily_demand_std: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    burn_carry: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    last_burn_settled_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     supplier_terms: Mapped[list["PartSupplierTerm"]] = relationship(
         back_populates="part", cascade="all, delete-orphan"
@@ -59,6 +64,8 @@ class Supplier(Base):
     otd_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.85)
     invoice_accuracy_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.90)
     response_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.85)
+    avg_response_days: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    cycles_90d: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     memory_notes: Mapped[list["SupplierMemoryNote"]] = relationship(
         back_populates="supplier", cascade="all, delete-orphan"
@@ -122,6 +129,7 @@ class InventoryTransaction(Base):
     qty_delta: Mapped[int] = mapped_column(Integer, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    is_predicted_burn: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     part: Mapped["Part"] = relationship(back_populates="transactions")
 
@@ -272,6 +280,39 @@ class ActionItem(Base):
     assigned_team: Mapped[str] = mapped_column(String(64), nullable=False, default="Inventory")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dismiss_resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class LexReminder(Base):
+    __tablename__ = "lex_reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    po_id: Mapped[int | None] = mapped_column(
+        ForeignKey("purchase_orders.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    part_id: Mapped[int | None] = mapped_column(
+        ForeignKey("parts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    supplier_id: Mapped[int | None] = mapped_column(
+        ForeignKey("suppliers.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    comm_id: Mapped[int | None] = mapped_column(
+        ForeignKey("po_communications.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    remind_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    context_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PENDING", index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    triggered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AgentTrace(Base):

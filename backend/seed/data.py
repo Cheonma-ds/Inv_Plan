@@ -30,7 +30,7 @@ from backend.core.models import (
     SupplierMemoryNote,
 )
 
-SEED_START_TIME = datetime(2026, 11, 20, 9, 0, 0, tzinfo=timezone.utc)
+SEED_START_TIME = datetime(2026, 10, 1, 7, 30, 0, tzinfo=timezone.utc)
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,27 @@ _COMM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("attachment_paths_json", "JSON NOT NULL DEFAULT '[]'"),
 )
 
+_PART_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("daily_burn_ewma", "FLOAT NOT NULL DEFAULT 0.0"),
+    ("daily_burn_prev_7d", "FLOAT NOT NULL DEFAULT 0.0"),
+    ("daily_demand_std", "FLOAT NOT NULL DEFAULT 0.0"),
+    ("burn_carry", "FLOAT NOT NULL DEFAULT 0.0"),
+    ("last_burn_settled_date", "VARCHAR(16)"),
+)
+
+_SUPPLIER_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("avg_response_days", "FLOAT NOT NULL DEFAULT 0.5"),
+    ("cycles_90d", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+_INV_TX_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("is_predicted_burn", "BOOLEAN NOT NULL DEFAULT 0"),
+)
+
+_ACTION_ITEM_ADDITIVE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("dismiss_resolved_at", "DATETIME"),
+)
+
 
 def _add_missing_columns(
     conn, table_name: str, columns: tuple[tuple[str, str], ...]
@@ -45,4 +66,8 @@ def ensure_schema_migrations(target_engine: Engine) -> list[str]:
     with target_engine.begin() as conn:
         added.extend(_add_missing_columns(conn, "purchase_orders", _PO_ADDITIVE_COLUMNS))
         added.extend(_add_missing_columns(conn, "po_communications", _COMM_ADDITIVE_COLUMNS))
+        added.extend(_add_missing_columns(conn, "parts", _PART_ADDITIVE_COLUMNS))
+        added.extend(_add_missing_columns(conn, "suppliers", _SUPPLIER_ADDITIVE_COLUMNS))
+        added.extend(_add_missing_columns(conn, "inventory_transactions", _INV_TX_ADDITIVE_COLUMNS))
+        added.extend(_add_missing_columns(conn, "action_items", _ACTION_ITEM_ADDITIVE_COLUMNS))
     return added

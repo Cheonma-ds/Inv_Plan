@@ -33,7 +33,7 @@ def test_simulated_clock_persists_across_restarts(tmp_path: Path) -> None:
     s1_factory = sessionmaker(bind=engine1, autoflush=False, autocommit=False)
     with s1_factory() as s1:
         start = clock.now(s1)
-        assert start == datetime(2026, 11, 20, 9, 0, 0, tzinfo=timezone.utc)
+        assert start == datetime(2026, 10, 1, 7, 30, 0, tzinfo=timezone.utc)
         advanced = clock.advance(s1, days=3, hours=5)
         assert advanced == start + timedelta(days=3, hours=5)
         s1.commit()
@@ -47,7 +47,7 @@ def test_simulated_clock_persists_across_restarts(tmp_path: Path) -> None:
     s2_factory = sessionmaker(bind=engine2, autoflush=False, autocommit=False)
     with s2_factory() as s2:
         reloaded = clock.now(s2)
-        assert reloaded == datetime(2026, 11, 23, 14, 0, 0, tzinfo=timezone.utc)
+        assert reloaded == datetime(2026, 10, 4, 12, 30, 0, tzinfo=timezone.utc)
     engine2.dispose()
 
 

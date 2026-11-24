@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash-lite"
     enable_phoenix: bool = False
-    default_sim_start: str = "2026-11-20T09:00:00+00:00"
+    default_sim_start: str = "2026-10-01T07:30:00+00:00"
 
 
 settings = Settings()

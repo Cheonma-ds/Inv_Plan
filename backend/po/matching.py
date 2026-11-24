@@ -33,7 +33,7 @@ class ThreeWayMatchResult(BaseModel):
 
 def evaluate_three_way_match(data: ThreeWayMatchInput) -> ThreeWayMatchResult:
     """Pure deterministic 3-way match across PO, GRN, and extracted Invoice values."""
-    qty_ok = data.invoice_qty == data.po_qty == data.grn_received_qty
+    qty_ok = data.invoice_qty == data.grn_received_qty
     price_diff = round(data.invoice_unit_price - data.po_unit_price, 4)
     price_ok = abs(price_diff) <= PRICE_TOLERANCE_INR
 
@@ -45,14 +45,14 @@ def evaluate_three_way_match(data: ThreeWayMatchInput) -> ThreeWayMatchResult:
         math_diff = round(data.invoice_line_subtotal - expected_line_subtotal, 2)
         math_ok = abs(math_diff) <= LINE_TOTAL_TOLERANCE_INR
 
-    qty_diff = data.invoice_qty - data.po_qty
-    po_total = data.po_qty * data.po_unit_price
+    qty_diff = data.invoice_qty - data.grn_received_qty
+    expected_grn_total = data.grn_received_qty * data.po_unit_price
     billed_total = (
         data.invoice_line_subtotal
         if data.invoice_line_subtotal is not None
         else expected_line_subtotal
     )
-    total_price_impact = round(billed_total - po_total, 2)
+    total_price_impact = round(billed_total - expected_grn_total, 2)
 
     reasons: list[str] = []
     if not qty_ok:

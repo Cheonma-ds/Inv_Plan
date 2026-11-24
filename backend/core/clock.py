@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -6,12 +6,18 @@ from backend.core.config import settings
 from backend.core.models import SystemState
 
 SIM_NOW_KEY = "sim_now"
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def to_ist_date(dt: datetime) -> date:
+    """Convert a datetime to its IST (Asia/Kolkata, UTC+05:30) calendar date."""
+    return ensure_utc(dt).astimezone(IST).date()
 
 
 def _parse_iso_utc(raw: str) -> datetime:

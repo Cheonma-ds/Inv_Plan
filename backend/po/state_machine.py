@@ -20,6 +20,7 @@ ALLOWED_TRANSITIONS: dict[POStatus, set[POStatus]] = {
         POStatus.ACKNOWLEDGED,
         POStatus.EXCEPTION_REVIEW,
         POStatus.UNRESPONSIVE_ESCALATED,
+        POStatus.OVERDUE,
         POStatus.CANCELLED,
     },
     POStatus.EXCEPTION_REVIEW: {
@@ -29,6 +30,7 @@ ALLOWED_TRANSITIONS: dict[POStatus, set[POStatus]] = {
     POStatus.UNRESPONSIVE_ESCALATED: {
         POStatus.ACKNOWLEDGED,
         POStatus.EXCEPTION_REVIEW,
+        POStatus.OVERDUE,
         POStatus.CANCELLED,
     },
     POStatus.ACKNOWLEDGED: {
@@ -49,10 +51,12 @@ ALLOWED_TRANSITIONS: dict[POStatus, set[POStatus]] = {
         POStatus.CANCELLED,
     },
     POStatus.RECEIVED_PENDING_INVOICE: {
+        POStatus.ACKNOWLEDGED,
         POStatus.QUARANTINED_INVOICE_MISMATCH,
         POStatus.CLOSED,
     },
     POStatus.QUARANTINED_INVOICE_MISMATCH: {
+        POStatus.ACKNOWLEDGED,
         POStatus.CLOSED,
         POStatus.CANCELLED,
     },

@@ -16,6 +16,10 @@ class PartSnapshot(BaseModel):
     replenishment_point: int
     target_coverage_days: int
     manual_demand_override: float | None = None
+    active_po_id: int | None = None
+    active_po_number: str | None = None
+    active_po_status: str | None = None
+    pending_dispatch_qty: int = 0
 
 
 class ReorderTriggered(BaseModel):

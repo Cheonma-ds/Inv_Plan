@@ -112,7 +112,8 @@ def test_withdraw_to_draft_approve_dispatch_and_autonomy_tracking(seeded_session
     assert po.qty == 4
     assert draft is not None
     assert draft.status == CommStatus.DRAFT_PENDING_APPROVAL.value
-    assert get_on_order_stock(seeded_session, part.id) == 4
+    # Phase 3: PENDING_DISPATCH_APPROVAL keeps on_order_stock == 0 until actually dispatched
+    assert get_on_order_stock(seeded_session, part.id) == 0
 
     # Second withdrawal must NOT raise a duplicate PO
     res2 = engine.withdraw_stock(seeded_session, part_id=part.id, qty=1, note="Line 2")
@@ -122,6 +123,7 @@ def test_withdraw_to_draft_approve_dispatch_and_autonomy_tracking(seeded_session
     approved = engine.approve_lex_draft(seeded_session, draft.id)
     assert approved["approval_outcome"] == ApprovalOutcome.APPROVED_AS_IS.value
     assert approved["po_transitioned_to"] == POStatus.SENT_AWAITING_ACK.value
+    assert get_on_order_stock(seeded_session, part.id) == 4
 
     seeded_session.refresh(po)
     assert po.status == POStatus.SENT_AWAITING_ACK.value
@@ -544,7 +546,7 @@ def test_fastapi_routes_http_end_to_end(seeded_session):
 
     # 7. Verify P17: POST /api/clock direct set time (forward ok, backward 400 unless allow_reset)
     cur_clock = client.get("/api/clock").json()["sim_now"]
-    back_fail = client.post("/api/clock", json={"sim_now": "2026-11-01T00:00:00Z"})
+    back_fail = client.post("/api/clock", json={"sim_now": "2026-09-01T00:00:00Z"})
     assert back_fail.status_code == 400
 
     fwd_ok = client.post("/api/clock", json={"sim_now": "2026-11-21T12:00:00Z"})
@@ -598,9 +600,9 @@ def test_scenario_1a_standard_part_above_rop_stockout_math_and_delayed_critical_
         matched_po_number=po_ack.po_number,
         intent=EmailIntent.POST_ACK_DELAY,
         confidence=0.95,
-        proposed_eta_date="2026-11-25",
+        proposed_eta_date="2026-10-06",
         delay_reason="Minor courier rescheduling",
-        summary_for_manager="ETA shifted by 1 day to 2026-11-25.",
+        summary_for_manager="ETA shifted by 1 day to 2026-10-06.",
         suggested_action="No action needed.",
         reasoning="Minor delay.",
     )
@@ -610,7 +612,7 @@ def test_scenario_1a_standard_part_above_rop_stockout_math_and_delayed_critical_
             from_persona=PersonaKey.SUP1,
             to_personas=[PersonaKey.LEX],
             subject=f"Minor schedule update {po_ack.po_number}",
-            body="Delivering Nov 25.",
+            body="Delivering Oct 6.",
         ),
     )
     seeded_session.refresh(po_ack)

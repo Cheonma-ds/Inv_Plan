@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
-from backend.core.enums import Criticality, PersonaKey, POStatus
-from backend.core.models import Part, PartSupplierTerm, Supplier
+from backend.core.enums import Criticality, GRNStatus, PersonaKey, POStatus
+from backend.core.models import GoodsReceipt, Part, PartSupplierTerm, Supplier
 from backend.inventory import (
     InsufficientStockError,
     clear_quarantined_stock,
@@ -88,15 +88,22 @@ def test_manager_example_reorder_and_no_duplicate_po_in_pending_approval(
         initial_status=POStatus.PENDING_DISPATCH_APPROVAL,
     )
     assert po.status == POStatus.PENDING_DISPATCH_APPROVAL.value
-    assert get_on_order_stock(db_session, part.id) == 4
-    assert get_inventory_position(db_session, part.id) == 6
+    # Phase 3: PENDING_DISPATCH_APPROVAL contributes 0 to on_order_stock, but blocks duplicate POs
+    assert get_on_order_stock(db_session, part.id) == 0
+    assert get_inventory_position(db_session, part.id) == 2
+    snap_pending = get_part_snapshot(db_session, part.id)
+    assert snap_pending.active_po_id == po.id
+    assert snap_pending.active_po_number == po.po_number
+    assert snap_pending.active_po_status == POStatus.PENDING_DISPATCH_APPROVAL.value
+    assert snap_pending.pending_dispatch_qty == 4
 
     # Second withdrawal BEFORE manager even approves the PO email: 2 -> 0.
-    # Inventory Position = 0 + 4 = 4 >= ROP (3) => MUST NOT trigger duplicate PO!
+    # Active PO exists => MUST NOT trigger duplicate PO!
     second = consume_stock(db_session, part.id, 2, note="Engineer pull #2")
     assert second.snapshot.on_hand_stock == 0
-    assert second.snapshot.on_order_stock == 4
-    assert second.snapshot.inventory_position == 4
+    assert second.snapshot.on_order_stock == 0
+    assert second.snapshot.inventory_position == 0
+    assert second.snapshot.pending_dispatch_qty == 4
     assert second.reorder_triggered is None
 
 
@@ -200,7 +207,17 @@ def test_quarantined_stock_deducted_from_on_order_without_spawning_duplicate_po(
     assert snap_pending.on_order_stock == 20
     assert snap_pending.inventory_position == 24
 
-    # 2. Invoice mismatches -> hold 20 in quarantine: quarantined=20, on_order=0, inv_pos=24
+    # 2. Invoice mismatches -> GRN held in quarantine: quarantined=20, on_order=0, inv_pos=24
+    db_session.add(
+        GoodsReceipt(
+            po_id=po.id,
+            received_qty=20,
+            received_at=clock.now(db_session),
+            condition="GOOD",
+            status=GRNStatus.HELD_QUARANTINE.value,
+        )
+    )
+    db_session.flush()
     transition_po(db_session, po, POStatus.QUARANTINED_INVOICE_MISMATCH)
     snap_quar = hold_in_quarantine(db_session, part.id, 20)
     assert snap_quar.on_hand_stock == 4

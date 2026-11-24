@@ -161,6 +161,16 @@ def _apply_match_outcome(
     if result.matched and not damaged:
         was_quarantined = po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
         grn.status = GRNStatus.RELEASED.value
+        session.flush()
+        cumulative_released = int(
+            session.scalar(
+                select(func.coalesce(func.sum(GoodsReceipt.received_qty), 0)).where(
+                    GoodsReceipt.po_id == po.id,
+                    GoodsReceipt.status == GRNStatus.RELEASED.value,
+                )
+            )
+            or 0
+        )
         result.stock_action = (
             "RELEASE_FROM_QUARANTINE" if was_quarantined else "RELEASE_DIRECT"
         )
@@ -168,12 +178,26 @@ def _apply_match_outcome(
         result.stock_note = (
             f"Released {po.po_number} via matched invoice {invoice.invoice_number}"
         )
-        transition_po(
-            session,
-            po,
-            POStatus.CLOSED,
-            note=f"3-way match passed (Invoice {invoice.invoice_number} v{invoice.version}).",
-        )
+        if cumulative_released >= po.qty:
+            transition_po(
+                session,
+                po,
+                POStatus.CLOSED,
+                note=(
+                    f"3-way match passed (Invoice {invoice.invoice_number} v{invoice.version}); "
+                    f"cumulative released {cumulative_released}/{po.qty} complete."
+                ),
+            )
+        else:
+            transition_po(
+                session,
+                po,
+                POStatus.ACKNOWLEDGED,
+                note=(
+                    f"Partial 3-way match passed (Invoice {invoice.invoice_number} "
+                    f"v{invoice.version}); cumulative released {cumulative_released}/{po.qty}."
+                ),
+            )
     elif result.matched and damaged:
         # Invoice numbers are clean, but physical goods failed quality inspection -> keep held!
         result.damaged_hold = True
@@ -425,12 +449,28 @@ def apply_damaged_goods_disposition(
             POStatus.QUARANTINED_INVOICE_MISMATCH.value,
         )
     ):
+        session.flush()
+        cumulative_released = int(
+            session.scalar(
+                select(func.coalesce(func.sum(GoodsReceipt.received_qty), 0)).where(
+                    GoodsReceipt.po_id == po.id,
+                    GoodsReceipt.status == GRNStatus.RELEASED.value,
+                )
+            )
+            or 0
+        )
+        target_status = (
+            POStatus.CLOSED if cumulative_released >= po.qty else POStatus.ACKNOWLEDGED
+        )
         transition_po(
             session,
             po,
-            POStatus.CLOSED,
+            target_status,
             note=note
-            or f"Manager cleared {good_qty}/{held_qty} units from damaged quarantine; PO closed.",
+            or (
+                f"Manager cleared {good_qty}/{held_qty} units from damaged quarantine "
+                f"({cumulative_released}/{po.qty} released)."
+            ),
         )
     else:
         append_po_note(

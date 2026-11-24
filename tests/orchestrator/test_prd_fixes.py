@@ -893,10 +893,10 @@ def test_f4_1_and_f4_3_ambiguous_clarification_draft_and_eta_0900_normalization(
     assert rej.status_code == 200
     assert rej.json()["email"]["status"] == CommStatus.REJECTED.value
 
-    # F-4.3: Date-only ETA normalizes to 09:00:00Z matching SEED_START_TIME
-    eta_dt = parse_iso_date_utc("2026-11-22")
+    # F-4.3: Date-only ETA normalizes to 07:30:00Z (13:00 IST) matching SEED_START_TIME
+    eta_dt = parse_iso_date_utc("2026-10-03")
     assert eta_dt is not None
-    assert eta_dt.hour == 9 and eta_dt.minute == 0
+    assert eta_dt.hour == 7 and eta_dt.minute == 30
     assert eta_dt == clock.now(seeded_session) + timedelta(days=2)
 
 

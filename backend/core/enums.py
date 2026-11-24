@@ -121,3 +121,9 @@ class ActionItemStatus(StrEnum):
 class AutonomyMode(StrEnum):
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
     AUTO_SEND = "AUTO_SEND"
+
+
+class LexReminderStatus(StrEnum):
+    PENDING = "PENDING"
+    TRIGGERED = "TRIGGERED"
+    CANCELLED = "CANCELLED"
