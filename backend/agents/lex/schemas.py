@@ -70,6 +70,7 @@ class AdditionalPOUpdate(BaseModel):
     carrier_name: str | None = None
     tracking_number: str | None = None
     details_promised_later: bool = False
+    details_promised_days: int | None = Field(default=None, ge=0)
     details_promised_by_date: str | None = None
     delay_reason: str | None = None
     summary_for_manager: str = ""
@@ -89,6 +90,7 @@ class EmailTriageResult(BaseModel):
     carrier_name: str | None = None
     tracking_number: str | None = None
     details_promised_later: bool = False
+    details_promised_days: int | None = Field(default=None, ge=0)
     details_promised_by_date: str | None = None
     delay_reason: str | None = None
     summary_for_manager: str
@@ -231,4 +233,29 @@ class StockRequestTriageResult(BaseModel):
     urgency_note: str | None = None
     summary_for_manager: str
     suggested_action: str
+    reasoning: str
+
+
+class ReminderWakeupInput(BaseModel):
+    reminder_id: int
+    po_id: int
+    po_number: str
+    part_sku: str
+    part_name: str
+    supplier_name: str
+    current_date: str
+    remind_at: str
+    reminder_reason: str
+    suggested_action: str = ""
+    po_status: str
+    grn_count: int = 0
+    missing_dispatch_fields: list[str] = Field(default_factory=list)
+    days_to_stockout: float | None = None
+    thread_id: str | None = None
+
+
+class ReminderWakeupResult(BaseModel):
+    should_draft_followup: bool
+    summary_for_manager: str
+    followup_context_note: str = ""
     reasoning: str

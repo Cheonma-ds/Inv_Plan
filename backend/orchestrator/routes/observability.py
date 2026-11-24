@@ -18,6 +18,7 @@ from backend.observability import (
     run_eval_suite,
     serialize_eval_run,
 )
+from backend.orchestrator.lex_tools import build_lex_tool_registry
 
 router = APIRouter(tags=["observability"])
 
@@ -31,7 +32,10 @@ class EvalRunRequest(BaseModel):
 def _get_agent_eval_config(agent_name: str) -> tuple[AgentEvalExecutor, Path]:
     if agent_name == LexAgent.agent_name:
         suite_rel = LexAgent.eval_suite_path or "backend/evals/lex.yaml"
-        return LexEvalExecutor(), PROJECT_ROOT / suite_rel
+        return (
+            LexEvalExecutor(tool_registry_factory=build_lex_tool_registry),
+            PROJECT_ROOT / suite_rel,
+        )
     raise HTTPException(
         status_code=404,
         detail=f"No eval suite registered for agent '{agent_name}'.",

@@ -1,6 +1,6 @@
 # STATUS_P3.md — Phase 3 Live Session Baton
 
-**Current Stage:** **Slice P3-4 Complete** — Ready to Start **Slice P3-5**  
+**Current Stage:** **Slice P3-5 Complete** — Ready to Start **Slice P3-6**  
 **Last Updated:** 2026-11-24  
 **Baseline Reference:** `HEAD` (`099474f`), [`STATUS.md`](../../STATUS.md), [`STATUS_P2.md`](../phase2/STATUS_P2.md)  
 **Planning Docs:** [`PRD_P3.md`](PRD_P3.md) · [`DESIGN_P3.md`](DESIGN_P3.md) · [`SLICES_P3.md`](SLICES_P3.md)
@@ -13,7 +13,7 @@
 - [x] **Slice P3-2:** 90-Day Causal Seed Simulator (`Jul–Sep`, 0 Open POs), Daily Burn EWMA ($\alpha=0.3$), Clock Rollover & Cycle Analytics
 - [x] **Slice P3-3:** Alerting Overhaul (`Edit PO`, Non-Resolving `Reject`, `DISMISSED` Hiding + Inventory Warning) & `ROP/T` Sweep
 - [x] **Slice P3-4:** Lex Resilience (Retries/Fallbacks), Multimodal Image Triage & Enforced Email Formatting
-- [ ] **Slice P3-5:** Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory Alerts
+- [x] **Slice P3-5:** Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory Alerts
 - [ ] **Slice P3-6:** Frontend Core (IST Clock, Sidebar Cleanup, `FormattedEmailBody`, `InventoryPage` Revamp & `StockoutCycleDrawer`)
 - [ ] **Slice P3-7:** Frontend `CreateEditPOModal` (Suggested Qty + Reasoning), `AlertsPage`, `SuppliersPlanningPage` & `AIHealthPage` Traces
 - [ ] **Slice P3-8:** Full Phase 3 E2E Verification, Live Gemini Eval Sweep & Documentation Parity Gate
@@ -80,17 +80,38 @@
 
 ---
 
-## Next Session Handoff Prompt — Start Slice `P3-5`
+## Completed Slice Summary — `P3-5`
 
-> Implement **Slice P3-5** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
-> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md §2 (Pillar 6 items 1–5)`, `docs/phase3/DESIGN_P3.md (§1.2, §5.1–§5.2)`, `docs/phase3/SLICES_P3.md (Slice P3-5)`, and target files: `backend/agents/llm_client.py`, `backend/agents/lex/{schemas,prompts,agent,eval_adapter}.py`, `backend/orchestrator/{logistics_workflow,sla_watcher,workflows}.py`, `backend/evals/lex.yaml`, `tests/test_architecture.py`.
-> - **Leave Untouched:** `frontend/`, `backend/inventory/service.py`, `backend/planning/*`.
+- **Files Added:**
+  - `backend/agents/tools.py` (`ToolDefinition` / `ToolSpec`, `ToolResult`, `ToolHandler`, `ToolRegistry` — domain-agnostic tool registration, JSON schema definitions, execution dispatch, and compact summary formatting).
+  - `backend/agents/sandbox.py` (`run_sandbox_python`, `validate_sandbox_ast`, `SandboxSecurityError`, `SandboxTimeoutError`, `SandboxRuntimeError` — AST-validated + `sys.settrace` step/wall-clock bounded safe Python calculation sandbox allowing `math`, `statistics`, `datetime`/`timedelta`, `decimal`, `json` while blocking unsafe imports, filesystem/network/eval/dunder escapes, wall-clock `.now()`/`.utcnow()`/`.today()`, and resource-exhaustion literals).
+  - `backend/orchestrator/lex_tools.py` (`LexToolTracker`, `build_lex_tool_registry` binding all 10 DB/advisory tools: `get_part_snapshot`, `get_consumption_history`, `get_po_details`, `list_open_pos`, `get_supplier_profile`, `get_mailroom_thread`, `run_sandbox_calc`, `schedule_lex_reminder`, `propose_memory_note`, `create_advisory_alert`; plus `propose_and_save_memory_note` Jaccard/substring deduplication & consolidation, `schedule_po_lex_reminder`, `cancel_pending_lex_reminders_for_po`, `create_grounded_advisory_alert`, and `evaluate_memory_advisory_alerts`).
+  - `tests/agents/test_sandbox_and_tools.py` (16 parameterized/unit tests covering `ToolRegistry`, safe sandbox calculations, AST/security/timeout/resource-limit blocking, and `GeminiLLMClient.generate_with_tools` multi-turn function calling + `AgentTracer.span.tool_calls` logging).
+  - `tests/orchestrator/test_lex_v2_workflows.py` (6 integration tests covering all 10 `lex_tools`, variable `+4d` deferral saving `LexReminder(PENDING)` + `DISPATCH_DETAILS_DEFERRED` without premature draft, day-4 reminder wakeup drafting only when details remain missing and auto-cancelling when details or GRN arrive, tight-runway `HIGH` `DISPATCH_DEFERRAL_STOCKOUT_RISK` escalation, and memory note deduplication + grounded pre-delivery invoice-mismatch advisories).
+- **Files Modified:**
+  - `backend/agents/llm_client.py` (added `tool_calls` on `LLMResult`; implemented `LLMClientProtocol.generate_with_tools` and `GeminiLLMClient.generate_with_tools` using `AutomaticFunctionCallingConfig(disable=True)`, `Part.from_function_response`, cumulative token accounting, retry loop, and final schema-enforced synthesis fallback).
+  - `backend/agents/lex/schemas.py`, `backend/agents/lex/prompts.py`, `backend/agents/lex/agent.py`, `backend/agents/lex/__init__.py` (added `details_promised_days`, `ReminderWakeupInput`, `ReminderWakeupResult`, `REMINDER_WAKEUP_SYSTEM_PROMPT`, tool-use guidance in `TRIAGE_SYSTEM_PROMPT`, and `tool_registry` + `inspect_reminder_wakeup()` on `LexAgent`).
+  - `backend/agents/lex/eval_adapter.py` & `backend/evals/lex.yaml` (added `OfflineCaseLLMClient.generate_with_tools`, `tool_registry_factory` on `LexEvalExecutor` with standalone pure-`agents/` fallback, `reminder_wakeup` eval task, `tool_calls` output from latest `AgentTrace`, and 3 Phase 3 eval cases).
+  - `backend/po/logistics.py` (added optional `details_due_at` override to `apply_po_logistics_updates`).
+  - `backend/orchestrator/logistics_workflow.py` (added `evaluate_deferral_safety`, `resolve_deferral_schedule`, variable N-day deferral honoring `details_promised_by_date`/`details_promised_days` with 2-day fallback when unspecified, `DISPATCH_DETAILS_DEFERRED` vs `DISPATCH_DEFERRAL_STOCKOUT_RISK` alerts, contextualized `create_supplier_memory_alert`, and pre-delivery memory advisories).
+  - `backend/orchestrator/sla_watcher.py` (added `_process_due_lex_reminders` waking Lex when `LexReminder.remind_at <= sim_now`, suppressing duplicate legacy `DEFERRED_2D` checks via `handled_deferred_po_ids`, dynamic wait-days messages, and pre-delivery memory checks).
+  - `backend/orchestrator/workflows.py` & `backend/orchestrator/routes/observability.py` (wired `build_lex_tool_registry` + `LexToolTracker`, delegated learned memory deduplication, propagated `details_promised_days` across multi-PO triage updates, cancelled pending reminders on GRN/cancel/backup-switch, evaluated `po_created` memory advisories, passed `eval_sim_now` in `settle_daily_burn_on_clock_advance`, and passed `tool_registry_factory` to `LexEvalExecutor`).
+  - `tests/orchestrator/test_logistics_and_escalation.py` (aligned stale `"2026-12-03"`/`"2026-11-22"` date assertions to Phase 3 `Oct 1` baseline `"2026-10-14"`/`"2026-10-03"` per `DESIGN_P3.md §6`).
+- **Verification:** `uv run pytest -v` (`138 passed, 3 skipped` — 3 live-Gemini tests skipped offline) and `uv run ruff check backend tests` (`All checks passed!`), including all 5 AST checks in `tests/test_architecture.py`. `frontend/`, `backend/inventory/service.py`, `backend/planning/*`, and `backend/seed/data.py` left untouched.
+
+---
+
+## Next Session Handoff Prompt — Start Slice `P3-6`
+
+> Implement **Slice P3-6** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md` (§5.3, §3.2–§3.3):
+> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md`, `docs/phase3/DESIGN_P3.md`, `docs/phase3/SLICES_P3.md (Slice P3-6)`, and target frontend files: `frontend/src/{App.tsx,api/types.ts,api/client.ts,utils/format.ts,components/ClockBar.tsx}`, `frontend/src/pages/{InventoryPage,MailroomPage,POTrackerPage}.tsx`.
+> - **Leave Untouched:** `backend/`, `frontend/src/pages/SuppliersPlanningPage.tsx`, `frontend/src/pages/AIHealthPage.tsx`, `frontend/src/pages/AlertsPage.tsx` (modal/page updates for Alerts/Suppliers/AIHealth belong to `P3-7`).
 > - **Acceptance Criteria:**
->   1. Create `backend/agents/tools.py` (`ToolDefinition`, `ToolRegistry`) and `backend/agents/sandbox.py` (AST-validated safe Python calculation sandbox with timeout blocking unsafe imports/I/O/network/eval).
->   2. Implement `generate_with_tools()` in `backend/agents/llm_client.py` logging every tool invocation into `AgentTracer.span.tool_calls` (`tool_calls_json`).
->   3. Create `backend/orchestrator/lex_tools.py` binding DB read tools (`get_part_snapshot`, `get_consumption_history`, `get_po_details`, `list_open_pos`, `get_supplier_profile`, `get_mailroom_thread`), `run_sandbox_calc`, `schedule_lex_reminder`, `propose_memory_note`, and `create_advisory_alert` while passing all AST boundary rules in `tests/test_architecture.py`.
->   4. Upgrade `LexAgent` + `logistics_workflow.py` + `sla_watcher.py` to support variable deferral days (`details_promised_days` / `details_promised_by_date`), schedule `LexReminder` instead of nagging immediately when supplier promises details later and stockout runway is safe, wake Lex on clock advance when `remind_at <= sim_now`, and deduplicate + contextualize memory-triggered alerts.
->   5. Update `eval_adapter.py` + `backend/evals/lex.yaml`, add `tests/agents/test_sandbox_and_tools.py` & `tests/orchestrator/test_lex_v2_workflows.py`, run `uv run pytest -v` and `uv run ruff check backend tests`, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
+>   1. Update `formatSimDateTime` / `formatSimDate` in `frontend/src/utils/format.ts` to render in `Asia/Kolkata` (`IST`), remove the duplicate `Actionable Alerts` sidebar nav entry in `frontend/src/App.tsx`, highlight the `Open Alerts` pill in `ClockBar.tsx` when open alerts exist, and wire `onNavigatePo` into `InventoryPage`.
+>   2. Create `frontend/src/components/FormattedEmailBody.tsx` to cleanly render `**bold**` spans, `- ` bullets, and blank-line paragraphs (no raw `**` markers shown), and wire it into `MailroomPage.tsx` and `POTrackerPage.tsx` linked email threads.
+>   3. Revamp `frontend/src/pages/InventoryPage.tsx`: render columns (`On Hand`, `On Hold`, `On Order`, `Daily Burn`, `Stockout In`, `ROP/T` without `30d cov`), remove `Demand Override` / `Edit ROP/S` / `Demand` buttons, swap `[Create PO]` ↔ `[View PO]` (navigating to `POTracker` & opening the active PO drawer), and render the unresolved dismissed-alert warning badge + interactive reopen/acknowledge popover.
+>   4. Create `frontend/src/components/StockoutCycleDrawer.tsx` backed by `GET /api/parts/{part_id}/cycle-analytics` with 90-day SVG trend + lifecycle markers, predicted stockout date, effective LT + comm buffer, `α = 0.3` note, and recommended PO quantity.
+>   5. Run `cd frontend && npm run build` (and verify zero regressions with `uv run pytest -v` if needed), update `docs/phase3/STATUS_P3.md`, and commit cleanly.
 
 ---
 
@@ -101,3 +122,5 @@
 |---|---|---|---|
 | Baseline Audit | `PRD_P2.md §4.2` vs `HEAD (099474f)` | Post-Phase-2 commit `25a8bdc` re-introduced `Withdraw`, `Create PO`, `ROP/S`, and `Demand` actions in `InventoryPage.tsx`, and pre-existing `get_on_order_stock()` still counted `PENDING_DISPATCH_APPROVAL` while `matching.py` still enforced `invoice_qty == po_qty`. | Reconciled in `PRD_P3.md §1.1` and scheduled explicitly in `P3-1`–`P3-7`. |
 | `P3-2` | `DESIGN_P3.md §3.2` vs `SuppliersPlanningPage.tsx:522` | `frontend/` is untouched until `P3-6`/`P3-7`, and `SuppliersPlanningPage.tsx` still reads `rec.forecast.monthly_buckets`. | Kept `DemandForecastResult.monthly_buckets` populated in `backend/planning/forecast.py` while delegating daily burn, $\sigma_D$, intermittent floor, and `ROP/T` calculations to 90-day daily EWMA ($\alpha=0.3$) in `ewma_daily.py`. |
+| `P3-5` | `DESIGN_P3.md §2.1` & `§5.2` vs `DispatchDetailsStatus.DEFERRED_2D` | `DispatchDetailsStatus.DEFERRED_2D = "DEFERRED_2D"` is asserted directly by Phase 1/2 tests (`tests/po/test_logistics.py`) while variable N-day deferrals (`+4d`, etc.) require flexible due timestamps without double-firing legacy 2-day SLA nudges. | Preserved `DEFERRED_2D` as the status enum, added optional `details_due_at` on `apply_po_logistics_updates()`, persisted the exact deadline on `PO.dispatch_details_due_at` & `LexReminder.remind_at`, and suppressed duplicate legacy checks via `handled_deferred_po_ids` in `sla_watcher.py`. |
+| `P3-5` | `PRD_P3.md §2` pre-delivery memory advisories vs `sup3` price-hike seed note | Broad `"price"` keyword matching in `pre_delivery` invoice watch falsely matched `sup3`'s `"prone to mid-quarter price hikes"` note on Pre-ETA, breaking `test_mandatory_memory_note_alert_and_auto_resolve_preserves_notifications` (expected 1 auto-resolved alert, got 2). | Narrowed `pre_delivery` invoice-mismatch watch triggers to explicit invoice/PDF billing keywords while evaluating general price/reliability risks contextually at `po_created` for critical parts. |

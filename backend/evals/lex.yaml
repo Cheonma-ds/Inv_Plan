@@ -1129,3 +1129,130 @@ cases:
       requested_items.1.part_sku: GSK-512
       requested_items.1.requested_qty: 6
       min_confidence: 0.85
+
+  # ---------------------------------------------------------------------------
+  # 7. Lex v2 Tool-Use, Sandbox Calc, Variable Deferral & Wakeup Cases (Slice P3-5)
+  # ---------------------------------------------------------------------------
+  - id: triage_ack_deferred_4d_variable_and_sandbox
+    name: "Supplier ack promising details after 4 days extracts details_promised_days=4 and uses sandbox calc"
+    task: email_triage
+    tags: [triage, logistics, deferral, tools, sandbox, phase3]
+    input:
+      sender_persona: sup3
+      sender_name: Deccan Electro-Spares
+      subject: "Re: PO-1037 — Confirmed (Dispatch details in 4 days)"
+      body: "Confirmed PO-1037 for 15 units at Rs 780/unit (ETA 2026-10-14). Due to ERP migration, we can only share BlueDart tracking and dispatch details after 4 days (by 2026-10-05)."
+      has_pdf_attachment: false
+      current_date: "2026-10-01"
+      part_snapshot:
+        sku: RLY-901
+        on_hand_stock: 150
+        daily_burn_ewma: 6.25
+        days_to_stockout: 24.0
+      open_pos:
+        - po_number: PO-1037
+          part_sku: RLY-901
+          part_name: PLC Safety Relay Module 24V
+          qty: 15
+          unit_price: 780.0
+          status: SENT_AWAITING_ACK
+          quoted_lead_time_days: 14
+    mock_response:
+      mock_tool_calls:
+        - tool: get_po_details
+          args:
+            po_number_or_id: PO-1037
+        - tool: get_part_snapshot
+          args:
+            sku_or_part_id: RLY-901
+        - tool: run_sandbox_calc
+          args:
+            python_script: "result = {'safe': days_to_stockout > (wait_days + 2), 'margin_days': round(days_to_stockout - wait_days, 2)}"
+            variables:
+              days_to_stockout: 24.0
+              wait_days: 4
+      matched_po_number: PO-1037
+      intent: ACKNOWLEDGED
+      confidence: 0.96
+      proposed_eta_date: "2026-10-14"
+      carrier_name: "BlueDart"
+      details_promised_later: true
+      details_promised_days: 4
+      details_promised_by_date: "2026-10-05"
+      summary_for_manager: "Deccan Electro-Spares confirmed PO-1037 (ETA 2026-10-14) and will send BlueDart dispatch details after 4 days (2026-10-05); 24.0d runway safely covers the 4-day wait."
+      suggested_action: "Schedule a 4-day Lex reminder for 2026-10-05 without sending a premature follow-up today."
+      reasoning: "Verified via sandbox calc that 24.0d runway safely exceeds the 4-day deferral window (20.0d margin)."
+    expect:
+      intent: ACKNOWLEDGED
+      matched_po_number: PO-1037
+      details_promised_later: true
+      details_promised_days: 4
+      details_promised_by_date: "2026-10-05"
+      tool_calls.length: 3
+      tool_calls.2.tool: run_sandbox_calc
+      min_confidence: 0.85
+
+  - id: reminder_wakeup_drafts_when_details_missing
+    name: "Reminder wakeup inspects live PO/thread via tools and approves follow-up when details still missing"
+    task: reminder_wakeup
+    tags: [reminder, tools, phase3]
+    input:
+      reminder_id: 1
+      po_id: 10
+      po_number: PO-1037
+      part_sku: RLY-901
+      part_name: PLC Safety Relay Module 24V
+      supplier_name: Deccan Electro-Spares
+      current_date: "2026-10-05"
+      remind_at: "2026-10-05T07:30:00+00:00"
+      reminder_reason: "Supplier promised dispatch details after 4 days."
+      suggested_action: "Draft DISPATCH_DETAILS_NUDGE if still missing."
+      po_status: ACKNOWLEDGED
+      grn_count: 0
+      missing_dispatch_fields: ["promised_dispatch_date", "tracking_number"]
+      days_to_stockout: 20.0
+      thread_id: thread-1037
+    mock_response:
+      mock_tool_calls:
+        - tool: get_po_details
+          args:
+            po_number_or_id: PO-1037
+        - tool: get_mailroom_thread
+          args:
+            thread_id: thread-1037
+      should_draft_followup: true
+      summary_for_manager: "PO-1037 remains ACKNOWLEDGED with 0 GRNs and missing dispatch date/tracking; drafting 4-day follow-up nudge."
+      followup_context_note: "Promised 2026-10-05 dispatch details did not arrive."
+      reasoning: "Verified via get_po_details and thread history that dispatch details remain missing."
+    expect:
+      should_draft_followup: true
+      tool_calls.length: 2
+      tool_calls.0.tool: get_po_details
+
+  - id: reminder_wakeup_skips_when_grn_already_received
+    name: "Reminder wakeup guardrail overrides should_draft_followup=false when GRN already logged"
+    task: reminder_wakeup
+    tags: [reminder, guardrail, phase3]
+    input:
+      reminder_id: 2
+      po_id: 11
+      po_number: PO-1038
+      part_sku: RLY-901
+      part_name: PLC Safety Relay Module 24V
+      supplier_name: Deccan Electro-Spares
+      current_date: "2026-10-05"
+      remind_at: "2026-10-05T07:30:00+00:00"
+      reminder_reason: "Supplier promised dispatch details after 4 days."
+      po_status: CLOSED
+      grn_count: 1
+      missing_dispatch_fields: []
+      days_to_stockout: 30.0
+    mock_response:
+      should_draft_followup: true
+      summary_for_manager: "Draft follow-up."
+      followup_context_note: ""
+      reasoning: "Model mistakenly tried to draft follow-up."
+    expect:
+      should_draft_followup: false
+      reasoning:
+        contains: "Guardrail Override"

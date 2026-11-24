@@ -41,6 +41,7 @@ def apply_po_logistics_updates(
     tracking_number: str | None = None,
     details_promised_later: bool = False,
     details_due_days: int = 2,
+    details_due_at: datetime | None = None,
 ) -> LogisticsUpdateResult:
     """Apply extracted carrier/tracking/dispatch updates and recompute missing-detail state."""
     changed: dict[str, tuple[Any, Any]] = {}
@@ -86,7 +87,10 @@ def apply_po_logistics_updates(
         po.dispatch_details_due_at = None
     elif details_promised_later:
         po.dispatch_details_status = DispatchDetailsStatus.DEFERRED_2D.value
-        po.dispatch_details_due_at = sim_now + timedelta(days=details_due_days)
+        if details_due_at is not None:
+            po.dispatch_details_due_at = clock.ensure_utc(details_due_at)
+        else:
+            po.dispatch_details_due_at = sim_now + timedelta(days=max(1, int(details_due_days)))
     else:
         po.dispatch_details_status = DispatchDetailsStatus.AWAITING_IMMEDIATE.value
         po.dispatch_details_due_at = None

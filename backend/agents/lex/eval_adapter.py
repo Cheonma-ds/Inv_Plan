@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, TypeVar
 
 from fpdf import FPDF
@@ -8,10 +9,14 @@ from backend.agents.lex.agent import LexAgent
 from backend.agents.lex.schemas import (
     EmailDraftInput,
     EmailTriageInput,
+    ReminderWakeupInput,
     StockRequestTriageInput,
 )
 from backend.agents.llm_client import GeminiLLMClient, LLMClientProtocol, LLMResult
+from backend.agents.sandbox import run_sandbox_python
+from backend.agents.tools import ToolRegistry
 from backend.core.config import settings
+from backend.observability.tracer import list_traces
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -20,7 +25,12 @@ class OfflineCaseLLMClient:
     """Deterministic LLM stub validating YAML mock_response against the target schema."""
 
     def __init__(self, mock_response: dict[str, Any]) -> None:
-        self._mock_response = mock_response
+        self._mock_response = dict(mock_response)
+
+    def _clean_payload(self) -> dict[str, Any]:
+        cleaned = dict(self._mock_response)
+        cleaned.pop("mock_tool_calls", None)
+        return cleaned
 
     def generate_structured(
         self,
@@ -32,7 +42,8 @@ class OfflineCaseLLMClient:
         pdf_bytes: bytes | None = None,
         image_attachments: list[tuple[str, bytes]] | None = None,
     ) -> LLMResult[T]:
-        parsed = response_schema.model_validate(self._mock_response)
+        del prompt, system_instruction, temperature, pdf_bytes, image_attachments
+        parsed = response_schema.model_validate(self._clean_payload())
         return LLMResult(
             parsed=parsed,
             raw_text=parsed.model_dump_json(),
@@ -42,6 +53,146 @@ class OfflineCaseLLMClient:
             cost_inr=0.0044,
             model_name=f"{settings.gemini_model} (offline)",
         )
+
+    def generate_with_tools(
+        self,
+        *,
+        prompt: str,
+        response_schema: type[T],
+        tool_registry: ToolRegistry,
+        system_instruction: str | None = None,
+        temperature: float = 0.0,
+        pdf_bytes: bytes | None = None,
+        image_attachments: list[tuple[str, bytes]] | None = None,
+        max_steps: int = 8,
+    ) -> LLMResult[T]:
+        del prompt, system_instruction, temperature, pdf_bytes, image_attachments, max_steps
+        tool_call_logs: list[dict[str, Any]] = []
+        for entry in list(self._mock_response.get("mock_tool_calls") or []):
+            if not isinstance(entry, dict):
+                continue
+            tool_name = str(entry.get("tool", ""))
+            tool_args = dict(entry.get("args") or {})
+            tool_res = tool_registry.execute(tool_name, tool_args)
+            tool_call_logs.append(ToolRegistry.format_trace_record(tool_res, tool_args))
+
+        parsed = response_schema.model_validate(self._clean_payload())
+        return LLMResult(
+            parsed=parsed,
+            raw_text=parsed.model_dump_json(),
+            input_tokens=320 + 60 * len(tool_call_logs),
+            output_tokens=96 + 30 * len(tool_call_logs),
+            latency_ms=8 + sum(int(t.get("duration_ms", 0)) for t in tool_call_logs),
+            cost_inr=0.0044,
+            model_name=f"{settings.gemini_model} (offline)",
+            tool_calls=tool_call_logs,
+        )
+
+
+def _build_standalone_eval_registry(case_input: dict[str, Any]) -> ToolRegistry:
+    """Domain-isolated eval ToolRegistry supporting sandbox calc + case_input lookups."""
+    registry = ToolRegistry()
+
+    def _run_sandbox_calc(
+        python_script: str,
+        variables: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        res = run_sandbox_python(python_script, variables or {})
+        return res.model_dump(mode="json")
+
+    def _get_po_details(po_number_or_id: str | int) -> dict[str, Any]:
+        needle = str(po_number_or_id).strip().lower()
+        for po in case_input.get("open_pos") or []:
+            if str(po.get("po_number", "")).strip().lower() == needle:
+                return {"found": True, **po}
+        if str(case_input.get("po_number", "")).strip().lower() == needle:
+            return {
+                "found": True,
+                "po_number": case_input.get("po_number"),
+                "status": case_input.get("po_status"),
+                "grn_count": case_input.get("grn_count", 0),
+                "missing_dispatch_fields": case_input.get("missing_dispatch_fields", []),
+            }
+        return {"found": False, "query": str(po_number_or_id)}
+
+    def _get_part_snapshot(sku_or_part_id: str | int) -> dict[str, Any]:
+        snap = case_input.get("part_snapshot")
+        if isinstance(snap, dict):
+            return {"found": True, **snap}
+        return {
+            "found": True,
+            "sku": str(sku_or_part_id),
+            "days_to_stockout": case_input.get("days_to_stockout"),
+        }
+
+    def _get_supplier_profile(supplier_key_or_id: str | int) -> dict[str, Any]:
+        return {
+            "found": True,
+            "supplier_key": str(supplier_key_or_id),
+            "name": case_input.get("sender_name") or case_input.get("supplier_name"),
+            "memory_notes": list(case_input.get("supplier_memory_notes") or []),
+        }
+
+    def _get_mailroom_thread(thread_id: str) -> dict[str, Any]:
+        return {
+            "thread_id": thread_id,
+            "messages": list(case_input.get("thread_history") or []),
+        }
+
+    registry.register_function(
+        name="run_sandbox_calc",
+        description="Execute AST-sandboxed Python mathematical or date calculations.",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "python_script": {"type": "string"},
+                "variables": {"type": "object"},
+            },
+            "required": ["python_script"],
+        },
+        handler=_run_sandbox_calc,
+    )
+    registry.register_function(
+        name="get_po_details",
+        description="Retrieve open PO details by PO number or ID.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"po_number_or_id": {"type": "string"}},
+            "required": ["po_number_or_id"],
+        },
+        handler=_get_po_details,
+    )
+    registry.register_function(
+        name="get_part_snapshot",
+        description="Retrieve current stock balance and stockout runway for a SKU or part ID.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"sku_or_part_id": {"type": "string"}},
+            "required": ["sku_or_part_id"],
+        },
+        handler=_get_part_snapshot,
+    )
+    registry.register_function(
+        name="get_supplier_profile",
+        description="Retrieve supplier metrics and existing SupplierMemoryNotes.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"supplier_key_or_id": {"type": "string"}},
+            "required": ["supplier_key_or_id"],
+        },
+        handler=_get_supplier_profile,
+    )
+    registry.register_function(
+        name="get_mailroom_thread",
+        description="Retrieve messages in a mailroom thread.",
+        parameters_schema={
+            "type": "object",
+            "properties": {"thread_id": {"type": "string"}},
+            "required": ["thread_id"],
+        },
+        handler=_get_mailroom_thread,
+    )
+    return registry
 
 
 def _render_invoice_pdf_from_spec(pdf_spec: dict[str, Any]) -> bytes:
@@ -156,6 +307,18 @@ def _render_plain_text_pdf(text: str) -> bytes:
 class LexEvalExecutor:
     """Executes Lex YAML eval cases through real LexAgent methods & guardrails."""
 
+    def __init__(
+        self,
+        *,
+        tool_registry_factory: Callable[[Session], ToolRegistry] | None = None,
+    ) -> None:
+        self.tool_registry_factory = tool_registry_factory
+
+    def _resolve_registry(self, session: Session, case_input: dict[str, Any]) -> ToolRegistry:
+        if self.tool_registry_factory is not None:
+            return self.tool_registry_factory(session)
+        return _build_standalone_eval_registry(case_input)
+
     def execute_eval_case(
         self,
         session: Session,
@@ -176,10 +339,19 @@ class LexEvalExecutor:
             raise ValueError(f"Unsupported eval mode: {mode}")
 
         lex = LexAgent(llm_client=llm_client)
+        tool_registry = self._resolve_registry(session, case_input)
 
         if task == "email_triage":
             triage_input = EmailTriageInput.model_validate(case_input)
-            return lex.triage_email(session, triage_input).model_dump(mode="json")
+            out = lex.triage_email(
+                session,
+                triage_input,
+                tool_registry=tool_registry,
+            ).model_dump(mode="json")
+            latest = list_traces(session, agent_name=lex.agent_name, task_type=task, limit=1)
+            if latest:
+                out["tool_calls"] = list(latest[0].tool_calls_json or [])
+            return out
 
         if task == "invoice_extraction":
             if "pdf_spec" in case_input:
@@ -201,10 +373,30 @@ class LexEvalExecutor:
 
         if task == "email_draft":
             draft_input = EmailDraftInput.model_validate(case_input)
-            return lex.draft_email(session, draft_input).model_dump(mode="json")
+            out = lex.draft_email(
+                session,
+                draft_input,
+                tool_registry=tool_registry,
+            ).model_dump(mode="json")
+            latest = list_traces(session, agent_name=lex.agent_name, task_type=task, limit=1)
+            if latest:
+                out["tool_calls"] = list(latest[0].tool_calls_json or [])
+            return out
 
         if task == "stock_request_triage":
             sr_input = StockRequestTriageInput.model_validate(case_input)
             return lex.triage_stock_request(session, sr_input).model_dump(mode="json")
+
+        if task == "reminder_wakeup":
+            wakeup_input = ReminderWakeupInput.model_validate(case_input)
+            out = lex.inspect_reminder_wakeup(
+                session,
+                wakeup_input,
+                tool_registry=tool_registry,
+            ).model_dump(mode="json")
+            latest = list_traces(session, agent_name=lex.agent_name, task_type=task, limit=1)
+            if latest:
+                out["tool_calls"] = list(latest[0].tool_calls_json or [])
+            return out
 
         raise ValueError(f"Unsupported Lex eval task '{task}'.")

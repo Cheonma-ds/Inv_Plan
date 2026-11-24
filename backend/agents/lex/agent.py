@@ -7,6 +7,7 @@ from backend.agents.base import BaseAgent
 from backend.agents.lex.prompts import (
     DRAFT_SYSTEM_PROMPT,
     INVOICE_EXTRACTION_SYSTEM_PROMPT,
+    REMINDER_WAKEUP_SYSTEM_PROMPT,
     TRIAGE_SYSTEM_PROMPT,
 )
 from backend.agents.lex.schemas import (
@@ -18,11 +19,14 @@ from backend.agents.lex.schemas import (
     EmailTriageResult,
     InvoiceExtractionResult,
     PDFDocumentType,
+    ReminderWakeupInput,
+    ReminderWakeupResult,
     StockRequestTriageInput,
     StockRequestTriageResult,
 )
 from backend.agents.lex.stock_request import run_stock_request_triage
 from backend.agents.llm_client import GeminiLLMClient, LLMClientProtocol
+from backend.agents.tools import ToolRegistry
 from backend.core.enums import EmailCategory, PersonaKey
 from backend.observability.tracer import AgentTracer
 
@@ -125,6 +129,7 @@ class LexAgent(BaseAgent):
         linked_comm_id: int | None = None,
         pdf_bytes: bytes | None = None,
         image_attachments: list[tuple[str, bytes]] | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> EmailTriageResult:
         prompt = json.dumps(triage_input.model_dump(mode="json"), indent=2)
         trigger = f"Inbound email from {triage_input.sender_name}: {triage_input.subject}"
@@ -152,7 +157,14 @@ class LexAgent(BaseAgent):
             }
             if image_attachments:
                 llm_kwargs["image_attachments"] = image_attachments
-            llm_res = self.llm.generate_structured(**llm_kwargs)  # type: ignore[arg-type]
+            if tool_registry is not None and hasattr(self.llm, "generate_with_tools"):
+                llm_res = self.llm.generate_with_tools(
+                    **llm_kwargs,  # type: ignore[arg-type]
+                    tool_registry=tool_registry,
+                )
+                span.tool_calls.extend(llm_res.tool_calls)
+            else:
+                llm_res = self.llm.generate_structured(**llm_kwargs)  # type: ignore[arg-type]
             result = llm_res.parsed
 
             # Normalize additional_po_updates if top-level matched_po_number was omitted
@@ -182,6 +194,7 @@ class LexAgent(BaseAgent):
                             "carrier_name": first.carrier_name,
                             "tracking_number": first.tracking_number,
                             "details_promised_later": first.details_promised_later,
+                            "details_promised_days": first.details_promised_days,
                             "details_promised_by_date": first.details_promised_by_date,
                             "delay_reason": first.delay_reason,
                             "summary_for_manager": (
@@ -290,6 +303,7 @@ class LexAgent(BaseAgent):
         draft_input: EmailDraftInput,
         *,
         linked_po_id: int | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> EmailDraftResult:
         prompt = json.dumps(draft_input.model_dump(mode="json"), indent=2)
         ref = draft_input.po_number.strip() or draft_input.part_sku
@@ -309,12 +323,22 @@ class LexAgent(BaseAgent):
             )
             span.raw_prompt = prompt
 
-            llm_res = self.llm.generate_structured(
-                prompt=prompt,
-                response_schema=EmailDraftResult,
-                system_instruction=DRAFT_SYSTEM_PROMPT,
-                temperature=0.2,
-            )
+            if tool_registry is not None and hasattr(self.llm, "generate_with_tools"):
+                llm_res = self.llm.generate_with_tools(
+                    prompt=prompt,
+                    response_schema=EmailDraftResult,
+                    tool_registry=tool_registry,
+                    system_instruction=DRAFT_SYSTEM_PROMPT,
+                    temperature=0.2,
+                )
+                span.tool_calls.extend(llm_res.tool_calls)
+            else:
+                llm_res = self.llm.generate_structured(
+                    prompt=prompt,
+                    response_schema=EmailDraftResult,
+                    system_instruction=DRAFT_SYSTEM_PROMPT,
+                    temperature=0.2,
+                )
             result = llm_res.parsed
 
             # Sanitize recipients & enforce manager visibility CC on supplier/making messages
@@ -456,6 +480,80 @@ class LexAgent(BaseAgent):
                 f"Conf={result.confidence:.2f}"
             )
             span.confidence = result.confidence
+            span.raw_response = llm_res.raw_text
+            span.input_tokens = llm_res.input_tokens
+            span.output_tokens = llm_res.output_tokens
+            span.cost_inr = llm_res.cost_inr
+
+        return result
+
+    def inspect_reminder_wakeup(
+        self,
+        session: Session,
+        wakeup_input: ReminderWakeupInput,
+        *,
+        tool_registry: ToolRegistry | None = None,
+        linked_po_id: int | None = None,
+    ) -> ReminderWakeupResult:
+        """Inspect live PO/GRN/thread state on scheduled LexReminder wakeup."""
+        prompt = json.dumps(wakeup_input.model_dump(mode="json"), indent=2)
+        trigger = (
+            f"Reminder wakeup #{wakeup_input.reminder_id} for "
+            f"{wakeup_input.po_number} ({wakeup_input.part_sku})"
+        )
+
+        with AgentTracer.span(
+            session,
+            agent_name=self.agent_name,
+            task_type="reminder_wakeup",
+            trigger_summary=trigger,
+            linked_entity_type="po" if (linked_po_id or wakeup_input.po_id) else None,
+            linked_entity_id=linked_po_id or wakeup_input.po_id,
+        ) as span:
+            span.input_summary = (
+                f"PO={wakeup_input.po_number} | Status={wakeup_input.po_status} | "
+                f"GRNs={wakeup_input.grn_count} | Missing={wakeup_input.missing_dispatch_fields}"
+            )
+            span.raw_prompt = prompt
+
+            if tool_registry is not None and hasattr(self.llm, "generate_with_tools"):
+                llm_res = self.llm.generate_with_tools(
+                    prompt=prompt,
+                    response_schema=ReminderWakeupResult,
+                    tool_registry=tool_registry,
+                    system_instruction=REMINDER_WAKEUP_SYSTEM_PROMPT,
+                    temperature=0.0,
+                )
+                span.tool_calls.extend(llm_res.tool_calls)
+            else:
+                llm_res = self.llm.generate_structured(
+                    prompt=prompt,
+                    response_schema=ReminderWakeupResult,
+                    system_instruction=REMINDER_WAKEUP_SYSTEM_PROMPT,
+                    temperature=0.0,
+                )
+            result = llm_res.parsed
+
+            # Deterministic safety guard: never draft follow-up if GRN logged or details complete
+            if (
+                wakeup_input.grn_count > 0
+                or not wakeup_input.missing_dispatch_fields
+                or wakeup_input.po_status in ("CLOSED", "CANCELLED")
+            ) and result.should_draft_followup:
+                result = result.model_copy(
+                    update={
+                        "should_draft_followup": False,
+                        "reasoning": (
+                            f"[Guardrail Override: PO={wakeup_input.po_status}, "
+                            f"GRNs={wakeup_input.grn_count}, "
+                            f"Missing={wakeup_input.missing_dispatch_fields}] {result.reasoning}"
+                        ).strip(),
+                    }
+                )
+
+            span.output_summary = (
+                f"DraftFollowup={result.should_draft_followup} | {result.summary_for_manager}"
+            )
             span.raw_response = llm_res.raw_text
             span.input_tokens = llm_res.input_tokens
             span.output_tokens = llm_res.output_tokens

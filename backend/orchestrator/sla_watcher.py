@@ -4,7 +4,8 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend.agents.lex import EmailDraftInput, LexAgent
+from backend.agents.lex import EmailDraftInput, LexAgent, ReminderWakeupInput
+from backend.agents.tools import ToolRegistry
 from backend.core import clock
 from backend.core.enums import (
     ActionItemStatus,
@@ -12,6 +13,7 @@ from backend.core.enums import (
     Criticality,
     DispatchDetailsStatus,
     EmailCategory,
+    LexReminderStatus,
     PersonaKey,
     POStatus,
 )
@@ -19,6 +21,7 @@ from backend.core.models import (
     ActionItem,
     GoodsReceipt,
     Invoice,
+    LexReminder,
     Part,
     PartSupplierTerm,
     POCommunication,
@@ -27,6 +30,11 @@ from backend.core.models import (
     SupplierMemoryNote,
 )
 from backend.mailroom import OutboundMessage, save_draft
+from backend.orchestrator.lex_tools import (
+    LexToolTracker,
+    build_lex_tool_registry,
+    evaluate_memory_advisory_alerts,
+)
 from backend.planning import compute_demand_forecast, refresh_supplier_metrics
 from backend.po import compute_missing_dispatch_fields, create_action_item, transition_po
 
@@ -110,6 +118,7 @@ def _draft_lex_email_for_po(
     supplier: Supplier,
     category: EmailCategory,
     context_facts: dict,
+    tool_registry: ToolRegistry | None = None,
 ):
     sim_now = clock.now(session)
     currency = _term_currency(session, part.id, supplier.id)
@@ -130,6 +139,7 @@ def _draft_lex_email_for_po(
             context_facts={"currency": currency, **context_facts},
         ),
         linked_po_id=po.id,
+        tool_registry=tool_registry,
     )
     return save_draft(
         session,
@@ -218,10 +228,261 @@ def _handle_overdue_po(
     )
 
 
-def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
-    """Synchronously evaluate all active PO SLAs against the current SimulatedClock."""
-    sim_now = clock.now(session)
+def _process_due_lex_reminders(
+    session: Session,
+    lex_agent: LexAgent,
+    *,
+    sim_now,
+    tool_registry: ToolRegistry | None,
+) -> tuple[list[SLAEvent], set[int]]:
+    """Wake Lex on pending LexReminder rows whose remind_at <= sim_now."""
+    due_reminders = list(
+        session.scalars(
+            select(LexReminder)
+            .where(
+                LexReminder.status == LexReminderStatus.PENDING.value,
+                LexReminder.remind_at <= sim_now,
+            )
+            .order_by(LexReminder.remind_at.asc(), LexReminder.id.asc())
+        ).all()
+    )
     events: list[SLAEvent] = []
+    handled_deferred_po_ids: set[int] = set()
+    tool_capable = hasattr(lex_agent.llm, "generate_with_tools")
+
+    for reminder in due_reminders:
+        reminder.status = LexReminderStatus.TRIGGERED.value
+        reminder.triggered_at = sim_now
+
+        po = session.get(PurchaseOrder, reminder.po_id) if reminder.po_id else None
+        part = session.get(Part, po.part_id) if po is not None else (
+            session.get(Part, reminder.part_id) if reminder.part_id else None
+        )
+        supplier = session.get(Supplier, po.supplier_id) if po is not None else (
+            session.get(Supplier, reminder.supplier_id) if reminder.supplier_id else None
+        )
+        if (
+            po is None
+            or part is None
+            or supplier is None
+            or po.status in (POStatus.CLOSED.value, POStatus.CANCELLED.value)
+        ):
+            reminder.context_json = {
+                **(reminder.context_json or {}),
+                "wakeup_outcome": "po_inactive_or_missing",
+            }
+            continue
+
+        grn_count = int(
+            session.scalar(
+                select(func.count(GoodsReceipt.id)).where(GoodsReceipt.po_id == po.id)
+            )
+            or 0
+        )
+        missing_fields = list(compute_missing_dispatch_fields(po))
+        po.missing_dispatch_fields_json = missing_fields
+        ctx = dict(reminder.context_json or {})
+        is_dispatch_reminder = (
+            ctx.get("kind") == "dispatch_details_followup"
+            or po.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
+        )
+        if is_dispatch_reminder:
+            handled_deferred_po_ids.add(po.id)
+
+        forecast = compute_demand_forecast(session, part, sim_now=sim_now)
+        days_of_supply = (
+            round(part.on_hand_stock / forecast.effective_daily_demand, 2)
+            if forecast.effective_daily_demand > 0
+            else None
+        )
+        thread_id = _latest_thread_id(session, po.id)
+
+        should_draft = bool(
+            grn_count == 0
+            and missing_fields
+            and po.status
+            in (
+                POStatus.ACKNOWLEDGED.value,
+                POStatus.DELAYED_CRITICAL.value,
+                POStatus.OVERDUE.value,
+            )
+        )
+        wakeup_note = ""
+        if tool_capable:
+            wakeup_decision = lex_agent.inspect_reminder_wakeup(
+                session,
+                ReminderWakeupInput(
+                    reminder_id=reminder.id,
+                    po_id=po.id,
+                    po_number=po.po_number,
+                    part_sku=part.sku,
+                    part_name=part.name,
+                    supplier_name=supplier.name,
+                    current_date=sim_now.date().isoformat(),
+                    remind_at=clock.ensure_utc(reminder.remind_at).isoformat(),
+                    reminder_reason=reminder.reason,
+                    suggested_action=str(ctx.get("suggested_action") or ""),
+                    po_status=po.status,
+                    grn_count=grn_count,
+                    missing_dispatch_fields=missing_fields,
+                    days_to_stockout=days_of_supply,
+                    thread_id=thread_id,
+                ),
+                tool_registry=tool_registry,
+                linked_po_id=po.id,
+            )
+            should_draft = bool(wakeup_decision.should_draft_followup and should_draft)
+            wakeup_note = (
+                wakeup_decision.followup_context_note or wakeup_decision.summary_for_manager
+            )
+
+        if not missing_fields or grn_count > 0:
+            if (
+                not missing_fields
+                and po.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
+            ):
+                po.dispatch_details_status = DispatchDetailsStatus.COMPLETE.value
+                po.dispatch_details_due_at = None
+            auto_resolve_po_alerts(
+                session,
+                po.id,
+                ("DISPATCH_DETAILS_DEFERRED", "MISSING_DISPATCH_DETAILS_DUE"),
+            )
+            reminder.context_json = {
+                **ctx,
+                "wakeup_outcome": "no_followup_needed",
+                "wakeup_note": wakeup_note,
+            }
+            events.append(
+                SLAEvent(
+                    po_id=po.id,
+                    po_number=po.po_number,
+                    event_type="LEX_REMINDER_RESOLVED_NOOP",
+                    summary=(
+                        wakeup_note
+                        or f"Reminder #{reminder.id} checked {po.po_number}; no follow-up needed."
+                    ),
+                )
+            )
+            continue
+
+        if should_draft:
+            deferral_days = int(
+                ctx.get("deferral_days")
+                or max(
+                    1,
+                    round(
+                        (
+                            clock.ensure_utc(reminder.remind_at)
+                            - clock.ensure_utc(reminder.created_at)
+                        ).total_seconds()
+                        / 86400.0
+                    ),
+                )
+            )
+            due_date_str = clock.ensure_utc(reminder.remind_at).date().isoformat()
+            po.dispatch_details_status = DispatchDetailsStatus.TIMED_OUT.value
+            draft = _draft_lex_email_for_po(
+                session,
+                lex_agent,
+                po=po,
+                part=part,
+                supplier=supplier,
+                category=EmailCategory.DISPATCH_DETAILS_NUDGE,
+                context_facts={
+                    "missing_fields": missing_fields,
+                    "due_date": due_date_str,
+                    "deferral_days": deferral_days,
+                    "wakeup_note": wakeup_note,
+                    "promised_dispatch_date": (
+                        clock.ensure_utc(po.promised_dispatch_date).date().isoformat()
+                        if po.promised_dispatch_date
+                        else None
+                    ),
+                    "carrier_name": po.carrier_name,
+                    "tracking_number": po.tracking_number,
+                },
+                tool_registry=tool_registry,
+            )
+            alert = create_action_item(
+                session,
+                type="MISSING_DISPATCH_DETAILS_DUE",
+                severity=AlertSeverity.HIGH,
+                part_criticality=part.criticality,
+                days_to_stockout=days_of_supply,
+                title=(
+                    f"Dispatch details overdue ({deferral_days}-day wait expired): "
+                    f"{po.po_number} ({supplier.name})"
+                ),
+                summary=(
+                    f"The {deferral_days}-day wait window for {supplier.name} to share missing "
+                    f"dispatch details ({', '.join(missing_fields)}) on {po.po_number} "
+                    f"expired on {due_date_str}. Lex drafted a follow-up nudge email."
+                ),
+                po_id=po.id,
+                part_id=part.id,
+                draft_comm_id=draft.id,
+                suggested_actions=[
+                    {"action": "approve_draft", "label": "Approve & Send Nudge"},
+                    {"action": "reject_draft", "label": "Reject Draft"},
+                ],
+                cta_payload={
+                    "draft_comm_id": draft.id,
+                    "po_id": po.id,
+                    "reminder_id": reminder.id,
+                    "deferral_days": deferral_days,
+                    "missing_fields": missing_fields,
+                    "due_date": due_date_str,
+                },
+            )
+            reminder.context_json = {
+                **ctx,
+                "wakeup_outcome": "followup_drafted",
+                "draft_comm_id": draft.id,
+                "action_item_id": alert.id,
+            }
+            events.append(
+                SLAEvent(
+                    po_id=po.id,
+                    po_number=po.po_number,
+                    event_type="DISPATCH_DETAILS_NUDGE_DRAFTED",
+                    summary=alert.title,
+                    draft_comm_id=draft.id,
+                    action_item_id=alert.id,
+                )
+            )
+        else:
+            reminder.context_json = {
+                **ctx,
+                "wakeup_outcome": "triggered_no_draft",
+                "wakeup_note": wakeup_note,
+            }
+            events.append(
+                SLAEvent(
+                    po_id=po.id,
+                    po_number=po.po_number,
+                    event_type="LEX_REMINDER_TRIGGERED",
+                    summary=wakeup_note or f"Reminder #{reminder.id} triggered for {po.po_number}.",
+                )
+            )
+
+    return events, handled_deferred_po_ids
+
+
+def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
+    """Synchronously evaluate due LexReminders and all active PO SLAs."""
+    sim_now = clock.now(session)
+    tool_registry = (
+        build_lex_tool_registry(session, tracker=LexToolTracker())
+        if hasattr(lex_agent.llm, "generate_with_tools")
+        else None
+    )
+    events, handled_deferred_po_ids = _process_due_lex_reminders(
+        session,
+        lex_agent,
+        sim_now=sim_now,
+        tool_registry=tool_registry,
+    )
 
     active_statuses = (
         POStatus.SENT_AWAITING_ACK.value,
@@ -426,9 +687,10 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                 or 0
             )
 
-            # 2-Day Deferred Dispatch Details Expiry -> TIMED_OUT + DISPATCH_DETAILS_NUDGE
+            # Deferred Dispatch Details Expiry -> TIMED_OUT + DISPATCH_DETAILS_NUDGE
             if (
-                grn_count == 0
+                po.id not in handled_deferred_po_ids
+                and grn_count == 0
                 and po.dispatch_details_status == DispatchDetailsStatus.DEFERRED_2D.value
                 and po.dispatch_details_due_at is not None
                 and sim_now >= clock.ensure_utc(po.dispatch_details_due_at)
@@ -440,7 +702,15 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                     po.dispatch_details_status = DispatchDetailsStatus.COMPLETE.value
                     po.dispatch_details_due_at = None
                 else:
-                    due_date_str = clock.ensure_utc(po.dispatch_details_due_at).date().isoformat()
+                    due_utc = clock.ensure_utc(po.dispatch_details_due_at)
+                    due_date_str = due_utc.date().isoformat()
+                    anchor_ref = po.acknowledged_at or po.sent_at or po.created_at
+                    wait_days = max(
+                        1,
+                        round(
+                            (due_utc - clock.ensure_utc(anchor_ref)).total_seconds() / 86400.0
+                        ),
+                    )
                     po.dispatch_details_status = DispatchDetailsStatus.TIMED_OUT.value
                     draft = _draft_lex_email_for_po(
                         session,
@@ -452,6 +722,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         context_facts={
                             "missing_fields": missing_fields,
                             "due_date": due_date_str,
+                            "deferral_days": wait_days,
                             "promised_dispatch_date": (
                                 clock.ensure_utc(po.promised_dispatch_date).date().isoformat()
                                 if po.promised_dispatch_date
@@ -460,6 +731,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                             "carrier_name": po.carrier_name,
                             "tracking_number": po.tracking_number,
                         },
+                        tool_registry=tool_registry,
                     )
                     alert = create_action_item(
                         session,
@@ -468,11 +740,11 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         part_criticality=part.criticality,
                         days_to_stockout=days_of_supply,
                         title=(
-                            f"Dispatch details overdue (2-day wait expired): "
+                            f"Dispatch details overdue ({wait_days}-day wait expired): "
                             f"{po.po_number} ({supplier.name})"
                         ),
                         summary=(
-                            f"The 2-day wait window for {supplier.name} to share missing "
+                            f"The {wait_days}-day wait window for {supplier.name} to share missing "
                             f"dispatch details ({', '.join(missing_fields)}) on {po.po_number} "
                             f"expired on {due_date_str}. Lex drafted a follow-up nudge email."
                         ),
@@ -486,6 +758,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         cta_payload={
                             "draft_comm_id": draft.id,
                             "po_id": po.id,
+                            "deferral_days": wait_days,
                             "missing_fields": missing_fields,
                             "due_date": due_date_str,
                         },
@@ -535,6 +808,13 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
             ):
                 po.pre_eta_checked = True
                 eta_str = effective_eta.date().isoformat()
+                evaluate_memory_advisory_alerts(
+                    session,
+                    po=po,
+                    part=part,
+                    supplier=supplier,
+                    trigger_stage="pre_delivery",
+                )
                 draft = _draft_lex_email_for_po(
                     session,
                     lex_agent,
@@ -547,6 +827,7 @@ def run_sla_watcher(session: Session, lex_agent: LexAgent) -> list[SLAEvent]:
                         "supplier_reliability_score": supplier.reliability_score,
                         "part_criticality": part.criticality,
                     },
+                    tool_registry=tool_registry,
                 )
                 alert = create_action_item(
                     session,

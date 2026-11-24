@@ -29,6 +29,7 @@ Because `backend/agents/` cannot import `inventory/`, `po/`, `mailroom/`, or `pl
 ### 2.1 Enum Updates (`backend/core/enums.py`)
 - **`EmailCategory`:** Add `ADVISORY_NOTICE = "ADVISORY_NOTICE"` if needed, or reuse `GENERAL` / `DISPATCH_DETAILS_NUDGE` cleanly so existing `AutonomyPolicy` seeding continues iterating `EmailCategory`.
 - **`LexReminderStatus` (new `StrEnum`):** `PENDING`, `TRIGGERED`, `CANCELLED`.
+- **`DispatchDetailsStatus`:** Preserve existing `DEFERRED_2D = "DEFERRED_2D"` enum value on `PurchaseOrder.dispatch_details_status` for Phase 1/2 test and API compatibility while persisting the exact variable N-day deadline (`+4d`, etc.) in `PurchaseOrder.dispatch_details_due_at` and `LexReminder.remind_at`.
 - **`InventoryTxType`:** Keep `CONSUMPTION`, `RECEIPT_RELEASED`, `ADJUSTMENT` — distinguish simulated daily burn vs discrete demand events via a boolean column or explicit prefix/flag (see §2.2).
 
 ### 2.2 Additive Columns & New Tables (`backend/core/models.py` + `backend/core/migrations.py`)
@@ -190,8 +191,8 @@ Because `backend/agents/` cannot import `inventory/`, `po/`, `mailroom/`, or `pl
 When a supplier writes *"We acknowledged the PO, but due to system issues we can only share shipment details after 4 days"*:
 1. `LexAgent` uses `get_po_details`, `get_part_snapshot`, and `get_supplier_profile` + `run_sandbox_calc` to check `days_to_stockout` vs `4 days` + `effective_lead_time_days`.
 2. `EmailTriageResult` extracts `details_promised_later=True` AND `details_promised_days=4` / `details_promised_by_date="2026-10-05"`.
-3. `logistics_workflow.py` honors `details_promised_by_date` / `details_promised_days` (removing the hardcoded `details_due_days = 2` cap!), schedules a `LexReminder` for `+4 days` (`2026-10-05 13:00 IST`), does **NOT** create a nagging draft email today, and alerts the Manager (`DISPATCH_DETAILS_DEFERRED` if runway is safe, or `HIGH` stockout-risk escalation if `days_to_stockout` is dangerously tight!).
-4. When `SimulatedClock` passes `2026-10-05 13:00 IST`, `sla_watcher.py` fires the pending `LexReminder`, wakes Lex with live PO/GRN/thread context, and Lex drafts the follow-up only if dispatch details are still missing.
+3. `logistics_workflow.py` honors `details_promised_by_date` / `details_promised_days` (removing the hardcoded `details_due_days = 2` cap, via `apply_po_logistics_updates(..., details_due_at=...)`), schedules a `LexReminder` for `+4 days` (`2026-10-05 13:00 IST`), does **NOT** create a nagging draft email today, and alerts the Manager (`DISPATCH_DETAILS_DEFERRED` if runway is safe, or `HIGH` stockout-risk escalation if `days_to_stockout` is dangerously tight!).
+4. When `SimulatedClock` passes `2026-10-05 13:00 IST`, `sla_watcher.py` fires the pending `LexReminder` first (suppressing duplicate legacy `DEFERRED_2D` fallback firing via `handled_deferred_po_ids`), wakes Lex with live PO/GRN/thread context, and Lex drafts the follow-up only if dispatch details are still missing.
 
 ### 5.3 Formatting Enforcement & Frontend Rendering
 - `DRAFT_SYSTEM_PROMPT` mandates structured Markdown formatting (salutation, blank lines, bulleted terms with `**bold**` PO#/SKUs/quantities/`₹` totals/dates, explicit CTA, and standard Lex signature).

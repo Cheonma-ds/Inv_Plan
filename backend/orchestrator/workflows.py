@@ -28,7 +28,6 @@ from backend.core.enums import (
     InventoryTxType,
     PersonaKey,
     POStatus,
-    SupplierMemorySource,
 )
 from backend.core.models import (
     ActionItem,
@@ -72,6 +71,13 @@ from backend.orchestrator.invoice_workflow import (
     handle_damaged_grn_created,
     handle_invoice_match_outcome,
     process_pdf_invoice_email,
+)
+from backend.orchestrator.lex_tools import (
+    LexToolTracker,
+    build_lex_tool_registry,
+    cancel_pending_lex_reminders_for_po,
+    evaluate_memory_advisory_alerts,
+    propose_and_save_memory_note,
 )
 from backend.orchestrator.logistics_workflow import (
     create_supplier_memory_alert,
@@ -204,23 +210,15 @@ def _backup_supplier_info(
 def _save_learned_memory_note(
     session: Session, supplier_id: int, note_text: str | None
 ) -> SupplierMemoryNote | None:
-    if not note_text or not note_text.strip():
-        return None
-    cleaned = note_text.strip()
-    existing = _supplier_memory_texts(session, supplier_id)
-    if any(n.strip().lower() == cleaned.lower() for n in existing):
-        return None
-    sim_now = clock.now(session)
-    note_row = SupplierMemoryNote(
+    res = propose_and_save_memory_note(
+        session,
         supplier_id=supplier_id,
-        note=cleaned,
-        source=SupplierMemorySource.LEX_LEARNED.value,
-        created_at=sim_now,
-        updated_at=sim_now,
+        note=note_text,
+        create_alert=False,
     )
-    session.add(note_row)
-    session.flush()
-    return note_row
+    if res.get("action") == "created" and res.get("note_id"):
+        return session.get(SupplierMemoryNote, int(res["note_id"]))
+    return None
 
 
 class WorkflowEngine:
@@ -272,6 +270,7 @@ class WorkflowEngine:
                 context_facts={"currency": currency, **context_facts},
             ),
             linked_po_id=po.id,
+            tool_registry=build_lex_tool_registry(session),
         )
         return save_draft(
             session,
@@ -297,6 +296,7 @@ class WorkflowEngine:
         unit_price: float,
         quoted_lead_time_days: int,
         inventory_position_before: int,
+        eval_sim_now: datetime | None = None,
     ) -> tuple[PurchaseOrder, StoredEmail, ActionItem]:
         created_po = create_po(
             session,
@@ -353,6 +353,14 @@ class WorkflowEngine:
                 {"action": "edit_po", "label": "Edit PO"},
             ],
             cta_payload={"draft_comm_id": draft_email.id, "po_id": created_po.id},
+        )
+        evaluate_memory_advisory_alerts(
+            session,
+            po=created_po,
+            part=part,
+            supplier=supplier,
+            trigger_stage="po_created",
+            sim_now=eval_sim_now,
         )
         return created_po, draft_email, alert
 
@@ -671,6 +679,10 @@ class WorkflowEngine:
             thread_history=thread_history,
             supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
         )
+        tracker = LexToolTracker()
+        tool_registry = build_lex_tool_registry(
+            session, context_comm_id=email.id, tracker=tracker
+        )
         try:
             triage_result: EmailTriageResult = self.lex.triage_email(
                 session,
@@ -678,6 +690,7 @@ class WorkflowEngine:
                 linked_comm_id=email.id,
                 pdf_bytes=triage_pdf_bytes,
                 image_attachments=triage_image_attachments or None,
+                tool_registry=tool_registry,
             )
         except AssertionError:
             raise
@@ -692,6 +705,7 @@ class WorkflowEngine:
                         linked_comm_id=email.id,
                         pdf_bytes=None,
                         image_attachments=triage_image_attachments or None,
+                        tool_registry=tool_registry,
                     )
                 except AssertionError:
                     raise
@@ -715,17 +729,32 @@ class WorkflowEngine:
             po_id=matched_po.id if matched_po else email.po_id,
         )
 
-        learned_note = _save_learned_memory_note(
-            session, supplier.id, triage_result.new_memory_note
-        )
-        if learned_note is not None:
-            create_supplier_memory_alert(
+        if (
+            triage_result.new_memory_note
+            and triage_result.new_memory_note.strip().lower()
+            not in tracker.handled_memory_texts
+        ):
+            mem_res = propose_and_save_memory_note(
                 session,
-                supplier=supplier,
-                note=learned_note,
+                supplier_id=supplier.id,
+                note=triage_result.new_memory_note,
+                reasoning=triage_result.reasoning,
                 po=matched_po,
                 comm_id=email.id,
+                create_alert=False,
+                tracker=tracker,
             )
+            if mem_res.get("action") == "created" and mem_res.get("note_id"):
+                learned_note = session.get(SupplierMemoryNote, int(mem_res["note_id"]))
+                if learned_note is not None:
+                    create_supplier_memory_alert(
+                        session,
+                        supplier=supplier,
+                        note=learned_note,
+                        po=matched_po,
+                        comm_id=email.id,
+                        reasoning=triage_result.reasoning,
+                    )
 
         # If an attached PDF is locked/corrupt OR email is an invoice submission -> PDF pipeline
         should_run_invoice_pipeline = (
@@ -764,6 +793,7 @@ class WorkflowEngine:
                     carrier_name=add.carrier_name,
                     tracking_number=add.tracking_number,
                     details_promised_later=add.details_promised_later,
+                    details_promised_days=add.details_promised_days,
                     details_promised_by_date=add.details_promised_by_date,
                     delay_reason=add.delay_reason,
                     summary_for_manager=(
@@ -790,6 +820,7 @@ class WorkflowEngine:
                     matched_po=item_po,
                     image_paths=image_paths,
                     sim_now=sim_now,
+                    tracker=tracker,
                 )
             )
 
@@ -819,6 +850,7 @@ class WorkflowEngine:
         matched_po: PurchaseOrder | None,
         image_paths: list[str],
         sim_now: datetime,
+        tracker: LexToolTracker | None = None,
     ) -> dict[str, Any]:
         created_alert: ActionItem | None = None
         created_draft: StoredEmail | None = None
@@ -1022,6 +1054,7 @@ class WorkflowEngine:
                     supplier=supplier,
                     email=email,
                     triage_result=triage_result,
+                    tracker=tracker,
                 )
                 created_alert = ack_res["alert"]
                 created_draft = ack_res["draft"]
@@ -1034,8 +1067,11 @@ class WorkflowEngine:
                     email=email,
                     triage_result=triage_result,
                     create_plain_message_fallback=True,
+                    engine=self,
+                    tracker=tracker,
                 )
                 created_alert = follow_res["alert"]
+                created_draft = follow_res.get("draft")
 
         elif triage_result.intent in EXCEPTION_INTENTS:
             # F-2.2: Permit post-ack reversals (ACKNOWLEDGED / DELAYED_CRITICAL -> EXCEPTION_REVIEW)
@@ -1388,6 +1424,8 @@ class WorkflowEngine:
                     email=email,
                     triage_result=triage_result,
                     create_plain_message_fallback=False,
+                    engine=self,
+                    tracker=tracker,
                 )
 
         elif triage_result.intent == EmailIntent.GENERAL_REPLY:
@@ -1417,8 +1455,11 @@ class WorkflowEngine:
                     email=email,
                     triage_result=triage_result,
                     create_plain_message_fallback=True,
+                    engine=self,
+                    tracker=tracker,
                 )
                 created_alert = follow_res["alert"]
+                created_draft = follow_res.get("draft")
 
         return {
             "matched_po_id": matched_po.id,
@@ -1486,6 +1527,7 @@ class WorkflowEngine:
             received_qty=received_qty,
             condition=condition,
         )
+        cancel_pending_lex_reminders_for_po(session, po_id, reason="Goods receipt logged")
         auto_resolve_po_alerts(
             session,
             po_id,
@@ -1495,6 +1537,7 @@ class WorkflowEngine:
                 "MISSING_DISPATCH_DETAILS",
                 "MISSING_DISPATCH_DETAILS_DUE",
                 "DISPATCH_DETAILS_DEFERRED",
+                "DISPATCH_DEFERRAL_STOCKOUT_RISK",
             ),
         )
 
@@ -1800,6 +1843,7 @@ class WorkflowEngine:
         po = get_po(session, po_id)
         was_quarantined = po.status == POStatus.QUARANTINED_INVOICE_MISMATCH.value
         cancel_po(session, po_id, note=note)
+        cancel_pending_lex_reminders_for_po(session, po.id, reason="PO cancelled")
         cleared_qty = self._clear_quarantined_stock_for_cancelled_po(
             session, po, was_quarantined=was_quarantined
         )
@@ -1830,6 +1874,9 @@ class WorkflowEngine:
             po_id,
             backup_supplier_id=backup_supplier_id,
             note=note,
+        )
+        cancel_pending_lex_reminders_for_po(
+            session, orig_po.id, reason="Switched to backup supplier"
         )
         cleared_qty = self._clear_quarantined_stock_for_cancelled_po(
             session, orig_po, was_quarantined=was_quarantined
@@ -2033,6 +2080,13 @@ class WorkflowEngine:
                 category=EmailCategory.PO_DISPATCH,
             ),
             allow_agent_send=False,
+        )
+        evaluate_memory_advisory_alerts(
+            session,
+            po=po,
+            part=part,
+            supplier=supplier,
+            trigger_stage="po_created",
         )
         session.flush()
         return {"po": po, "email": sent_email}
@@ -2408,6 +2462,7 @@ class WorkflowEngine:
                             unit_price=primary_term.agreed_unit_price,
                             quoted_lead_time_days=primary_term.quoted_lead_time_days,
                             inventory_position_before=snap.inventory_position,
+                            eval_sim_now=min(new_now, burn_ts),
                         )
                         settled_events.append(
                             {
