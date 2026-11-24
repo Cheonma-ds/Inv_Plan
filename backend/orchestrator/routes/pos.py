@@ -61,6 +61,15 @@ class ManualPOCreateRequest(BaseModel):
     body: str = Field(min_length=1)
 
 
+class DispatchEditedPORequest(BaseModel):
+    supplier_id: int | None = None
+    qty: int | None = Field(default=None, gt=0)
+    unit_price: float | None = Field(default=None, gt=0)
+    subject: str | None = None
+    body: str | None = None
+    note: str | None = None
+
+
 def _iso_or_none(dt: datetime | None) -> str | None:
     return clock.ensure_utc(dt).isoformat() if dt else None
 
@@ -359,4 +368,38 @@ def post_escalate_procurement(
         "po": _serialize_po(po, part, supplier),
         "comm_id": outcome["email"].id,
         "alert_id": outcome["alert"].id,
+    }
+
+
+@router.post("/{po_id}/dispatch-edited")
+def post_dispatch_edited_po(
+    po_id: int,
+    payload: DispatchEditedPORequest,
+    session: Session = Depends(get_session),
+    engine: WorkflowEngine = Depends(get_workflow_engine),
+) -> dict:
+    try:
+        outcome = engine.dispatch_edited_po(
+            session,
+            po_id,
+            supplier_id=payload.supplier_id,
+            qty=payload.qty,
+            unit_price=payload.unit_price,
+            subject=payload.subject,
+            body=payload.body,
+            note=payload.note,
+        )
+    except PONotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (InvalidPOTransitionError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    po = outcome["po"]
+    part = session.get(Part, po.part_id)
+    supplier = session.get(Supplier, po.supplier_id)
+    return {
+        "po": _serialize_po(po, part, supplier),
+        "comm_id": outcome["email"].id,
+        "resolved_alerts": outcome["resolved_alerts"],
+        "superseded_comm_ids": outcome["superseded_comm_ids"],
     }

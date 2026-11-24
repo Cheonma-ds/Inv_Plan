@@ -21,6 +21,7 @@ from backend.core.enums import (
     ActionItemStatus,
     AlertSeverity,
     ApprovalOutcome,
+    CommStatus,
     Criticality,
     EmailCategory,
     GRNStatus,
@@ -36,6 +37,7 @@ from backend.core.models import (
     Invoice,
     Part,
     PartSupplierTerm,
+    POCommunication,
     PurchaseOrder,
     Supplier,
     SupplierMemoryNote,
@@ -328,7 +330,7 @@ class WorkflowEngine:
             draft_comm_id=draft_email.id,
             suggested_actions=[
                 {"action": "approve_draft", "label": "Approve & Send PO"},
-                {"action": "reject_draft", "label": "Reject Draft"},
+                {"action": "edit_po", "label": "Edit PO"},
             ],
             cta_payload={"draft_comm_id": draft_email.id, "po_id": created_po.id},
         )
@@ -1533,16 +1535,16 @@ class WorkflowEngine:
                 else AlertSeverity.MEDIUM
             )
             title = (
-                f"Update ROP/S for {rec.sku}: "
+                f"Update ROP/T for {rec.sku}: "
                 f"ROP {rec.current_rop} → {rec.recommended_rop}, "
-                f"S {rec.current_replenishment_point} → {rec.recommended_replenishment_point}"
+                f"T {rec.current_replenishment_point} → {rec.recommended_replenishment_point}"
             )
             suggested = [
                 {
                     "action": "approve_rop",
                     "label": (
                         f"Approve ROP {rec.recommended_rop} / "
-                        f"S {rec.recommended_replenishment_point}"
+                        f"T {rec.recommended_replenishment_point}"
                     ),
                 }
             ]
@@ -1711,15 +1713,6 @@ class WorkflowEngine:
             action_category=rejected.category,
             outcome=ApprovalOutcome.REJECTED,
         )
-        open_items = session.scalars(
-            select(ActionItem).where(
-                ActionItem.draft_comm_id == comm_id,
-                ActionItem.status == ActionItemStatus.OPEN.value,
-            )
-        ).all()
-        for item in open_items:
-            resolve_action_item(session, item.id)
-
         session.flush()
         return {
             "email": rejected,
@@ -1843,7 +1836,7 @@ class WorkflowEngine:
             draft_comm_id=draft.id,
             suggested_actions=[
                 {"action": "approve_draft", "label": "Approve & Send Backup PO"},
-                {"action": "reject_draft", "label": "Reject Draft"},
+                {"action": "edit_po", "label": "Edit PO"},
             ],
             cta_payload={"draft_comm_id": draft.id, "po_id": new_po.id},
         )
@@ -2005,6 +1998,172 @@ class WorkflowEngine:
         )
         session.flush()
         return {"po": po, "email": sent_email}
+
+    def dispatch_edited_po(
+        self,
+        session: Session,
+        po_id: int,
+        *,
+        supplier_id: int | None = None,
+        qty: int | None = None,
+        unit_price: float | None = None,
+        subject: str | None = None,
+        body: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing PENDING_DISPATCH_APPROVAL PO, supersede drafts, and dispatch."""
+        po = get_po(session, po_id)
+        if po.status != POStatus.PENDING_DISPATCH_APPROVAL.value:
+            raise ValueError(
+                f"PO {po.po_number} must be in PENDING_DISPATCH_APPROVAL to dispatch-edited "
+                f"(current status: {po.status})"
+            )
+
+        target_supplier_id = supplier_id if supplier_id is not None else po.supplier_id
+        part, supplier, term = self._get_part_supplier_term(
+            session, part_id=po.part_id, supplier_id=target_supplier_id
+        )
+        target_qty = qty if qty is not None else po.qty
+        if target_qty <= 0:
+            raise ValueError("Order quantity must be greater than 0")
+
+        if unit_price is not None:
+            if unit_price <= 0:
+                raise ValueError("PO unit_price must be greater than 0")
+            target_price = round(float(unit_price), 2)
+        elif target_supplier_id != po.supplier_id:
+            target_price = term.agreed_unit_price
+        else:
+            target_price = po.unit_price
+
+        po.supplier_id = target_supplier_id
+        po.qty = target_qty
+        po.unit_price = target_price
+        if note:
+            append_po_note(session, po, note)
+
+        # Supersede any existing unapproved DRAFT_PENDING_APPROVAL comms linked to this PO
+        superseded_comm_ids: list[int] = []
+        pending_comms = list(
+            session.scalars(
+                select(POCommunication).where(
+                    POCommunication.po_id == po.id,
+                    POCommunication.status == CommStatus.DRAFT_PENDING_APPROVAL.value,
+                )
+            ).all()
+        )
+        for comm in pending_comms:
+            reject_draft(session, comm.id)
+            superseded_comm_ids.append(comm.id)
+
+        sim_now = clock.now(session)
+        clean_subject = (subject or "").strip()
+        clean_body = (body or "").strip()
+        if not clean_subject or not clean_body:
+            currency = term.currency or "INR"
+            draft_res = self.lex.draft_email(
+                session,
+                EmailDraftInput(
+                    category=EmailCategory.PO_DISPATCH,
+                    po_number=po.po_number,
+                    part_sku=part.sku,
+                    part_name=part.name,
+                    qty=target_qty,
+                    unit_price=target_price,
+                    currency=currency,
+                    recipient_persona=supplier.persona_key,
+                    recipient_name=supplier.name,
+                    current_date=sim_now.date().isoformat(),
+                    supplier_memory_notes=_supplier_memory_texts(session, supplier.id),
+                    required_cc_personas=[
+                        PersonaKey.INVENTORY_MANAGER.value,
+                        PersonaKey.LEX.value,
+                    ],
+                    context_facts={
+                        "currency": currency,
+                        "order_qty": target_qty,
+                        "unit_price": target_price,
+                        "total_value": round(target_qty * target_price, 2),
+                        "quoted_lead_time_days": term.quoted_lead_time_days,
+                        "effective_lead_time_days": term.effective_lead_time_days,
+                        "part_criticality": part.criticality,
+                        "edited_dispatch": True,
+                    },
+                ),
+            )
+            if not clean_subject:
+                clean_subject = draft_res.subject
+            if not clean_body:
+                clean_body = draft_res.body
+
+        final_subject = (
+            clean_subject
+            if po.po_number in clean_subject
+            else f"[{po.po_number}] {clean_subject}"
+        )
+        sent_email = send_email(
+            session,
+            OutboundMessage(
+                from_persona=PersonaKey.INVENTORY_MANAGER,
+                to_personas=[PersonaKey(supplier.persona_key)],
+                cc_personas=[PersonaKey.LEX, PersonaKey.INVENTORY_MANAGER],
+                subject=final_subject,
+                body=clean_body,
+                po_id=po.id,
+                category=EmailCategory.PO_DISPATCH,
+            ),
+            allow_agent_send=False,
+        )
+
+        promised_eta = sim_now + timedelta(days=term.quoted_lead_time_days)
+        transition_po(
+            session,
+            po,
+            POStatus.SENT_AWAITING_ACK,
+            promised_eta=promised_eta,
+            note=(
+                f"Edited PO dispatched to {supplier.name} "
+                f"({target_qty} units @ ₹{target_price:,.2f})."
+            ),
+        )
+        is_critical = part.criticality == Criticality.CRITICAL.value
+        po.follow_up_count = 0
+        po.next_sla_check_at = sim_now + timedelta(hours=24 if is_critical else 48)
+
+        resolved_alerts = 0
+        open_dispatch_alerts = list(
+            session.scalars(
+                select(ActionItem).where(
+                    ActionItem.po_id == po.id,
+                    ActionItem.type == "PO_DISPATCH_APPROVAL",
+                    ActionItem.status == ActionItemStatus.OPEN.value,
+                )
+            ).all()
+        )
+        for alert in open_dispatch_alerts:
+            resolve_action_item(session, alert.id)
+            resolved_alerts += 1
+
+        dismissed_dispatch_alerts = list(
+            session.scalars(
+                select(ActionItem).where(
+                    ActionItem.po_id == po.id,
+                    ActionItem.type == "PO_DISPATCH_APPROVAL",
+                    ActionItem.status == ActionItemStatus.DISMISSED.value,
+                    ActionItem.dismiss_resolved_at.is_(None),
+                )
+            ).all()
+        )
+        for alert in dismissed_dispatch_alerts:
+            alert.dismiss_resolved_at = sim_now
+
+        session.flush()
+        return {
+            "po": po,
+            "email": sent_email,
+            "resolved_alerts": resolved_alerts,
+            "superseded_comm_ids": superseded_comm_ids,
+        }
 
     def escalate_to_procurement(
         self,
@@ -2348,6 +2507,36 @@ class WorkflowEngine:
                 raise ValueError("No draft_comm_id linked to this alert")
             return self.reject_lex_draft(session, draft_id)
 
+        if action == "edit_po":
+            po_id = int(params.get("po_id") or cta.get("po_id") or item.po_id or 0)
+            if not po_id:
+                raise ValueError("No po_id linked to this alert")
+            outcome = self.dispatch_edited_po(
+                session,
+                po_id,
+                supplier_id=(
+                    int(params["supplier_id"])
+                    if params.get("supplier_id") is not None
+                    else None
+                ),
+                qty=int(params["qty"]) if params.get("qty") is not None else None,
+                unit_price=(
+                    float(params["unit_price"])
+                    if params.get("unit_price") is not None
+                    else None
+                ),
+                subject=params.get("subject"),
+                body=params.get("body"),
+                note=params.get("note"),
+            )
+            return {
+                "po_id": outcome["po"].id,
+                "po_status": outcome["po"].status,
+                "comm_id": outcome["email"].id,
+                "resolved_alerts": outcome["resolved_alerts"],
+                "superseded_comm_ids": outcome["superseded_comm_ids"],
+            }
+
         if action == "update_po":
             if (
                 item.type == "CURRENCY_MISMATCH" or cta.get("currency_mismatch")
@@ -2427,7 +2616,7 @@ class WorkflowEngine:
                     draft_comm_id=draft.id,
                     suggested_actions=[
                         {"action": "approve_draft", "label": "Approve & Send Revised PO"},
-                        {"action": "reject_draft", "label": "Reject Draft"},
+                        {"action": "edit_po", "label": "Edit PO"},
                     ],
                     cta_payload={"draft_comm_id": draft.id, "po_id": po.id},
                 )

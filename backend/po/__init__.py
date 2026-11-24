@@ -1,9 +1,11 @@
 from backend.po.actions import (
     ActionItemNotFoundError,
+    acknowledge_dismissed_action_item,
     compute_urgency_score,
     create_action_item,
     dismiss_action_item,
     list_action_items,
+    reopen_action_item,
     resolve_action_item,
 )
 from backend.po.logistics import (
@@ -47,6 +49,7 @@ from backend.po.state_machine import (
 __all__ = [
     "ALLOWED_TRANSITIONS",
     "ActionItemNotFoundError",
+    "acknowledge_dismissed_action_item",
     "BackupSupplierNotFoundError",
     "InvalidPOTransitionError",
     "LINE_TOTAL_TOLERANCE_INR",
@@ -75,6 +78,7 @@ __all__ = [
     "list_pos",
     "record_goods_receipt",
     "record_net_settlement_invoice",
+    "reopen_action_item",
     "resolve_action_item",
     "submit_invoice_and_match",
     "switch_po_to_backup_supplier",

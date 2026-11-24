@@ -1,6 +1,17 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class UnresolvedDismissedAlert(BaseModel):
+    id: int
+    type: str
+    severity: str
+    title: str
+    summary: str
+    po_id: int | None = None
+    created_at: datetime
+    resolved_at: datetime | None = None
 
 
 class PartSnapshot(BaseModel):
@@ -20,6 +31,7 @@ class PartSnapshot(BaseModel):
     active_po_number: str | None = None
     active_po_status: str | None = None
     pending_dispatch_qty: int = 0
+    unresolved_dismissed_alerts: list[UnresolvedDismissedAlert] = Field(default_factory=list)
 
 
 class ReorderTriggered(BaseModel):

@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
-from backend.core.enums import ActionItemStatus, AlertSeverity, Criticality
-from backend.core.models import ActionItem
+from backend.core.enums import ActionItemStatus, AlertSeverity, CommStatus, Criticality
+from backend.core.models import ActionItem, POCommunication
 
 SEVERITY_BASE_SCORE: dict[str, int] = {
     AlertSeverity.CRITICAL.value: 80,
@@ -139,5 +139,32 @@ def dismiss_action_item(session: Session, action_item_id: int) -> ActionItem:
         raise ActionItemNotFoundError(f"ActionItem {action_item_id} not found")
     item.status = ActionItemStatus.DISMISSED.value
     item.resolved_at = clock.now(session)
+    item.dismiss_resolved_at = None
+    if item.draft_comm_id is not None:
+        comm = session.get(POCommunication, item.draft_comm_id)
+        if comm is not None and comm.status == CommStatus.DRAFT_PENDING_APPROVAL.value:
+            comm.status = CommStatus.REJECTED.value
+    session.flush()
+    return item
+
+
+def reopen_action_item(session: Session, action_item_id: int) -> ActionItem:
+    item = session.get(ActionItem, action_item_id)
+    if item is None:
+        raise ActionItemNotFoundError(f"ActionItem {action_item_id} not found")
+    item.status = ActionItemStatus.OPEN.value
+    item.resolved_at = None
+    item.dismiss_resolved_at = None
+    session.flush()
+    return item
+
+
+def acknowledge_dismissed_action_item(session: Session, action_item_id: int) -> ActionItem:
+    item = session.get(ActionItem, action_item_id)
+    if item is None:
+        raise ActionItemNotFoundError(f"ActionItem {action_item_id} not found")
+    if item.status != ActionItemStatus.DISMISSED.value:
+        raise ValueError(f"ActionItem {action_item_id} is not DISMISSED")
+    item.dismiss_resolved_at = clock.now(session)
     session.flush()
     return item

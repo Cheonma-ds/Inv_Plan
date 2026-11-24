@@ -117,6 +117,7 @@ def list_parts(session: Session = Depends(get_session)) -> list[dict]:
                 "suppliers": terms_by_part.get(snap.part_id, []),
             }
         )
+    session.commit()
     return output
 
 
@@ -132,6 +133,7 @@ def get_part(part_id: int, session: Session = Depends(get_session)) -> dict:
         if part_obj is not None
         else {}
     )
+    session.commit()
     return {**snap.model_dump(), **metrics_payload}
 
 

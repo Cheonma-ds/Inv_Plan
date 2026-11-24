@@ -1,6 +1,6 @@
 # STATUS_P3.md — Phase 3 Live Session Baton
 
-**Current Stage:** **Slice P3-2 Complete** — Ready to Start **Slice P3-3**  
+**Current Stage:** **Slice P3-3 Complete** — Ready to Start **Slice P3-4**  
 **Last Updated:** 2026-11-24  
 **Baseline Reference:** `HEAD` (`099474f`), [`STATUS.md`](../../STATUS.md), [`STATUS_P2.md`](../phase2/STATUS_P2.md)  
 **Planning Docs:** [`PRD_P3.md`](PRD_P3.md) · [`DESIGN_P3.md`](DESIGN_P3.md) · [`SLICES_P3.md`](SLICES_P3.md)
@@ -11,7 +11,7 @@
 
 - [x] **Slice P3-1:** Core Clock (`Oct 1 13:00 IST`), Schema Migrations, `on_order` Draft Exclusion, Partial GRN Match & Overdue Fixes
 - [x] **Slice P3-2:** 90-Day Causal Seed Simulator (`Jul–Sep`, 0 Open POs), Daily Burn EWMA ($\alpha=0.3$), Clock Rollover & Cycle Analytics
-- [ ] **Slice P3-3:** Alerting Overhaul (`Edit PO`, Non-Resolving `Reject`, `DISMISSED` Hiding + Inventory Warning) & `ROP/T` Sweep
+- [x] **Slice P3-3:** Alerting Overhaul (`Edit PO`, Non-Resolving `Reject`, `DISMISSED` Hiding + Inventory Warning) & `ROP/T` Sweep
 - [ ] **Slice P3-4:** Lex Resilience (Retries/Fallbacks), Multimodal Image Triage & Enforced Email Formatting
 - [ ] **Slice P3-5:** Lex v2 Tool-Use Loop, AST-Sandboxed Calc Executor, Dynamic Reminders (`+4d` Deferral) & Memory Alerts
 - [ ] **Slice P3-6:** Frontend Core (IST Clock, Sidebar Cleanup, `FormattedEmailBody`, `InventoryPage` Revamp & `StockoutCycleDrawer`)
@@ -52,17 +52,29 @@
 
 ---
 
-## Next Session Handoff Prompt — Start Slice `P3-3`
+## Completed Slice Summary — `P3-3`
 
-> Implement **Slice P3-3** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
-> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md §2 (Pillar 4 items 1–2 & Pillar 3 item 2)`, `docs/phase3/DESIGN_P3.md §3.4 item 5`, `docs/phase3/SLICES_P3.md (Slice P3-3)`, and target files: `backend/po/{actions,__init__}.py`, `backend/planning/rop.py`, `backend/orchestrator/{workflows,stock_request_workflow,routes/alerts,routes/pos,routes/parts}.py`.
-> - **Leave Untouched:** `frontend/`, `backend/agents/`, `backend/seed/data.py`, `backend/mailroom/`.
+- **Files Added:**
+  - `tests/orchestrator/test_alerts_phase3.py` (6 tests covering `PO_DISPATCH_APPROVAL` `edit_po` CTA & `POST /api/pos/{po_id}/dispatch-edited`, non-resolving `reject_lex_draft`, `DISMISSED` draft rejection & `draft_preview = None`, `PartSnapshot.unresolved_dismissed_alerts` + auto-resolution of `dismiss_resolved_at`, `/reopen` & `/acknowledge-dismissed`, and `ROP/T` alert naming).
+- **Files Modified:**
+  - `backend/po/actions.py`, `backend/po/__init__.py` (`dismiss_action_item` rejects pending `DRAFT_PENDING_APPROVAL` linked comm and resets `dismiss_resolved_at = None`; added `reopen_action_item` and `acknowledge_dismissed_action_item`).
+  - `backend/inventory/schemas.py`, `backend/inventory/service.py` (added `UnresolvedDismissedAlert` and `PartSnapshot.unresolved_dismissed_alerts`; `_evaluate_unresolved_dismissed_alerts` surfaces unresolved dismissed alerts and auto-sets `dismiss_resolved_at` when underlying PO/stock/quarantine conditions resolve).
+  - `backend/orchestrator/workflows.py` (replaced `reject_draft` with `edit_po` on `PO_DISPATCH_APPROVAL` alerts; added `dispatch_edited_po` + `edit_po` CTA handler; made `reject_lex_draft` non-resolving; updated `ROP_RECOMMENDATION` alert titles/labels to `ROP/T` / `T`).
+  - `backend/orchestrator/routes/alerts.py`, `backend/orchestrator/routes/pos.py`, `backend/orchestrator/routes/parts.py` (hid `draft_preview` on `DISMISSED` alerts & exposed `dismiss_resolved_at`; added `POST /api/alerts/{id}/reopen`, `POST /api/alerts/{id}/acknowledge-dismissed`, and `POST /api/pos/{po_id}/dispatch-edited`; committed auto-resolved `dismiss_resolved_at` updates on `GET /api/parts` & `GET /api/parts/{part_id}`).
+- **Verification:** `uv run pytest -v` (`110 passed, 3 skipped` — 3 live-Gemini tests skipped offline) and `uv run ruff check backend tests` (`All checks passed!`), including all 5 AST checks in `tests/test_architecture.py`. `frontend/`, `backend/agents/`, `backend/seed/data.py`, and `backend/mailroom/` left untouched.
+
+---
+
+## Next Session Handoff Prompt — Start Slice `P3-4`
+
+> Implement **Slice P3-4** per `docs/phase3/SLICES_P3.md` and `docs/phase3/DESIGN_P3.md`:
+> - **Read:** `AGENTS.md`, `docs/phase3/STATUS_P3.md`, `docs/phase3/PRD_P3.md §2 (Pillar 5 & Pillar 6 item 6)`, `docs/phase3/DESIGN_P3.md §5.3`, `docs/phase3/SLICES_P3.md (Slice P3-4)`, and target files: `backend/agents/llm_client.py`, `backend/agents/lex/{prompts,agent,eval_adapter}.py`, `backend/orchestrator/workflows.py`, `backend/evals/lex.yaml`.
+> - **Leave Untouched:** `frontend/`, `backend/inventory/`, `backend/planning/`, `backend/po/`.
 > - **Acceptance Criteria:**
->   1. Replace `reject_draft` suggested action with `edit_po` (`Edit PO`) on `PO_DISPATCH_APPROVAL` alerts (`_create_auto_replenishment_po`, `switch_to_backup_supplier`, `update_po` revised-PO path in `workflows.py`); implement `WorkflowEngine.dispatch_edited_po()` + `POST /api/pos/{po_id}/dispatch-edited` + `edit_po` CTA handler (updating existing draft PO's supplier/qty/price, superseding/cancelling old `DRAFT_PENDING_APPROVAL` comm, transitioning `PENDING_DISPATCH_APPROVAL -> SENT_AWAITING_ACK`, dispatching edited email, setting `promised_eta` & `next_sla_check_at`, and resolving the parent alert without creating duplicate POs).
->   2. Update `WorkflowEngine.reject_lex_draft()` so rejecting a draft communication sets `CommStatus.REJECTED` and records `ApprovalOutcome.REJECTED` **without** resolving the parent `ActionItem`.
->   3. Update `dismiss_action_item` and `GET /api/alerts` (`backend/po/actions.py`, `backend/orchestrator/routes/alerts.py`, `routes/parts.py`): dismissing an alert rejects any unapproved `DRAFT_PENDING_APPROVAL` linked comm, hides `draft_preview` (`None`) on `DISMISSED` alerts, exposes `unresolved_dismissed_alerts` on `PartSnapshot` / `GET /api/parts` while underlying PO/stock/quarantine conditions persist (`dismiss_resolved_at is None`), auto-sets `dismiss_resolved_at` once resolved, and adds `POST /api/alerts/{id}/reopen` and `POST /api/alerts/{id}/acknowledge-dismissed`.
->   4. Sweep all remaining backend `ROP/S` / `ROP / S` strings to `ROP/T` (e.g., `ROP_RECOMMENDATION` alert titles in `workflows.py`, docstrings/labels in `planning/rop.py`, `routes/parts.py`).
->   5. Add `tests/orchestrator/test_alerts_phase3.py`, run `uv run pytest -v` and `uv run ruff check backend tests`, verify `tests/test_architecture.py` passes, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
+>   1. Harden `GeminiLLMClient` with configurable timeout, exponential-backoff retries on transient errors, and `image_attachments` multimodal input support in `LLMClientProtocol`.
+>   2. Upgrade `DRAFT_SYSTEM_PROMPT` & `LexAgent.draft_email()` with structured paragraph/bullet/`**bold**`/sign-off formatting enforcement + deterministic cleanup & currency/PO verification.
+>   3. Pass image attachments and multi-PDF context cleanly from `workflows.py`, add graceful fallback to `AMBIGUOUS_EMAIL` on LLM failure (zero `500` crashes), and close any `additional_po_updates` `PRICE_CHANGE` guardrail gap in `agent.py`.
+>   4. Update `backend/evals/lex.yaml`, add `tests/agents/test_lex_formatting_and_resilience.py`, run `uv run pytest -v` and `uv run ruff check backend tests`, verify `tests/test_architecture.py` passes, update `docs/phase3/STATUS_P3.md`, and commit cleanly.
 
 ---
 

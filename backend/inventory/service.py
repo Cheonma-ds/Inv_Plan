@@ -4,8 +4,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.core import clock
-from backend.core.enums import GRNStatus, InventoryTxType, POStatus
+from backend.core.enums import ActionItemStatus, GRNStatus, InventoryTxType, POStatus
 from backend.core.models import (
+    ActionItem,
     GoodsReceipt,
     InventoryTransaction,
     Part,
@@ -17,6 +18,7 @@ from backend.inventory.schemas import (
     ConsumeResult,
     PartSnapshot,
     ReorderTriggered,
+    UnresolvedDismissedAlert,
 )
 
 TERMINAL_PO_STATUSES = (POStatus.CLOSED.value, POStatus.CANCELLED.value)
@@ -107,11 +109,75 @@ def get_inventory_position(session: Session, part_id: int) -> int:
     return part.on_hand_stock + get_on_order_stock(session, part_id) + part.quarantined_stock
 
 
+def _evaluate_unresolved_dismissed_alerts(
+    session: Session,
+    part: Part,
+    *,
+    inventory_position: int,
+) -> list[UnresolvedDismissedAlert]:
+    dismissed_items = list(
+        session.scalars(
+            select(ActionItem)
+            .where(
+                ActionItem.part_id == part.id,
+                ActionItem.status == ActionItemStatus.DISMISSED.value,
+                ActionItem.dismiss_resolved_at.is_(None),
+            )
+            .order_by(ActionItem.urgency_score.desc(), ActionItem.created_at.desc())
+        ).all()
+    )
+    if not dismissed_items:
+        return []
+
+    sim_now = clock.now(session)
+    unresolved: list[UnresolvedDismissedAlert] = []
+    changed = False
+    for item in dismissed_items:
+        persists = False
+        if item.type == "PO_DISPATCH_APPROVAL" and item.po_id is not None:
+            po = session.get(PurchaseOrder, item.po_id)
+            persists = po is not None and po.status == POStatus.PENDING_DISPATCH_APPROVAL.value
+        elif item.po_id is not None:
+            po = session.get(PurchaseOrder, item.po_id)
+            persists = po is not None and po.status not in TERMINAL_PO_STATUSES
+        else:
+            persists = (
+                inventory_position < part.rop
+                or part.on_hand_stock == 0
+                or part.quarantined_stock > 0
+            )
+
+        if persists:
+            unresolved.append(
+                UnresolvedDismissedAlert(
+                    id=item.id,
+                    type=item.type,
+                    severity=item.severity,
+                    title=item.title,
+                    summary=item.summary,
+                    po_id=item.po_id,
+                    created_at=clock.ensure_utc(item.created_at),
+                    resolved_at=clock.ensure_utc(item.resolved_at) if item.resolved_at else None,
+                )
+            )
+        else:
+            item.dismiss_resolved_at = sim_now
+            changed = True
+
+    if changed:
+        session.flush()
+    return unresolved
+
+
 def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
     part = _get_part_or_raise(session, part_id)
     on_order = get_on_order_stock(session, part.id)
+    inventory_position = part.on_hand_stock + on_order + part.quarantined_stock
     _, active_po_id, active_po_number, active_po_status, pending_dispatch_qty = (
         _get_active_po_summary(session, part.id)
+    )
+    unresolved_dismissed = _evaluate_unresolved_dismissed_alerts(
+        session, part, inventory_position=inventory_position
     )
     return PartSnapshot(
         part_id=part.id,
@@ -121,7 +187,7 @@ def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
         on_hand_stock=part.on_hand_stock,
         quarantined_stock=part.quarantined_stock,
         on_order_stock=on_order,
-        inventory_position=part.on_hand_stock + on_order + part.quarantined_stock,
+        inventory_position=inventory_position,
         rop=part.rop,
         replenishment_point=part.replenishment_point,
         target_coverage_days=part.target_coverage_days,
@@ -130,6 +196,7 @@ def get_part_snapshot(session: Session, part_id: int) -> PartSnapshot:
         active_po_number=active_po_number,
         active_po_status=active_po_status,
         pending_dispatch_qty=pending_dispatch_qty,
+        unresolved_dismissed_alerts=unresolved_dismissed,
     )
 
 
