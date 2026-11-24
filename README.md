@@ -1,193 +1,183 @@
-# InvPlan — Demand-to-Delivery & Inventory Planning Prototype
+# InvPlan — Demand-to-Delivery Control Plane & Guardrailed Agentic Operations
 
-> **Project Status:** Phase 1 MVP (Slices 1–5) + Phase 2 + PRD Fixes (`F-1.1`–`F-4.3`) + Phase 3 (`P3-1`–`P3-8`) + Phase 4 Manager Copilot (`P4-1`–`P4-4`) Complete & Verified  
-> **Context:** A portfolio project built to practice **Product Management** and **Agentic Engineering**—translating recurring operational pain points gathered from Supply Chain Management (SCM) communities into a working, guardrailed prototype built with **Google Antigravity CLI**.
->
-> *Note: This repository is an architectural and product prototype meant to demonstrate problem framing, system design, and agentic engineering practices rather than a packaged, end-user runnable distribution.*
+> **Portfolio Prototype:** An end-to-end inventory planning and procurement operations system pairing a deterministic supply-chain core with a tool-using multimodal AI agent (**Lex**) and an interactive **Manager Copilot**.  
+> **Stack:** Python 3.12 · FastAPI · SQLAlchemy 2.0 · SQLite · `google-genai` (`gemini-3.5-flash-lite`) · React 19 · TypeScript · Tailwind CSS · OpenTelemetry / Arize Phoenix
 
 ---
 
-## 1. Problem Discovery & Product Framing
+## 1. Problem Framing
 
-Across SCM discussions, inventory and procurement teams consistently describe the same operational bottleneck: triggering a purchase order is easy, but everything *after* the PO is sent collapses into manual email tracking, scattered spreadsheets, and reactive firefighting. Critical supplier replies get buried, silent non-deliveries go unnoticed until a technician hits an empty bin, and mismatched invoices freeze usable stock.
+Triggering a purchase order when stock runs low is the easy part of inventory management. Everything *after* the PO is sent—chasing unacknowledged orders, parsing unstructured supplier delays and price hikes, reconciling mismatched PDF invoices, and adjusting reorder points when demand shifts—collapses into manual email tracking and reactive firefighting. Teams usually discover a missed reply only when a technician walks to the shelf and hits a stockout.
 
-**InvPlan** reframes the workflow from **chasing every PO manually** to **managing by exception** across six core pain points:
+InvPlan shifts procurement from **chasing every PO manually** to **managing by exception**.
 
-| Pain Point | Operational Failure Today | InvPlan Product & System Response |
-|---|---|---|
-| **1. Unacknowledged POs (Ghosting)** | Suppliers never reply to a PO; no automated follow-up cadence exists. | Deterministic SLA watcher tracks acknowledgment windows, triggers follow-up drafts, and escalates unresponsive suppliers. |
-| **2. Missed Supplier Exceptions** | Price hikes, quantity cuts, or stockouts arrive by email and sit unread. | **Lex** triages inbound emails into structured intents, computes exact INR/stockout impact, and surfaces inline-CTA alerts. |
-| **3. Unassessed Post-Ack Delays** | Delays after acknowledgment are either ignored or cause unnecessary panic. | Deterministic days-of-supply math distinguishes safe-buffer delays from `DELAYED_CRITICAL` stockout threats. |
-| **4. Silent Non-Deliveries** | Suppliers miss promised ETAs without warning; discovered only at stockout. | Simulated clock + SLA watcher flags `OVERDUE` POs and penalizes supplier reliability scores immediately. |
-| **5. PO–Invoice & Quality Mismatches** | Shipments arrive damaged or with wrong prices/quantities/credit notes; goods sit unusable in limbo. | Multimodal PDF extraction feeds deterministic 3-way matching (`PO vs. GRN vs. Invoice`, `invoice_qty == grn_received_qty` supporting partial receipts), Credit Note net settlement, Packing List cross-checks, and a physical `DAMAGED` GRN quarantine gate. |
-| **6. Static, Blind Planning** | Reorder points ignore changing demand and chronic supplier lateness. | 90-day daily EWMA burn (`alpha = 0.30`), supplier-aware `Stockout In` urgency & cycle analytics, actual-vs-quoted lead time + communication delay tracking, and criticality-weighted safety stock generate explainable `ROP/T` recommendations. |
+### Users & Personas
+The workspace models a 7-persona operational loop behind an abstract `EmailTransport` (`backend/mailroom/transport.py`):
+- **`inventory_manager`**: Approves/edits PO dispatches and Lex email drafts, resolves supplier exceptions, releases quarantined goods, and queries the Manager Copilot.
+- **`making`**: Shop-floor production team requesting parts via email (including `.csv` BOM attachments).
+- **`procurement`**: Receives commercial/overdue escalations and expedite CCs.
+- **`sup1` / `sup2` / `sup3`**: Three distinct supplier profiles (fast/accurate, chronically late with v1 billing errors, and slow-acknowledging with price volatility).
+- **`lex`** *(read-only inbox)*: AI operations agent that triages inbound mail, extracts documents, drafts outbound replies, and answers manager queries—never allowed to send email directly (`403 Forbidden` on manual send).
 
----
+### Core Workflow, Inputs & Outputs
+- **Inputs:** Stock withdrawals (`Withdraw` or Making-team email requests), simulated clock advances (anchored at **Oct 1, 2026 1:00 PM IST** across 15 SKUs with 90 days of causal Jul–Sep history), supplier emails, multimodal attachments (`.pdf` invoices, credit notes, packing lists, dispatch advices; `.jpg`/`.png` dock damage photos & dispatch slips; `.csv` BOMs), Goods Receipt Notes (GRNs), and natural-language Copilot questions (`Ctrl+L`).
+- **Outputs:** Audited PO state transitions, `DRAFT_PENDING_APPROVAL` outbound emails, prioritized `ActionItem` alerts with 1-click CTAs (*Approve & Send PO*, *Edit PO*, *Switch to Backup Supplier*, *Approve Net Settlement*, *Release Usable Qty*), quarantine holds, statistical analyses, and interactive SVG charts/diagrams.
 
-## 2. How It Works & 3-Minute Guided Tour
-
-Every workflow in InvPlan follows a **human-in-the-loop (HITL)** loop:
-1. **Events Enter:** Stock drops below ROP (via **Inventory & Parts** `Withdraw` or a **Making Team** email), time advances (**Simulated Clock** starting **Oct 1, 2026 1:00 PM IST** with **0 open POs** on reset), or a supplier replies/attaches a PDF or image in **Mailroom**.
-2. **Lex Triages & Drafts:** Tool-using Agent Lex inspects live inventory, POs, alerts, supplier scorecards/memory, and AST-sandboxed Python calculations, reads emails/PDFs/images/`.csv` BOMs, schedules dynamic `LexReminder`s when safe, and returns structured outputs plus formatted `DRAFT_PENDING_APPROVAL` emails—**never mutating POs or stock silently**.
-3. **Manager Decides in 1 Click:** **Open Alerts** (top `ClockBar`) surfaces exact INR impact, stockout dates, and inline CTAs (*Approve & Send PO*, *Edit PO*, *Switch to Backup Supplier*, *Release Usable Qty*, *Approve Net Settlement*).
-
-### What to Click (3-Minute Browser Tour)
-1. **Explore 90-Day Burn & Runway:** Open **Inventory & Parts** → click any `Stockout In` badge to open the **90-Day Cycle Analytics** drawer (`Stockout → PO → Replenishment → Stockout`), primary effective LT + communication buffer, and recommended PO quantity.
-2. **Trigger a Replenishment PO:** Click **Withdraw** on `BRG-402` to drop Inventory Position below ROP. InvPlan auto-creates a `PENDING_DISPATCH_APPROVAL` PO (`On Order` stays `0`, button swaps to **View PO**), and Lex drafts a structured Markdown/`₹` dispatch email.
-3. **Approve or Edit & Send:** Click **Open Alerts** in the header → use **Approve & Send PO** or **Edit PO** (opens `CreateEditPOModal` with per-supplier suggested qty & reasoning) → PO moves to `SENT_AWAITING_ACK`.
-4. **Watch the SLA Clock & Dynamic Deferral:** Open **Mailroom** → switch persona to **`Apex Precision (Sup1)`** → reply citing the PO with *"We confirm, but can only share tracking details after 4 days."* Lex uses its Python sandbox to verify runway safety and schedules a 4-day `LexReminder` without nagging today; inspect full `tool_calls` in **AI Activity & Health**.
-5. **Test a Supplier Exception:** Reply as a supplier with *"Unit price is now ₹540/unit and ETA slips to 2026-10-20."* → return to **Open Alerts** to see price variance, projected stockout gap, and 1-click **Switch to Backup Supplier**.
+### Hard Constraints
+1. **Never use an LLM for arithmetic or state transitions.** Inventory position, 3-way invoice matching (`invoice_qty == grn_received_qty`, `±₹0.50` unit price tolerance), EWMA demand forecasting (`α = 0.30`), supplier reliability scoring (`40/25/20/15`), dynamic `ROP/T` (`Z`-factors `2.05`/`1.65`/`1.28`), and the PO state machine are 100% deterministic Python.
+2. **Draft-First Outbound Rule:** Every email drafted by Lex enters `DRAFT_PENDING_APPROVAL` and requires `InventoryManager` approval before dispatch.
+3. **Zero Silent Mutations:** Low confidence (`< 0.85`), foreign-currency quotes (`USD` vs `INR`), encrypted/consolidated PDFs, and policy-violating Copilot requests escalate without mutating POs or stock.
+4. **Simulated Time:** Domain logic never calls `datetime.now()` or `datetime.utcnow()`; all timestamps and SLA timers run off a persisted `SimulatedClock` (`core.clock.now()`).
 
 ---
 
-## 2. Agentic Engineering Philosophy: Right Tool for Each Job
+## 2. Agent Design
 
-A central design principle in InvPlan is knowing **where not to use an LLM**. Using generative models for inventory arithmetic, state transitions, or timer math introduces hallucination risk where deterministic code is exact, fast, and auditable. Conversely, rigid parsers break on messy supplier emails and inconsistent PDF invoice layouts.
-
-| Layer | Approach | Responsibility |
-|---|---|---|
-| **Deterministic Core** | Pure Python + SQLAlchemy (`inventory/`, `po/`, `core/`) | Inventory position (`on_hand + on_order + quarantined`, excluding `PENDING_DISPATCH_APPROVAL` from `on_order`), duplicate-PO prevention, MOQ rounding, explicit allow-listed PO state machine, partial-delivery 3-way match arithmetic (`invoice == grn`), and persisted `SimulatedClock` (IST). |
-| **Planning Intelligence** | Deterministic Statistics (`planning/`) | 90-day daily EWMA demand forecasting (`alpha = 0.30`) with same-day demand freeze & rollover settlement, 90-day cycle reconstruction, 4-factor Supplier Reliability Score (`40/25/20/15`, `avg_response_days`, `cycles_90d`), effective lead time blending, and Z-factor dynamic `ROP/T`. |
-| **Targeted AI Agent (`Lex`)** | `google-genai` (`gemini-3.5-flash-lite`) + Strict Pydantic Schemas + Tool Loop (`agents/lex/`, `agents/sandbox.py`) | 13-tool read/calc/reminder/memory reasoning loop (`orchestrator/lex_tools.py`), AST-sandboxed Python calculation execution, multimodal email/PDF/image triage, multi-PDF invoice/credit-note/packing-list extraction, Making `.csv` BOM triage, and Markdown/`₹`-grounded outbound drafting. **Zero direct database writes.** |
-| **Workflow Orchestration** | `orchestrator/` | Sole cross-module coordinator enforcing confidence guardrails, invoking domain services, and managing SLA timers & `LexReminder` wakeups. |
-
-### Safety Guardrails & Human-in-the-Loop (HITL) Trust Boundaries
-- **Draft-First Outbound Rule:** Every email drafted by Lex enters `DRAFT_PENDING_APPROVAL` and requires `InventoryManager` approval before dispatch. Outcomes (`APPROVED_AS_IS`, `APPROVED_EDITED`, `REJECTED`) are tracked per action category in `autonomy_policies` to measure trust before graduating categories in later phases.
-- **Confidence & Currency Escalation Gates:** Inbound triage or invoice extractions below `0.85` confidence (or missing key identifiers, encrypted/unreadable PDFs, multi-PO consolidated PDFs, or foreign-currency `USD` quotes vs. `INR` POs) force an `AMBIGUOUS`, `CURRENCY_MISMATCH`, or `INVOICE_EXTRACTION_REVIEW` escalation with **zero blind PO or inventory state mutation**.
-- **Billing & Quality Quarantine Locks:** Goods with mismatched invoices or `condition="DAMAGED"` GRNs are held in `quarantined_stock` (excluded from usable `on_hand_stock`) until resolved, while still accounted for in inventory position checks so no duplicate replenishment PO is spawned during a dispute.
-
----
-
-## 3. System Architecture & Decoupling
-
-InvPlan is structured into strictly isolated vertical modules so agents and developers can reason about one domain without loading unrelated context:
+InvPlan separates **deterministic state & math** (`inventory/`, `po/`, `planning/`, `mailroom/`), **stateless/structured LLM reasoning** (`agents/lex/`), and **cross-domain orchestration** (`orchestrator/`).
 
 ```mermaid
 flowchart TB
-    subgraph Core["1. Deterministic Core & Planning"]
-        INV["inventory/<br/>Ledger, ROP Trigger, Quarantine"]
-        PO["po/<br/>State Machine, GRN, 3-Way Match"]
-        PLAN["planning/<br/>EWMA Forecast, Supplier Score, Dynamic ROP"]
-        MAIL["mailroom/<br/>7-Persona Inbox behind EmailTransport"]
+    subgraph Events["Inbound Events & User Surfaces"]
+        MAIL["Mailroom (7 Personas)<br/>Emails, PDFs, Images, CSV BOMs"]
+        CLOCK["Simulated Clock & SLA Watcher<br/>Ack, Pre-ETA, Overdue, Quarantine, Reminders"]
+        UI["Operations UI & Manager Copilot (Ctrl+L)"]
     end
 
-    subgraph Agents["2. Agentic Layer (Read-Only/Structured Output)"]
-        BASE["agents/base.py & llm_client.py"]
-        LEX["agents/lex/<br/>Triage · PDF Extractor · Draft Composer"]
+    subgraph Orch["Orchestrator (Sole Cross-Module Coordinator)"]
+        WF["WorkflowEngine<br/>Guardrails, State Transitions, Alert CTAs"]
+        EXEC["Copilot Action Executor<br/>Atomic Confirm / Revise / Decline"]
     end
 
-    subgraph Orch["3. Orchestration & Observability"]
-        WF["orchestrator/<br/>Workflows, SLA Watcher, FastAPI Routes"]
-        OBS["observability/<br/>AgentTracer (SQLite/OTel), Autonomy, YAML Evals"]
+    subgraph Agent["Lex Agent (gemini-3.5-flash-lite)"]
+        PLAN["Planner & Tool Loop (max_steps=8)<br/>Triage · PDF Extract · Draft · Wakeup · Copilot"]
+        TOOLS["ToolRegistry (13 Read/Stats/Visual + 3 Advisory Write)<br/>AST-Sandboxed Python Calc (sandbox.py)"]
+        RETRY["GeminiLLMClient<br/>45s Timeout · 3 Retries · Exp Backoff"]
     end
 
-    UI["frontend/<br/>React + TypeScript + Tailwind Operations Dashboard"]
+    subgraph Core["Deterministic Core & State (SQLite)"]
+        DOM["inventory/ · po/ · planning/"]
+        MEM["SupplierMemoryNote · LexReminder<br/>CopilotSession / CopilotMessage"]
+        OBS["observability/<br/>AgentTracer · AutonomyPolicy · YAML Evals"]
+    end
 
+    MAIL --> WF
+    CLOCK --> WF
     UI <--> WF
-    WF --> INV
-    WF --> PO
-    WF --> PLAN
-    WF --> MAIL
-    WF --> LEX
-    LEX --> BASE
+    UI <--> EXEC
+    WF <--> PLAN
+    PLAN <--> TOOLS
+    PLAN --> RETRY
+    WF --> DOM
+    EXEC --> DOM
+    TOOLS --> DOM
+    TOOLS --> MEM
+    PLAN -.-> OBS
     WF -.-> OBS
-    LEX -.-> OBS
 ```
 
-### Enforced Architectural Boundaries
-Hard decoupling rules in [`AGENTS.md`](AGENTS.md) are verified programmatically via AST checks in [`tests/test_architecture.py`](tests/test_architecture.py):
-- **No sideways imports** between `backend/inventory/`, `backend/po/`, `backend/mailroom/`, `backend/planning/`, and `backend/agents/`. Domain modules may only import `backend/core/` and `backend/observability/`.
-- **Single orchestration layer:** Only `backend/orchestrator/` composes multi-domain workflows and exposes FastAPI routes.
-- **Swappable mail transport:** All mailroom reads, sends, multi-attachment uploads (`.pdf`, `.csv` BOMs, `.jpg`/`.png` damage photos), and draft approvals/rejections route strictly through the `EmailTransport` protocol in `backend/mailroom/transport.py` (currently backed by a simulated 7-persona DB mailroom: `inventory_manager`, `making`, `procurement`, `Apex Precision (Sup1)`, `Bharat Fasteners (Sup2)`, `Deccan Electro-Spares (Sup3)`, and read-only `lex`).
-- **Deterministic simulated time:** Business logic uses `core.clock.now()` (`SimulatedClock`) instead of system wall-clock time so multi-day SLA timelines, overdue penalties, and quarantine escalations are reproducible.
-- **Agent-agnostic observability:** `backend/observability/` keys all traces, feedback, eval runs, and autonomy policies by `agent_name` so future agents can plug into the same backbone without schema rework.
+### Key Architectural Choices
+- **Planner (`LexAgent`):** Runs structured single-shot extraction (`temperature=0.0` for PDFs/drafts) or multi-turn tool-calling loops (`generate_with_tools`, `max_steps=8`, `AutomaticFunctionCallingConfig(disable=True)`) returning strict Pydantic schemas (`EmailTriageResult`, `InvoiceExtractionResult`, `EmailDraftResult`, `ReminderWakeupResult`, `CopilotQueryResult`).
+- **Memory & State:**
+  - *Long-term operational memory:* `SupplierMemoryNote` rows (deduplicated via Jaccard/substring checks) capture qualitative supplier patterns (e.g., chronic billing surcharges) and are injected into triage, drafting, and pre-delivery checks.
+  - *Temporal state:* `LexReminder` persists variable N-day deferrals (e.g., supplier promises tracking in 4 days → Lex checks runway via `run_sandbox_calc` and schedules a wakeup without nagging early).
+  - *Conversational state:* `CopilotSession` and `CopilotMessage` persist multi-turn Copilot context, visual specs, and action-proposal statuses (`PENDING_CONFIRMATION`, `EXECUTED`, `REVISED`, `DECLINED`).
+- **Guardrails:**
+  - Agents cannot import `inventory/`, `po/`, `planning/`, or `mailroom/` and never write to business tables directly.
+  - `EmailTriageResult` with `confidence < 0.85` or unresolved POs forces `AMBIGUOUS` escalation; `CURRENCY_MISMATCH` blocks blind PO price updates; `INVOICE_EXTRACTION_REVIEW` catches encrypted, blurry, empty, or multi-PO PDFs.
+  - `EmailDraftResult` forbids unauthorized commercial commitments (accepting price hikes, waiving penalties) and enforces `₹`/`INR` grounding plus mandatory `inventory_manager` / `procurement` CCs on escalations.
+- **Retries & Resilience:** `GeminiLLMClient` enforces a `45.0s` HTTP timeout and retries transient errors (`408`, `429`, `500`, `502`, `503`, `504`, timeouts, connection errors) up to `3` times with `0.5s` exponential backoff. Unrecoverable failures degrade gracefully to `AMBIGUOUS_EMAIL` alerts or HTTP `200` (`degraded: true`) Copilot notices—never `500` crashes.
 
 ---
 
-## 4. How the Prototype Was Built (Agentic Engineering Workflow)
+## 3. Tool Use
 
-This prototype was developed iteratively using **Google Antigravity CLI** (`agy`) with deliberate context-management and verification discipline:
+Tools are defined domain-agnostically in `backend/agents/tools.py` (`ToolSpec`, `ToolResult`, `ToolRegistry`) and bound to SQLAlchemy sessions in `backend/orchestrator/lex_tools.py`.
 
-1. **Product & Technical Specs First:** Locked scope and math in [`PRD.md`](PRD.md) and modular boundaries in [`DESIGN.md`](DESIGN.md) before writing application code.
-2. **Context Discipline via Operating Manual:** Maintained [`AGENTS.md`](AGENTS.md) (hard rules and non-negotiable guardrails) and [`STATUS.md`](STATUS.md) (a compact live baton) so each vertical slice ran in a clean, focused session.
-3. **Vertical Slice Delivery (Slices 1–5):**
-   - **Slice 1:** Deterministic inventory ledger, PO state machine, 3-way match math, and 15-SKU/12-month historical seed data.
-   - **Slice 2:** 5-persona `EmailTransport` mailroom, SLA watcher, Lex email triage/drafting, and agent tracing.
-   - **Slice 3:** Multimodal PDF invoice extraction pipeline and deterministic planning intelligence engine.
-   - **Pre-Slice 4 Audit & Hardening:** Identified and resolved 18 runtime, domain-math, decoupling, and API gaps documented in [`docs/resolved_problems.md`](docs/resolved_problems.md).
-   - **Slice 4:** React + TypeScript + Tailwind operations dashboard (`AlertsPage`, `InventoryPage` with direct `Withdraw` & Lex-assisted `Create PO` workflows, `POTrackerPage`, `MailroomPage`, `SuppliersPlanningPage`, persistent `ClockBar`).
-   - **Slice 5:** Agent-agnostic YAML eval runner (`backend/evals/lex.yaml` — 30 golden cases across email triage, PDF extraction, stock requests, and draft compliance), `AIHealthPage` trust/eval dashboard, and optional OpenTelemetry/Arize Phoenix integration.
-4. **Phase 2 & 50-Scenario Live Stress Testing (`docs/phase2/`, `docs/PRD_FIXES.md`):**
-   - **Phase 2 (`docs/phase2/PRD_P2.md`):** Added dispatch logistics tracking (`promised_dispatch_date`, `carrier_name`, `tracking_number`, 2-day deferral/nudge SLA), Making-team stock request & minimum-quantity negotiation workflow, and Procurement escalation.
-   - **50-Scenario Live Evaluation & Fixes (`F-1.1`–`F-4.3`):** Executed 50 end-to-end live scenarios against `gemini-3.5-flash-lite` (`docs/test-scenarios/`), closed all 12 discovered bugs/gaps in [`docs/PRD_FIXES.md`](docs/PRD_FIXES.md), and achieved **`16/16 PASS`** on re-verification ([`results-fixes-retest.md`](docs/test-scenarios/results-fixes-retest.md)).
-5. **Phase 3 (`docs/phase3/`, Slices `P3-1`–`P3-8`):**
-   - Reset simulated clock & seed baseline to **Oct 1, 2026 1:00 PM IST** with a 90-day causal Jul–Sep simulation (**0 open POs** on seed), daily EWMA (`alpha = 0.30`) + cycle analytics, `ROP/T` standardization, `Edit PO` + unresolved dismissed-alert inventory warnings, and **Lex v2** (13 tools, AST-sandboxed calculation executor, dynamic N-day `LexReminder` scheduling, multimodal image/PDF triage, and `COPILOT_SYSTEM_PROMPT`).
-   - Verified with **`124 passed, 25 skipped`** offline tests, **`43/43`** in `tests/agents/` (`RUN_LIVE_GEMINI=1`, **25/25 live Gemini tests**), **`34/34` (`100.0%`)** live YAML evals, and full headless Chromium E2E across all 6 `PRD_P3.md §3` acceptance criteria.
-6. **Phase 4 — Manager Copilot (`docs/phase4/`, Slices `P4-1`–`P4-4`):**
-   - Built a persistent, multi-turn **Manager Copilot** drawer (`Ctrl+L` shortcut & `ClockBar` **Ask Lex** launcher) backed by strictly read-only LLM reasoning (`read_only_only=True`), deterministic supply-chain statistics (`run_statistical_analysis`), interactive SVG charts & diagrams (`render_chart` / `render_diagram`), zero-asterisk Markdown rendering (`CopilotMarkdown`), side-by-side non-closing SKU/PO/Alert deep links (`--copilot-offset`), and an in-chat **[Confirm & Execute]** / **[Revise / Clarify Intent]** / **[Cancel]** human-in-the-loop action workflow (`copilot_actions.py`), plus `copilot_query` traces in `AIHealthPage`.
-   - Verified with **`132 passed, 27 skipped`** offline tests (incl. 5 AST checks), **`9/9`** live Copilot Gemini tests, **`36/36` (`100.0%`)** live YAML evals, `ruff` & `npm run build` clean, and headless Chromium Playwright E2E across the built Vite bundle + live FastAPI backend.
+### Permissions & Tool Inventory (16 Tools)
+- **Read-Only Query, Analytics & Visual Tools (`read_only=True`, 13 tools):**
+  - *State inspection:* `list_parts_summary`, `list_alerts`, `get_planning_overview`, `get_part_snapshot`, `get_consumption_history`, `get_po_details`, `list_open_pos`, `get_supplier_profile`, `get_mailroom_thread`.
+  - *Sandboxed compute:* `run_sandbox_calc` executes Lex-written Python inside an AST-validated, `sys.settrace` step- and wall-clock-bounded sandbox (`backend/agents/sandbox.py`) permitting only `math`, `statistics`, `datetime`/`timedelta`, `decimal`, and `json` while blocking unsafe imports, I/O, `eval`/`exec`, dunder escapes, and wall-clock `.now()`/`.today()`.
+  - *Deterministic stats & visuals:* `run_statistical_analysis` (`part_demand_stats`, `inventory_abc_pareto`, `supplier_benchmark`, `series_stats`), `render_chart` (`bar`, `grouped_bar`, `line`, `area`, `donut`, `scatter`), and `render_diagram` (`flow`, `decision`, `timeline`).
+- **Bounded Advisory Write Tools (`read_only=False`, 3 tools):**
+  - `schedule_lex_reminder`, `propose_memory_note`, and `create_advisory_alert`.
+  - In **Manager Copilot** mode, `ToolRegistry.read_only_view()` (`read_only_only=True`) strips all 3 write tools so Copilot reasoning is strictly read-only.
+- **In-Chat Action Execution (`copilot_actions.py`):** When the manager asks Copilot to act (across 15 `CopilotActionType` operations such as `CREATE_MANUAL_PO`, `SWITCH_BACKUP_SUPPLIER`, `APPLY_ROP_RECOMMENDATION`, or `RECORD_GRN`), Lex returns structured `CopilotProposedAction` cards. Nothing runs until the user clicks **[Confirm & Execute]** (atomic DB transaction; rolls back cleanly on validation failure), **[Revise / Clarify Intent]** (re-runs Lex with the user's correction), or **[Cancel]**.
+
+### Schema Validation & Tracing
+- All Pydantic output schemas avoid `dict[str, Any]` (`additionalProperties`) so Gemini's structured output (`response_schema`) validates strictly at decode time.
+- Every LLM call and tool step is recorded via `AgentTracer.span` (`backend/observability/tracer.py`) to SQLite `agent_traces` (and optionally OpenTelemetry / Arize Phoenix), capturing `tool_calls_json` (`tool`, `args`, `result_summary`, `duration_ms`, `error`), token counts, latency, and INR cost.
 
 ---
 
-## 5. Tech Stack
+## 4. Reliability
 
-- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0, Pydantic v2, SQLite (`uv` for dependency management)
-- **AI/Multimodal Extraction:** `google-genai` (`gemini-3.5-flash-lite`) with structured Pydantic outputs
-- **Observability & Evals:** SQLite trace/autonomy/eval tables, OpenTelemetry SDK, optional Arize Phoenix export, declarative YAML eval suites (`PyYAML`, `fpdf2` for synthetic PDF fixtures)
-- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v4, `lucide-react`
+- **Enforced Architectural Invariants (`tests/test_architecture.py`):** 5 AST tests run on every `pytest` execution to guarantee:
+  1. Zero sideways imports between `inventory/`, `po/`, `mailroom/`, `planning/`, and `agents/`.
+  2. Only `orchestrator/` composes cross-domain workflows.
+  3. Zero `datetime.now()` / `datetime.utcnow()` calls in domain, orchestrator, or observability code.
+  4. `po/` never mutates `InventoryTransaction` or `Part` stock balances directly.
+  5. `observability/` remains 100% agent- and domain-agnostic (`agent_name` keyed).
+- **Automated Test Suite:**
+  - **Offline deterministic suite:** `132 passed, 27 skipped` (`uv run pytest -v`), covering inventory triggers, PO state transitions, 3-way matching, partial GRNs, EWMA rollover math, AST sandbox security/timeout escapes, Copilot read-only boundaries, and 36 offline YAML evals.
+  - **Lint & frontend build:** `uv run ruff check backend tests` clean; `cd frontend && npm run build` (`tsc -b && vite build`) clean.
+  - **Live Gemini & Browser E2E:** `tests/agents/test_live_lex_copilot_readiness.py` (`9/9` passed), combined `tests/agents/` live stress suite (`48/49` in single pass; 1 `+4d` nudge timing case passed `1/1` on immediate re-run), and headless Chromium Playwright E2E across all operational and Copilot flows with 0 console/page errors.
+- **Failure Paths & Logging:**
+  - Corrupt/encrypted PDFs or unsupported mailroom attachments (`.xlsx`, `.zip`, 0-byte files) either return explicit HTTP `400` validation errors or route cleanly to `INVOICE_EXTRACTION_REVIEW` (`HTTP 200`) with zero state mutation.
+  - Missing `$GEMINI_API_KEY` or exhausted retries emit `DEGRADED` `AgentTrace` rows (`confidence=0.0`) rather than crashing the request lifecycle.
 
 ---
 
-## 6. Quick Start (Local Development)
+## 5. Evaluation
+
+InvPlan includes a declarative, agent-agnostic YAML evaluation runner (`backend/observability/eval_runner.py`, `backend/evals/lex.yaml`) executable in both `offline` (fixture-driven guardrail validation) and `live` (`gemini-3.5-flash-lite`) modes from the **AI Activity & Health** UI or `POST /api/evals/lex/run`.
+
+### Golden Eval Set (`backend/evals/lex.yaml` — 36 Cases)
+| Task Category | Cases | Pass / Fail Criteria |
+|---|---:|---|
+| **Email Triage** | 16 | Exact `intent`, matched PO#, extracted price/qty/currency/ETA, `min_confidence >= 0.85` on clear replies, forced `AMBIGUOUS` on `< 0.85` or unmatched POs, multi-PO splitting, and safe vs. tight-runway deferral routing. |
+| **Email Drafting** | 7 | Mandatory `inventory_manager` / `procurement` CCs, `₹`/`INR` grounding (zero `USD`/`$` leaks), Markdown structure, and zero unauthorized price/penalty commitments. |
+| **Stock Request Triage** | 5 | SKU/qty extraction from Making emails and `.csv` BOMs, unknown-SKU flagging, and zero premature stock deduction prior to approval. |
+| **Invoice Extraction** | 4 | Verbatim PDF line-item extraction, missing invoice# confidence cap, and `< 0.85` escalation without PO mutation. |
+| **Reminder Wakeup** | 2 | Drafts follow-up only when dispatch details remain missing on due date; stays silent when GRN or details already arrived. |
+| **Copilot Query** | 2 | Invokes `run_statistical_analysis` / `render_chart`, cites verified SKUs, and proposes `CREATE_MANUAL_PO` without executing writes. |
+
+- **Results:** **`36 / 36 (100.0%)`** in both `offline` mode and `live` (`gemini-3.5-flash-lite`) evaluation runs.
+- **Live Scenario Stress Test:** On a 16-scenario live re-verification suite covering damaged GRNs, encrypted PDFs, USD quotes, credit notes, packing-list conflicts, and multi-PO emails, Lex scored **`16 / 16 PASS`** across **61 Gemini calls** (`109,519` tokens, **₹0.9883 INR** total).
+
+---
+
+## 6. Judgment
+
+### What Was Deliberately Not Automated
+- **Outbound email dispatch:** Even though `autonomy_policies` tracks `APPROVED_AS_IS`, `APPROVED_EDITED`, and `REJECTED` rates per email category to support future graduation, **auto-send is intentionally disabled**. In industrial procurement, a hallucinated price acceptance or premature supplier escalation has real financial and relationship cost.
+- **PO revisions, supplier failovers, and stock deductions:** Lex proposes diffs, backup switches, and Copilot action cards, but a human always clicks the final confirmation.
+- **3-way match math and reorder triggers:** Delegating arithmetic or state-machine transitions to an LLM adds latency and failure modes for zero upside.
+
+### Cost & Latency Notes
+- Using `gemini-3.5-flash-lite` keeps inference cheap (~**₹0.016–₹0.11 INR** per multi-step workflow scenario; **~₹0.99 INR** for 61 live calls).
+- Multi-turn tool loops (`max_steps=8`) and PDF multimodal triage add `1–4s` of latency per turn, which is acceptable for asynchronous mailroom triage and interactive Copilot queries, but makes synchronous UI actions (like `Withdraw` or `GRN` logging) strictly deterministic so the core dashboard stays instant.
+
+### Honest Limitations
+- **Simulated mailroom & clock:** The `EmailTransport` protocol is backed by SQLite rather than live IMAP/Gmail webhooks, and time advances via the UI `SimulatedClock` rather than a background cron daemon.
+- **Single-warehouse, 15-SKU scope:** The causal seed and planning formulas model a single facility in INR without multi-warehouse transfers, landed-cost allocation, or ERP/WMS webhooks.
+- **Prompt/schema sensitivity:** Switching models or modifying Pydantic schemas requires re-running the live `lex.yaml` eval suite—for example, Gemini's Developer API rejects `dict[str, Any]` (`additionalProperties`) in `response_schema`, which required explicit `CitedMetric` / `CopilotActionParam` key-value models.
+
+---
+
+## Quick Start
 
 ```bash
-# 1. Install backend dependencies & run offline tests (132 passed, 27 live Gemini skipped)
+# 1. Install backend dependencies & run offline test suite (132 passed, 27 live Gemini skipped)
 uv sync
 uv run pytest -q
 
-# Optional: run full live Gemini suite + tool/sandbox/copilot unit tests
+# Optional: run live Gemini suite (requires GEMINI_API_KEY)
 export GEMINI_API_KEY="your-api-key"
 RUN_LIVE_GEMINI=1 uv run pytest -v tests/agents/
 
-# 2. Run FastAPI backend
+# 2. Start FastAPI backend (:8000) & React/Vite frontend (:5173)
 uv run uvicorn backend.main:app --reload --port 8000
-
-# 3. Run React/Vite frontend (http://localhost:5173, proxies /api -> :8000)
 cd frontend && npm install && npm run dev
 ```
 
----
-
-## 7. Repository Structure & Documentation Map
-
-```text
-inv_plan/
-├── README.md                     # Project overview, product framing, and architecture
-├── PRD.md                        # Master Product Requirements Document (v1.0)
-├── DESIGN.md                     # Modular Technical Design & Slice Plan (v1.0)
-├── AGENTS.md                     # Agent operating manual & hard decoupling rules
-├── STATUS.md                     # Live build baton across Slices 1–5, Phase 2 & PRD Fixes
-├── docs/
-│   ├── PRD_FIXES.md              # Fixes & gap closure spec (F-1.1–F-4.3)
-│   ├── resolved_problems.md      # Pre-Slice 4 audit & resolution ledger (P1–P18)
-│   ├── phase2/                   # Phase 2 PRD, design & status (logistics, Making, procurement)
-│   ├── phase3/                   # Phase 3 PRD, design, slices & status (EWMA, Lex v2, UX)
-│   ├── phase4/                   # Phase 4 PRD, design, slices & status (Manager Copilot)
-│   └── test-scenarios/           # 50 live scenarios, top-10 demo playbook, fixtures & reports
-├── backend/
-│   ├── core/                     # Config, DB models, idempotent migrations, SimulatedClock (IST)
-│   ├── inventory/                # Stock ledger, inventory position, ROP trigger, quarantine
-│   ├── po/                       # PO state machine, GRN, 3-way match math, action alerts
-│   ├── mailroom/                 # EmailTransport protocol, 7-persona inbox, multi-attachment policy
-│   ├── planning/                 # 90d EWMA daily burn (α=0.30), cycle analytics, supplier scoring, ROP/T
-│   ├── agents/                   # BaseAgent, ToolRegistry, AST sandbox, GeminiLLMClient, Lex
-│   ├── observability/            # AgentTracer (tool_calls), AutonomyPolicy tracking, YAML EvalRunner
-│   ├── orchestrator/             # Cross-domain WorkflowEngine, lex_tools, copilot_actions, SLA watcher
-│   ├── seed/                     # 15-part, 3-supplier, 90-day causal Jul–Sep seed generator (0 open POs)
-│   └── evals/                    # Golden YAML evaluation suite (lex.yaml — 36 cases)
-├── frontend/                     # React + TypeScript + Tailwind operations, Copilot & AI health UI
-└── tests/                        # Unit, integration, 27 live Gemini, and AST architecture tests
-```
-
-### Next-Stage Direction
-Phases 1–4 (`P4-1`–`P4-4`) are complete and verified. Optional next-stage work includes progressive autonomy graduation per email category (`AutonomyPolicy`) and external IMAP/Gmail `EmailTransport` integration.
+*Key specs: [`PRD.md`](PRD.md) · [`DESIGN.md`](DESIGN.md) · [`AGENTS.md`](AGENTS.md) · [`docs/phase3/DESIGN_P3.md`](docs/phase3/DESIGN_P3.md) · [`docs/phase4/DESIGN_P4.md`](docs/phase4/DESIGN_P4.md)*
